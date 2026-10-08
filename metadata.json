@@ -1,0 +1,6 @@
+{
+  "name": "SN Travels Agency — Client Management",
+  "description": "Internal China Visa Client Management System for SN Travels Agency (sn-travelsagency.com). Comprehensive management of clients, visa applications, statuses, tasks, calendar, and staff.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

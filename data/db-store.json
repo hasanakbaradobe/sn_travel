@@ -1,0 +1,749 @@
+{
+  "users": [
+    {
+      "id": 1,
+      "name": "Sarah Nadeem (Managing Director)",
+      "email": "admin@sn-travelsagency.com",
+      "password_hash": "scrypt:4d0178cc4ac5495da29ed112bbc584a1:144c723aa55048d2f549c577b3da26e6dfc81ba2f2342a30a3e69f39765b6c6d0f8df0c10f37b2411baf8b029d5cd6c2967ff26d0066ea50ca8869d4cda93935",
+      "role": "super_admin",
+      "is_active": 1,
+      "last_login_at": "2026-10-08T14:44:57.783Z",
+      "created_at": "2026-10-08 13:57:04",
+      "updated_at": "2026-10-08 13:58:18"
+    },
+    {
+      "id": 2,
+      "name": "Farhan Qureshi (Senior Visa Officer)",
+      "email": "staff@sn-travelsagency.com",
+      "password_hash": "scrypt:a2c18511d5b75083056f26dc249b7421:8903c495c85187f72b42025bdd151b96268fea183b8cdf2e6afb2e4644a864c3ebbe4e232d1cec14f57cdd5219870609cb405549f37b12cd989cca02850a875f",
+      "role": "staff",
+      "is_active": 1,
+      "last_login_at": null,
+      "created_at": "2026-10-08 13:57:04",
+      "updated_at": "2026-10-08 13:58:18"
+    },
+    {
+      "id": 3,
+      "name": "Lin Chen (China Desk Specialist)",
+      "email": "lin.chen@sn-travelsagency.com",
+      "password_hash": "scrypt:a2c18511d5b75083056f26dc249b7421:8903c495c85187f72b42025bdd151b96268fea183b8cdf2e6afb2e4644a864c3ebbe4e232d1cec14f57cdd5219870609cb405549f37b12cd989cca02850a875f",
+      "role": "staff",
+      "is_active": 1,
+      "last_login_at": null,
+      "created_at": "2026-10-08 13:57:04",
+      "updated_at": "2026-10-08 13:58:19"
+    }
+  ],
+  "visa_types": [
+    {
+      "id": 1,
+      "name": "L - Tourist Visa",
+      "description": "For leisure travel, sightseeing, and personal visits to China",
+      "is_active": 1,
+      "created_at": "2026-10-08 13:57:04",
+      "updated_at": "2026-10-08 13:57:04"
+    },
+    {
+      "id": 2,
+      "name": "M - Commercial Trade / Business Visa",
+      "description": "For commercial and trade activities, business meetings, and supplier visits",
+      "is_active": 1,
+      "created_at": "2026-10-08 13:57:04",
+      "updated_at": "2026-10-08 13:57:04"
+    },
+    {
+      "id": 3,
+      "name": "X1/X2 - Student Visa",
+      "description": "Long-term (X1) or short-term (X2) study at accredited Chinese universities",
+      "is_active": 1,
+      "created_at": "2026-10-08 13:57:04",
+      "updated_at": "2026-10-08 13:57:04"
+    },
+    {
+      "id": 4,
+      "name": "Z - Work Visa",
+      "description": "For taking up post, employment, or commercial performance in China",
+      "is_active": 1,
+      "created_at": "2026-10-08 13:57:04",
+      "updated_at": "2026-10-08 13:57:04"
+    },
+    {
+      "id": 5,
+      "name": "Q1/Q2 - Family Reunion Visa",
+      "description": "For family members of Chinese citizens or foreign citizens with permanent residence",
+      "is_active": 1,
+      "created_at": "2026-10-08 13:57:04",
+      "updated_at": "2026-10-08 13:57:04"
+    },
+    {
+      "id": 6,
+      "name": "F - Non-commercial Exchange Visa",
+      "description": "For cultural exchange, academic visits, lectures, and non-commercial research",
+      "is_active": 1,
+      "created_at": "2026-10-08 13:57:04",
+      "updated_at": "2026-10-08 13:57:04"
+    },
+    {
+      "id": 7,
+      "name": "Other Special Category",
+      "description": "Diplomatic, transit, crew, or specialized China visa permits",
+      "is_active": 1,
+      "created_at": "2026-10-08 13:57:04",
+      "updated_at": "2026-10-08 13:57:04"
+    }
+  ],
+  "client_custom_fields": [
+    {
+      "id": 1,
+      "field_name": "employer",
+      "field_label": "Employer / Company Name",
+      "field_type": "text",
+      "field_options": null,
+      "is_required": 0,
+      "is_active": 1,
+      "display_order": 1,
+      "created_at": "2026-10-08 13:57:04",
+      "updated_at": "2026-10-08 13:57:04"
+    },
+    {
+      "id": 2,
+      "field_name": "visa_history",
+      "field_label": "Previous China Visa History",
+      "field_type": "dropdown",
+      "field_options": "Never Visited, 1-2 Times, Frequent Traveler (3+ Times), Has Expired Visa in Old Passport",
+      "is_required": 0,
+      "is_active": 1,
+      "display_order": 2,
+      "created_at": "2026-10-08 13:57:04",
+      "updated_at": "2026-10-08 13:57:04"
+    },
+    {
+      "id": 3,
+      "field_name": "travel_history",
+      "field_label": "Past 3 Years Travel History",
+      "field_type": "long_text",
+      "field_options": null,
+      "is_required": 0,
+      "is_active": 1,
+      "display_order": 3,
+      "created_at": "2026-10-08 13:57:04",
+      "updated_at": "2026-10-08 13:57:04"
+    },
+    {
+      "id": 4,
+      "field_name": "marital_status",
+      "field_label": "Marital Status",
+      "field_type": "dropdown",
+      "field_options": "Single, Married, Divorced, Widowed",
+      "is_required": 0,
+      "is_active": 1,
+      "display_order": 4,
+      "created_at": "2026-10-08 13:57:04",
+      "updated_at": "2026-10-08 13:57:04"
+    },
+    {
+      "id": 5,
+      "field_name": "chinese_contact",
+      "field_label": "Chinese Inviting Entity / Contact",
+      "field_type": "text",
+      "field_options": null,
+      "is_required": 0,
+      "is_active": 1,
+      "display_order": 5,
+      "created_at": "2026-10-08 13:57:04",
+      "updated_at": "2026-10-08 13:57:04"
+    },
+    {
+      "id": 6,
+      "field_name": "invitation_source",
+      "field_label": "Invitation Letter Source (PU Letter / Official)",
+      "field_type": "dropdown",
+      "field_options": "Official Government PU Letter, Corporate Partner Invitation, University Admission Notice (JW202), Family Invitation, None Required",
+      "is_required": 0,
+      "is_active": 1,
+      "display_order": 6,
+      "created_at": "2026-10-08 13:57:04",
+      "updated_at": "2026-10-08 13:57:04"
+    }
+  ],
+  "clients": [
+    {
+      "id": 2,
+      "client_id": "CL-000002",
+      "full_name": "Elena Rostova",
+      "passport_number": "RU72019482",
+      "country": "Russia",
+      "phone": "+7 916 555 0192",
+      "whatsapp": "+7 916 555 0192",
+      "email": "elena.rostova@artdesign.ru",
+      "date_of_birth": "1992-11-03",
+      "address": "Tverskaya St 18, Moscow",
+      "occupation": "Interior Designer & Buyer",
+      "notes": "Visiting Beijing Design Week and Shanghai furniture suppliers. Photos uploaded to Drive.",
+      "google_drive_url": "https://drive.google.com/drive/folders/1bCdEfGhIjKlMnOpQrStUvWxYzA987654",
+      "photo_url": "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=400&h=400&fit=crop&crop=faces",
+      "created_at": "2026-10-08 13:57:04",
+      "updated_at": "2026-10-08 13:57:04"
+    },
+    {
+      "id": 3,
+      "client_id": "CL-000003",
+      "full_name": "Kavita Sundaram",
+      "passport_number": "M40192837",
+      "country": "India",
+      "phone": "+91 98200 45123",
+      "whatsapp": "+91 98200 45123",
+      "email": "kavita.s@biotechventures.in",
+      "date_of_birth": "1989-03-22",
+      "address": "Indiranagar 100ft Road, Bengaluru",
+      "occupation": "Biotech Researcher",
+      "notes": "Invited to Tsinghua University for a 2-week symposium. Need F visa processing.",
+      "google_drive_url": "https://drive.google.com/drive/folders/1cDeFgHiJkLmNoPqRsTuVwXyZaB567890",
+      "photo_url": "https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=400&h=400&fit=crop&crop=faces",
+      "created_at": "2026-10-08 13:57:04",
+      "updated_at": "2026-10-08 13:57:04"
+    },
+    {
+      "id": 4,
+      "client_id": "CL-000004",
+      "full_name": "David Michael Harrison",
+      "passport_number": "GB551982740",
+      "country": "United Kingdom",
+      "phone": "+44 7700 900142",
+      "whatsapp": "+44 7700 900142",
+      "email": "david.harrison@londonlogistics.co.uk",
+      "date_of_birth": "1978-09-14",
+      "address": "24 Kensington Church Street, London",
+      "occupation": "Supply Chain Director",
+      "notes": "Regular cargo inspection in Ningbo. Passport valid until 2031.",
+      "google_drive_url": "https://drive.google.com/drive/folders/1dEfGhIjKlMnOpQrStUvWxYzAbC112233",
+      "photo_url": "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=400&h=400&fit=crop&crop=faces",
+      "created_at": "2026-10-08 13:57:04",
+      "updated_at": "2026-10-08 13:57:04"
+    },
+    {
+      "id": 5,
+      "client_id": "CL-000005",
+      "full_name": "Li Wei Chen",
+      "passport_number": "MYA4928105",
+      "country": "Malaysia",
+      "phone": "+60 12 345 6789",
+      "whatsapp": "+60 12 345 6789",
+      "email": "chen.lw@sinopacific.com.my",
+      "date_of_birth": "1995-01-30",
+      "address": "Jalan Ampang, Kuala Lumpur",
+      "occupation": "Student / Candidate",
+      "notes": "Enrolling in Zhejiang University for Master degree. JW202 form verified.",
+      "google_drive_url": "https://drive.google.com/drive/folders/1eFgHiJkLmNoPqRsTuVwXyZabCd445566",
+      "photo_url": "https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=400&h=400&fit=crop&crop=faces",
+      "created_at": "2026-10-08 13:57:04",
+      "updated_at": "2026-10-08 13:57:04"
+    }
+  ],
+  "client_custom_field_values": [
+    {
+      "id": 7,
+      "client_id": 2,
+      "field_id": 1,
+      "field_value": "Studio Rostova Design",
+      "created_at": "2026-10-08 13:57:04",
+      "updated_at": "2026-10-08 13:57:04"
+    },
+    {
+      "id": 8,
+      "client_id": 2,
+      "field_id": 2,
+      "field_value": "1-2 Times",
+      "created_at": "2026-10-08 13:57:04",
+      "updated_at": "2026-10-08 13:57:04"
+    },
+    {
+      "id": 9,
+      "client_id": 2,
+      "field_id": 4,
+      "field_value": "Single",
+      "created_at": "2026-10-08 13:57:04",
+      "updated_at": "2026-10-08 13:57:04"
+    },
+    {
+      "id": 10,
+      "client_id": 3,
+      "field_id": 1,
+      "field_value": "Biotech Ventures India Pvt Ltd",
+      "created_at": "2026-10-08 13:57:04",
+      "updated_at": "2026-10-08 13:57:04"
+    },
+    {
+      "id": 11,
+      "client_id": 3,
+      "field_id": 2,
+      "field_value": "Never Visited",
+      "created_at": "2026-10-08 13:57:04",
+      "updated_at": "2026-10-08 13:57:04"
+    },
+    {
+      "id": 12,
+      "client_id": 3,
+      "field_id": 5,
+      "field_value": "Tsinghua University School of Life Sciences",
+      "created_at": "2026-10-08 13:57:04",
+      "updated_at": "2026-10-08 13:57:04"
+    },
+    {
+      "id": 13,
+      "client_id": 3,
+      "field_id": 6,
+      "field_value": "Corporate Partner Invitation",
+      "created_at": "2026-10-08 13:57:04",
+      "updated_at": "2026-10-08 13:57:04"
+    }
+  ],
+  "visa_applications": [],
+  "application_status_history": [],
+  "tasks": [
+    {
+      "id": 6,
+      "title": "sdfsd",
+      "description": "dsfsdvs",
+      "client_id": 2,
+      "application_id": null,
+      "assigned_user_id": 1,
+      "due_date": "2026-10-09",
+      "priority": "Normal",
+      "status": "Pending",
+      "is_delivery_task": 0,
+      "completed_at": null,
+      "created_at": "2026-10-08 16:14:03",
+      "updated_at": "2026-10-08 16:14:22"
+    }
+  ],
+  "comments": [],
+  "activity_logs": [],
+  "nextIds": {
+    "users": 4,
+    "countries": 21,
+    "clients": 6,
+    "client_custom_fields": 7,
+    "client_custom_field_values": 14,
+    "visa_types": 8,
+    "visa_applications": 1,
+    "application_status_history": 1,
+    "tasks": 7,
+    "comments": 1,
+    "activity_logs": 1,
+    "hotels": 6,
+    "hotel_rooms": 10,
+    "hotel_bookings": 1,
+    "settings": 9
+  },
+  "countries": [
+    {
+      "id": 1,
+      "name": "United Arab Emirates",
+      "code": "AE",
+      "is_active": 1,
+      "display_order": 1,
+      "created_at": "2026-10-08 13:57:04",
+      "updated_at": "2026-10-08 13:57:04"
+    },
+    {
+      "id": 2,
+      "name": "Pakistan",
+      "code": "PK",
+      "is_active": 1,
+      "display_order": 2,
+      "created_at": "2026-10-08 13:57:04",
+      "updated_at": "2026-10-08 13:57:04"
+    },
+    {
+      "id": 3,
+      "name": "India",
+      "code": "IN",
+      "is_active": 1,
+      "display_order": 3,
+      "created_at": "2026-10-08 13:57:04",
+      "updated_at": "2026-10-08 13:57:04"
+    },
+    {
+      "id": 4,
+      "name": "Russia",
+      "code": "RU",
+      "is_active": 1,
+      "display_order": 4,
+      "created_at": "2026-10-08 13:57:04",
+      "updated_at": "2026-10-08 13:57:04"
+    },
+    {
+      "id": 5,
+      "name": "United Kingdom",
+      "code": "GB",
+      "is_active": 1,
+      "display_order": 5,
+      "created_at": "2026-10-08 13:57:04",
+      "updated_at": "2026-10-08 13:57:04"
+    },
+    {
+      "id": 6,
+      "name": "Malaysia",
+      "code": "MY",
+      "is_active": 1,
+      "display_order": 6,
+      "created_at": "2026-10-08 13:57:04",
+      "updated_at": "2026-10-08 13:57:04"
+    },
+    {
+      "id": 7,
+      "name": "Saudi Arabia",
+      "code": "SA",
+      "is_active": 1,
+      "display_order": 7,
+      "created_at": "2026-10-08 13:57:04",
+      "updated_at": "2026-10-08 13:57:04"
+    },
+    {
+      "id": 8,
+      "name": "China",
+      "code": "CN",
+      "is_active": 1,
+      "display_order": 8,
+      "created_at": "2026-10-08 13:57:04",
+      "updated_at": "2026-10-08 13:57:04"
+    },
+    {
+      "id": 9,
+      "name": "Oman",
+      "code": "OM",
+      "is_active": 1,
+      "display_order": 9,
+      "created_at": "2026-10-08 13:57:04",
+      "updated_at": "2026-10-08 13:57:04"
+    },
+    {
+      "id": 10,
+      "name": "Qatar",
+      "code": "QA",
+      "is_active": 1,
+      "display_order": 10,
+      "created_at": "2026-10-08 13:57:04",
+      "updated_at": "2026-10-08 13:57:04"
+    },
+    {
+      "id": 11,
+      "name": "Turkey",
+      "code": "TR",
+      "is_active": 1,
+      "display_order": 11,
+      "created_at": "2026-10-08 13:57:04",
+      "updated_at": "2026-10-08 13:57:04"
+    },
+    {
+      "id": 12,
+      "name": "Egypt",
+      "code": "EG",
+      "is_active": 1,
+      "display_order": 12,
+      "created_at": "2026-10-08 13:57:04",
+      "updated_at": "2026-10-08 13:57:04"
+    },
+    {
+      "id": 13,
+      "name": "Canada",
+      "code": "CA",
+      "is_active": 1,
+      "display_order": 13,
+      "created_at": "2026-10-08 13:57:04",
+      "updated_at": "2026-10-08 13:57:04"
+    },
+    {
+      "id": 14,
+      "name": "United States",
+      "code": "US",
+      "is_active": 1,
+      "display_order": 14,
+      "created_at": "2026-10-08 13:57:04",
+      "updated_at": "2026-10-08 13:57:04"
+    },
+    {
+      "id": 15,
+      "name": "Germany",
+      "code": "DE",
+      "is_active": 1,
+      "display_order": 15,
+      "created_at": "2026-10-08 13:57:04",
+      "updated_at": "2026-10-08 13:57:04"
+    },
+    {
+      "id": 16,
+      "name": "Bangladesh",
+      "code": "BD",
+      "is_active": 1,
+      "display_order": 16,
+      "created_at": "2026-10-08 13:57:04",
+      "updated_at": "2026-10-08 13:57:04"
+    },
+    {
+      "id": 17,
+      "name": "Australia",
+      "code": "AU",
+      "is_active": 1,
+      "display_order": 17,
+      "created_at": "2026-10-08 13:57:04",
+      "updated_at": "2026-10-08 13:57:04"
+    },
+    {
+      "id": 18,
+      "name": "Singapore",
+      "code": "SG",
+      "is_active": 1,
+      "display_order": 18,
+      "created_at": "2026-10-08 13:57:04",
+      "updated_at": "2026-10-08 13:57:04"
+    },
+    {
+      "id": 19,
+      "name": "Iran",
+      "code": "IR",
+      "is_active": 1,
+      "display_order": 19,
+      "created_at": "2026-10-08 13:57:04",
+      "updated_at": "2026-10-08 13:57:04"
+    },
+    {
+      "id": 20,
+      "name": "Philippines",
+      "code": "PH",
+      "is_active": 1,
+      "display_order": 20,
+      "created_at": "2026-10-08 13:57:04",
+      "updated_at": "2026-10-08 13:57:04"
+    }
+  ],
+  "hotels": [
+    {
+      "id": 1,
+      "name": "Grand Hyatt Shanghai",
+      "city": "Shanghai",
+      "address": "Jin Mao Tower, 88 Century Avenue, Pudong New Area",
+      "star_rating": 5,
+      "phone": "+86 21 5049 1234",
+      "email": "shanghai.grand@hyatt.com",
+      "notes": "Prime business location in Pudong with panoramic Bund views",
+      "is_active": 1,
+      "created_at": "2026-10-08 13:58:53",
+      "updated_at": "2026-10-08 13:58:53"
+    },
+    {
+      "id": 2,
+      "name": "The Peninsula Beijing",
+      "city": "Beijing",
+      "address": "8 Goldfish Lane, Wangfujing, Dongcheng District",
+      "star_rating": 5,
+      "phone": "+86 10 8516 2888",
+      "email": "pbj@peninsula.com",
+      "notes": "Located in central Beijing minutes from Tiananmen and Forbidden City",
+      "is_active": 1,
+      "created_at": "2026-10-08 13:58:53",
+      "updated_at": "2026-10-08 13:58:53"
+    },
+    {
+      "id": 3,
+      "name": "Four Seasons Hotel Guangzhou",
+      "city": "Guangzhou",
+      "address": "5 Zhujiang West Road, Tianhe District",
+      "star_rating": 5,
+      "phone": "+86 20 8883 3888",
+      "email": "guangzhou@fourseasons.com",
+      "notes": "Next to Canton Fair transit and IFC Tower",
+      "is_active": 1,
+      "created_at": "2026-10-08 13:58:53",
+      "updated_at": "2026-10-08 13:58:53"
+    },
+    {
+      "id": 4,
+      "name": "JW Marriott Hotel Beijing Central",
+      "city": "Beijing",
+      "address": "18 Xuanwumen Outer Street, Xicheng District",
+      "star_rating": 5,
+      "phone": "+86 10 6391 6666",
+      "email": "jw.beijing@marriott.com",
+      "notes": "Convenient for commercial trade travelers and government affairs",
+      "is_active": 1,
+      "created_at": "2026-10-08 13:58:53",
+      "updated_at": "2026-10-08 13:58:53"
+    },
+    {
+      "id": 5,
+      "name": "Holiday Inn Express Shanghai Pudong",
+      "city": "Shanghai",
+      "address": "No. 399 Pudian Road, Pudong",
+      "star_rating": 4,
+      "phone": "+86 21 5830 8888",
+      "email": "shanghai@hiexpress.com",
+      "notes": "Budget-friendly corporate partner with fast subway access",
+      "is_active": 1,
+      "created_at": "2026-10-08 13:58:53",
+      "updated_at": "2026-10-08 13:58:53"
+    }
+  ],
+  "hotel_rooms": [
+    {
+      "id": 1,
+      "hotel_id": 1,
+      "name": "Grand King Room",
+      "price_per_night": "220.00",
+      "currency": "USD",
+      "capacity": 2,
+      "description": "Spacious 40 sqm king bed with city view and marble bath",
+      "is_active": 1,
+      "created_at": "2026-10-08 13:58:53",
+      "updated_at": "2026-10-08 13:58:53"
+    },
+    {
+      "id": 2,
+      "hotel_id": 1,
+      "name": "Club River View Twin",
+      "price_per_night": "310.00",
+      "currency": "USD",
+      "capacity": 2,
+      "description": "Twin beds with Huangpu River views and Grand Club lounge access",
+      "is_active": 1,
+      "created_at": "2026-10-08 13:58:53",
+      "updated_at": "2026-10-08 13:58:53"
+    },
+    {
+      "id": 3,
+      "hotel_id": 1,
+      "name": "Executive Suite",
+      "price_per_night": "450.00",
+      "currency": "USD",
+      "capacity": 3,
+      "description": "Separate living area and panoramic skyline views",
+      "is_active": 1,
+      "created_at": "2026-10-08 13:58:53",
+      "updated_at": "2026-10-08 13:58:53"
+    },
+    {
+      "id": 4,
+      "hotel_id": 2,
+      "name": "Superior King Suite",
+      "price_per_night": "290.00",
+      "currency": "USD",
+      "capacity": 2,
+      "description": "Elegant Chinese silk design with dressing room",
+      "is_active": 1,
+      "created_at": "2026-10-08 13:58:53",
+      "updated_at": "2026-10-08 13:58:53"
+    },
+    {
+      "id": 5,
+      "hotel_id": 2,
+      "name": "Premier Twin Suite",
+      "price_per_night": "350.00",
+      "currency": "USD",
+      "capacity": 2,
+      "description": "Two twin beds with traditional courtyard feel",
+      "is_active": 1,
+      "created_at": "2026-10-08 13:58:53",
+      "updated_at": "2026-10-08 13:58:53"
+    },
+    {
+      "id": 6,
+      "hotel_id": 3,
+      "name": "Tower View King Room",
+      "price_per_night": "240.00",
+      "currency": "USD",
+      "capacity": 2,
+      "description": "High-floor floor-to-ceiling windows overlooking Canton Tower",
+      "is_active": 1,
+      "created_at": "2026-10-08 13:58:53",
+      "updated_at": "2026-10-08 13:58:53"
+    },
+    {
+      "id": 7,
+      "hotel_id": 3,
+      "name": "Deluxe Executive Twin",
+      "price_per_night": "320.00",
+      "currency": "USD",
+      "capacity": 2,
+      "description": "Executive lounge perks with complimentary breakfast & tea",
+      "is_active": 1,
+      "created_at": "2026-10-08 13:58:53",
+      "updated_at": "2026-10-08 13:58:53"
+    },
+    {
+      "id": 8,
+      "hotel_id": 4,
+      "name": "Deluxe Business King",
+      "price_per_night": "180.00",
+      "currency": "USD",
+      "capacity": 2,
+      "description": "High-speed internet and spacious ergonomic workstation",
+      "is_active": 1,
+      "created_at": "2026-10-08 13:58:53",
+      "updated_at": "2026-10-08 13:58:53"
+    },
+    {
+      "id": 9,
+      "hotel_id": 5,
+      "name": "Standard Queen Room",
+      "price_per_night": "95.00",
+      "currency": "USD",
+      "capacity": 2,
+      "description": "Clean modern room with breakfast included",
+      "is_active": 1,
+      "created_at": "2026-10-08 13:58:53",
+      "updated_at": "2026-10-08 13:58:53"
+    }
+  ],
+  "hotel_bookings": [],
+  "settings": [
+    {
+      "id": 1,
+      "setting_key": "agency_name",
+      "setting_value": "SN Travels Agency",
+      "updated_at": "2026-10-08 13:58:18"
+    },
+    {
+      "id": 2,
+      "setting_key": "agency_website",
+      "setting_value": "sn-travelsagency.com",
+      "updated_at": "2026-10-08 13:58:18"
+    },
+    {
+      "id": 3,
+      "setting_key": "agency_email",
+      "setting_value": "visa@sn-travelsagency.com",
+      "updated_at": "2026-10-08 13:58:18"
+    },
+    {
+      "id": 4,
+      "setting_key": "agency_phone",
+      "setting_value": "+971 4 398 7654",
+      "updated_at": "2026-10-08 13:58:18"
+    },
+    {
+      "id": 5,
+      "setting_key": "agency_address",
+      "setting_value": "Office 504, Al Hudaiba Awards Building, Jumeirah, Dubai, UAE",
+      "updated_at": "2026-10-08 13:58:18"
+    },
+    {
+      "id": 6,
+      "setting_key": "default_currency",
+      "setting_value": "USD",
+      "updated_at": "2026-10-08 13:58:18"
+    },
+    {
+      "id": 7,
+      "setting_key": "secret_login_enabled",
+      "setting_value": "1",
+      "updated_at": "2026-10-08 13:58:18"
+    },
+    {
+      "id": 8,
+      "setting_key": "secret_login_key",
+      "setting_value": "sn-secure-staff-2026",
+      "updated_at": "2026-10-08 13:58:18"
+    }
+  ]
+}
