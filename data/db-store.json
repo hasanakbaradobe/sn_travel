@@ -2,36 +2,25 @@
   "users": [
     {
       "id": 1,
-      "name": "Sarah Nadeem (Managing Director)",
+      "name": "Hasan Akbar",
       "email": "admin@sn-travelsagency.com",
-      "password_hash": "scrypt:4d0178cc4ac5495da29ed112bbc584a1:144c723aa55048d2f549c577b3da26e6dfc81ba2f2342a30a3e69f39765b6c6d0f8df0c10f37b2411baf8b029d5cd6c2967ff26d0066ea50ca8869d4cda93935",
+      "password_hash": "scrypt:a384a9896cd93d45e4ee8e0e339dbe73:47dfa6f36ccf21f7f9993c9e0871366340595b8fdb5d51bd095bad235d7b309a3b08e079e055748146d6ff91e2e5d373338f0c5586d37ecf1a0078ff1ba7a6d9",
       "role": "super_admin",
       "is_active": 1,
-      "last_login_at": "2026-10-08T14:44:57.783Z",
+      "last_login_at": "2026-10-08 21:29:15",
       "created_at": "2026-10-08 13:57:04",
-      "updated_at": "2026-10-08 13:58:18"
+      "updated_at": "2026-10-08 21:29:15"
     },
     {
-      "id": 2,
-      "name": "Farhan Qureshi (Senior Visa Officer)",
-      "email": "staff@sn-travelsagency.com",
-      "password_hash": "scrypt:a2c18511d5b75083056f26dc249b7421:8903c495c85187f72b42025bdd151b96268fea183b8cdf2e6afb2e4644a864c3ebbe4e232d1cec14f57cdd5219870609cb405549f37b12cd989cca02850a875f",
-      "role": "staff",
+      "id": 4,
+      "name": "Omar Faruq",
+      "email": "sn.travel2028@gmail.com",
+      "password_hash": "scrypt:9ea2ff533a38fd9f24386640436d3cd1:97e26124bdfd3babc1e0421b46f74d77f1fb95e38b8411492e5b2e91ba8250d2f0dfaad8ad54ceec0443548a8dab45361c7871536674653ae22ec912868c98ba",
+      "role": "super_admin",
       "is_active": 1,
-      "last_login_at": null,
-      "created_at": "2026-10-08 13:57:04",
-      "updated_at": "2026-10-08 13:58:18"
-    },
-    {
-      "id": 3,
-      "name": "Lin Chen (China Desk Specialist)",
-      "email": "lin.chen@sn-travelsagency.com",
-      "password_hash": "scrypt:a2c18511d5b75083056f26dc249b7421:8903c495c85187f72b42025bdd151b96268fea183b8cdf2e6afb2e4644a864c3ebbe4e232d1cec14f57cdd5219870609cb405549f37b12cd989cca02850a875f",
-      "role": "staff",
-      "is_active": 1,
-      "last_login_at": null,
-      "created_at": "2026-10-08 13:57:04",
-      "updated_at": "2026-10-08 13:58:19"
+      "last_login_at": "2026-10-08 21:26:03",
+      "created_at": "2026-10-08 21:15:08",
+      "updated_at": "2026-10-08 21:26:03"
     }
   ],
   "visa_types": [
@@ -100,10 +89,10 @@
       "field_type": "text",
       "field_options": null,
       "is_required": 0,
-      "is_active": 1,
+      "is_active": 0,
       "display_order": 1,
       "created_at": "2026-10-08 13:57:04",
-      "updated_at": "2026-10-08 13:57:04"
+      "updated_at": "2026-10-08 16:46:22"
     },
     {
       "id": 2,
@@ -112,10 +101,10 @@
       "field_type": "dropdown",
       "field_options": "Never Visited, 1-2 Times, Frequent Traveler (3+ Times), Has Expired Visa in Old Passport",
       "is_required": 0,
-      "is_active": 1,
+      "is_active": 0,
       "display_order": 2,
       "created_at": "2026-10-08 13:57:04",
-      "updated_at": "2026-10-08 13:57:04"
+      "updated_at": "2026-10-08 16:46:38"
     },
     {
       "id": 3,
@@ -124,10 +113,10 @@
       "field_type": "long_text",
       "field_options": null,
       "is_required": 0,
-      "is_active": 1,
+      "is_active": 0,
       "display_order": 3,
       "created_at": "2026-10-08 13:57:04",
-      "updated_at": "2026-10-08 13:57:04"
+      "updated_at": "2026-10-08 16:46:39"
     },
     {
       "id": 4,
@@ -136,10 +125,10 @@
       "field_type": "dropdown",
       "field_options": "Single, Married, Divorced, Widowed",
       "is_required": 0,
-      "is_active": 1,
+      "is_active": 0,
       "display_order": 4,
       "created_at": "2026-10-08 13:57:04",
-      "updated_at": "2026-10-08 13:57:04"
+      "updated_at": "2026-10-08 16:46:46"
     },
     {
       "id": 5,
@@ -148,10 +137,10 @@
       "field_type": "text",
       "field_options": null,
       "is_required": 0,
-      "is_active": 1,
+      "is_active": 0,
       "display_order": 5,
       "created_at": "2026-10-08 13:57:04",
-      "updated_at": "2026-10-08 13:57:04"
+      "updated_at": "2026-10-08 16:46:47"
     },
     {
       "id": 6,
@@ -160,175 +149,29 @@
       "field_type": "dropdown",
       "field_options": "Official Government PU Letter, Corporate Partner Invitation, University Admission Notice (JW202), Family Invitation, None Required",
       "is_required": 0,
-      "is_active": 1,
+      "is_active": 0,
       "display_order": 6,
       "created_at": "2026-10-08 13:57:04",
-      "updated_at": "2026-10-08 13:57:04"
+      "updated_at": "2026-10-08 16:46:48"
     }
   ],
-  "clients": [
-    {
-      "id": 2,
-      "client_id": "CL-000002",
-      "full_name": "Elena Rostova",
-      "passport_number": "RU72019482",
-      "country": "Russia",
-      "phone": "+7 916 555 0192",
-      "whatsapp": "+7 916 555 0192",
-      "email": "elena.rostova@artdesign.ru",
-      "date_of_birth": "1992-11-03",
-      "address": "Tverskaya St 18, Moscow",
-      "occupation": "Interior Designer & Buyer",
-      "notes": "Visiting Beijing Design Week and Shanghai furniture suppliers. Photos uploaded to Drive.",
-      "google_drive_url": "https://drive.google.com/drive/folders/1bCdEfGhIjKlMnOpQrStUvWxYzA987654",
-      "photo_url": "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=400&h=400&fit=crop&crop=faces",
-      "created_at": "2026-10-08 13:57:04",
-      "updated_at": "2026-10-08 13:57:04"
-    },
-    {
-      "id": 3,
-      "client_id": "CL-000003",
-      "full_name": "Kavita Sundaram",
-      "passport_number": "M40192837",
-      "country": "India",
-      "phone": "+91 98200 45123",
-      "whatsapp": "+91 98200 45123",
-      "email": "kavita.s@biotechventures.in",
-      "date_of_birth": "1989-03-22",
-      "address": "Indiranagar 100ft Road, Bengaluru",
-      "occupation": "Biotech Researcher",
-      "notes": "Invited to Tsinghua University for a 2-week symposium. Need F visa processing.",
-      "google_drive_url": "https://drive.google.com/drive/folders/1cDeFgHiJkLmNoPqRsTuVwXyZaB567890",
-      "photo_url": "https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=400&h=400&fit=crop&crop=faces",
-      "created_at": "2026-10-08 13:57:04",
-      "updated_at": "2026-10-08 13:57:04"
-    },
-    {
-      "id": 4,
-      "client_id": "CL-000004",
-      "full_name": "David Michael Harrison",
-      "passport_number": "GB551982740",
-      "country": "United Kingdom",
-      "phone": "+44 7700 900142",
-      "whatsapp": "+44 7700 900142",
-      "email": "david.harrison@londonlogistics.co.uk",
-      "date_of_birth": "1978-09-14",
-      "address": "24 Kensington Church Street, London",
-      "occupation": "Supply Chain Director",
-      "notes": "Regular cargo inspection in Ningbo. Passport valid until 2031.",
-      "google_drive_url": "https://drive.google.com/drive/folders/1dEfGhIjKlMnOpQrStUvWxYzAbC112233",
-      "photo_url": "https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=400&h=400&fit=crop&crop=faces",
-      "created_at": "2026-10-08 13:57:04",
-      "updated_at": "2026-10-08 13:57:04"
-    },
-    {
-      "id": 5,
-      "client_id": "CL-000005",
-      "full_name": "Li Wei Chen",
-      "passport_number": "MYA4928105",
-      "country": "Malaysia",
-      "phone": "+60 12 345 6789",
-      "whatsapp": "+60 12 345 6789",
-      "email": "chen.lw@sinopacific.com.my",
-      "date_of_birth": "1995-01-30",
-      "address": "Jalan Ampang, Kuala Lumpur",
-      "occupation": "Student / Candidate",
-      "notes": "Enrolling in Zhejiang University for Master degree. JW202 form verified.",
-      "google_drive_url": "https://drive.google.com/drive/folders/1eFgHiJkLmNoPqRsTuVwXyZabCd445566",
-      "photo_url": "https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?w=400&h=400&fit=crop&crop=faces",
-      "created_at": "2026-10-08 13:57:04",
-      "updated_at": "2026-10-08 13:57:04"
-    }
-  ],
-  "client_custom_field_values": [
-    {
-      "id": 7,
-      "client_id": 2,
-      "field_id": 1,
-      "field_value": "Studio Rostova Design",
-      "created_at": "2026-10-08 13:57:04",
-      "updated_at": "2026-10-08 13:57:04"
-    },
-    {
-      "id": 8,
-      "client_id": 2,
-      "field_id": 2,
-      "field_value": "1-2 Times",
-      "created_at": "2026-10-08 13:57:04",
-      "updated_at": "2026-10-08 13:57:04"
-    },
-    {
-      "id": 9,
-      "client_id": 2,
-      "field_id": 4,
-      "field_value": "Single",
-      "created_at": "2026-10-08 13:57:04",
-      "updated_at": "2026-10-08 13:57:04"
-    },
-    {
-      "id": 10,
-      "client_id": 3,
-      "field_id": 1,
-      "field_value": "Biotech Ventures India Pvt Ltd",
-      "created_at": "2026-10-08 13:57:04",
-      "updated_at": "2026-10-08 13:57:04"
-    },
-    {
-      "id": 11,
-      "client_id": 3,
-      "field_id": 2,
-      "field_value": "Never Visited",
-      "created_at": "2026-10-08 13:57:04",
-      "updated_at": "2026-10-08 13:57:04"
-    },
-    {
-      "id": 12,
-      "client_id": 3,
-      "field_id": 5,
-      "field_value": "Tsinghua University School of Life Sciences",
-      "created_at": "2026-10-08 13:57:04",
-      "updated_at": "2026-10-08 13:57:04"
-    },
-    {
-      "id": 13,
-      "client_id": 3,
-      "field_id": 6,
-      "field_value": "Corporate Partner Invitation",
-      "created_at": "2026-10-08 13:57:04",
-      "updated_at": "2026-10-08 13:57:04"
-    }
-  ],
+  "clients": [],
+  "client_custom_field_values": [],
   "visa_applications": [],
   "application_status_history": [],
-  "tasks": [
-    {
-      "id": 6,
-      "title": "sdfsd",
-      "description": "dsfsdvs",
-      "client_id": 2,
-      "application_id": null,
-      "assigned_user_id": 1,
-      "due_date": "2026-10-09",
-      "priority": "Normal",
-      "status": "Pending",
-      "is_delivery_task": 0,
-      "completed_at": null,
-      "created_at": "2026-10-08 16:14:03",
-      "updated_at": "2026-10-08 16:14:22"
-    }
-  ],
+  "tasks": [],
   "comments": [],
   "activity_logs": [],
   "nextIds": {
-    "users": 4,
+    "users": 5,
     "countries": 21,
-    "clients": 6,
+    "clients": 1,
     "client_custom_fields": 7,
-    "client_custom_field_values": 14,
+    "client_custom_field_values": 1,
     "visa_types": 8,
     "visa_applications": 1,
     "application_status_history": 1,
-    "tasks": 7,
+    "tasks": 1,
     "comments": 1,
     "activity_logs": 1,
     "hotels": 6,

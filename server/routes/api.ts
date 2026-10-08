@@ -981,9 +981,22 @@ apiRouter.get('/activity', (req: Request, res: Response) => {
 // --------------------------------------------------------------------------
 // Database Status & SQL Backup / Restore Engine
 // --------------------------------------------------------------------------
-apiRouter.get('/db/status', (req: Request, res: Response) => {
+apiRouter.get('/db/status', async (_req: Request, res: Response) => {
+  await dbService.syncFromMySQL();
   const status = dbService.getStatus();
   return res.json(status);
+});
+
+apiRouter.post('/db/sync', async (_req: Request, res: Response) => {
+  try {
+    const status = await dbService.syncFromMySQL();
+    return res.json({
+      message: 'Successfully synchronized live database records from MySQL',
+      status,
+    });
+  } catch (err: any) {
+    return res.status(500).json({ error: `Failed to sync from database: ${err.message}` });
+  }
 });
 
 apiRouter.get('/db/backup', requireSuperAdmin, (_req: Request, res: Response) => {
