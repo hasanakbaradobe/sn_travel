@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import express from 'express';
 import path from 'path';
+import fs from 'fs';
 import { fileURLToPath } from 'url';
 import { apiRouter } from './server/routes/api.ts';
 
@@ -35,14 +36,32 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
   }
 });
 
-// Serve static assets from built frontend
-const distPath = path.join(__dirname, 'dist');
-app.use(express.static(distPath));
+// Locate static dist folder (checks process.cwd()/dist and __dirname/dist)
+const candidateDistPaths = [
+  path.resolve(process.cwd(), 'dist'),
+  path.resolve(__dirname, 'dist'),
+];
 
-// Catch-all route to serve SPA index.html for non-API routes
-app.get('*', (_req, res) => {
-  res.sendFile(path.join(distPath, 'index.html'));
-});
+const distPath = candidateDistPaths.find((p) => fs.existsSync(path.join(p, 'index.html')));
+
+if (distPath) {
+  console.log(`[Server] Serving static frontend from: ${distPath}`);
+  app.use(express.static(distPath));
+
+  app.get('*', (_req, res) => {
+    const indexPath = path.join(distPath, 'index.html');
+    if (fs.existsSync(indexPath)) {
+      res.sendFile(indexPath);
+    } else {
+      res.status(404).send('Frontend index.html not found. Please run "npm run build".');
+    }
+  });
+} else {
+  console.warn('[Server] Warning: Could not locate built "dist/index.html". Ensure "npm run build" ran successfully.');
+  app.get('*', (_req, res) => {
+    res.status(404).send('Frontend build (dist/index.html) is missing. Please ensure your Render build command is: "npm run build" or "bun run build".');
+  });
+}
 
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
