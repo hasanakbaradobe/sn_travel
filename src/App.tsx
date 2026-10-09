@@ -591,6 +591,10 @@ export default function App() {
           setPassportScannerModalOpen(false);
           setCreateClientModalOpen(true);
         }}
+        onOpenExistingClient={(clientId) => {
+          setPassportScannerModalOpen(false);
+          navigateTo('clients', clientId);
+        }}
       />
 
       <NewApplicationModal

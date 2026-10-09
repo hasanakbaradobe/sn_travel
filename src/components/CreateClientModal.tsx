@@ -425,9 +425,10 @@ export const CreateClientModal: React.FC<CreateClientModalProps> = ({
                           onOpenExistingClient(match.id);
                           onClose();
                         }}
-                        className="px-2.5 py-1 bg-amber-600 hover:bg-amber-700 text-white rounded text-xs font-medium flex items-center gap-1 transition"
+                        className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 active:bg-amber-800 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-xs transition shrink-0"
                       >
-                        <span>Open Existing</span>
+                        <UserCheck className="w-3.5 h-3.5" />
+                        <span>Edit Existing Client Record</span>
                         <ChevronRight className="w-3.5 h-3.5" />
                       </button>
                     </div>

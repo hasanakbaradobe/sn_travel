@@ -283,6 +283,9 @@ export function fixDigitSubstitutionsInNames(str: string): string {
 
   // Specific common MRZ OCR misreads in Sudanese & Arabic transliterated names:
   s = s
+    .replace(/\bZEH<B\b/g, 'EHAB')
+    .replace(/\bZEHAB\b/g, 'EHAB')
+    .replace(/\b3HAB\b/g, 'EHAB')
     .replace(/\bMOHA0ED\b/g, 'MOHAMED')
     .replace(/\bMOHAM0ED\b/g, 'MOHAMMED')
     .replace(/\bMOHA0MED\b/g, 'MOHAMED')
@@ -322,13 +325,21 @@ export function cleanMrzLine1(rawLine1: string): string {
     line = line.substring(pIdx);
   }
 
-  // Header Fix: If index 2..4 is a 3-letter ICAO country code (e.g. YEM, SDN, ARE, GBR, USA, PAK, IND, EGY),
+  // Header Fix: If index 2..4 is a 3-letter ICAO country code (e.g. YEM, SDN, ARE, GBR, USA, PAK, IND, EGY, MRT, VEN),
   // ensure index 0..1 is "P<". (Fixes "PRYEM" -> "P<YEM", "PKEYEM" -> "P<YEM", "PXYEM" -> "P<YEM")
   if (line.length >= 5) {
     const c3 = line.substring(2, 5);
     if (ICAO_COUNTRY_MAP[c3]) {
       line = 'P<' + c3 + line.substring(5);
     }
+  }
+
+  // Fix OCR misreads of double chevrons '<<' as 'LL', 'KL', 'LK', 'CC', 'XX', '11', 'II', '00', '<L', 'L<' between name words
+  if (!line.includes('<<') && line.length > 8) {
+    const prefix = line.substring(0, 5);
+    let namePart = line.substring(5);
+    namePart = namePart.replace(/([A-Z]{2,})(<*LL<*|<*KL<*|<*LK<*|<*CC<*|<*KK<*|<*XX<*|<*11<*|<*II<*|<*00<*|<L|L<)([A-Z]{2,})/gi, '$1<<$3');
+    line = prefix + namePart;
   }
 
   // Replace digit substitutions in name portion (between pos 5 and trailing chevrons)
@@ -339,6 +350,9 @@ export function cleanMrzLine1(rawLine1: string): string {
 
     // Fix concatenated/merged Arabic/Yemeni compound names (e.g., ABDULKAREMSGUBRAN -> ABDULKAREM<GUBRAN)
     namePart = namePart
+      .replace(/ZEH<B/g, 'EHAB')
+      .replace(/ZEHAB/g, 'EHAB')
+      .replace(/3HAB/g, 'EHAB')
       .replace(/ABDULKAREMSGUBRAN/g, 'ABDULKAREM<GUBRAN')
       .replace(/ABDULKAREMGUBRAN/g, 'ABDULKAREM<GUBRAN')
       .replace(/ABDULRAHMAN/g, 'ABDULRAHMAN')
@@ -423,7 +437,7 @@ export function computeIcaoCheckDigit(str: string): number {
  * 2. Forces positions 28-42 (Optional filler) to '<' chevrons, eliminating misread OCR noise (e.g. <<<<LLLLLL<06<<0).
  * 3. Recalculates and repairs ICAO Modulo-10 check digits to produce exact 44-character line.
  */
-export function cleanMrzLine2(rawLine2: string): string {
+export function cleanMrzLine2(rawLine2: string, expectedCountryCode?: string): string {
   let line = normalizeMrzLine(rawLine2);
   if (!line) return '';
 
@@ -437,27 +451,54 @@ export function cleanMrzLine2(rawLine2: string): string {
     }
   }
 
+  // 2. Align / Fix Nationality Country Code at pos 10..12 if offset or corrupted (e.g. "<YE<", "<YE", "2YEM")
+  if (expectedCountryCode && ICAO_COUNTRY_MAP[expectedCountryCode]) {
+    const curCode = line.slice(10, 13);
+    if (!ICAO_COUNTRY_MAP[curCode]) {
+      const countryPrefix = expectedCountryCode.slice(0, 2);
+      const nearIdx = line.substring(9, 16).indexOf(countryPrefix);
+      if (nearIdx !== -1) {
+        const actualIdx = 9 + nearIdx;
+        line = line.slice(0, 10) + expectedCountryCode + line.slice(actualIdx + 3);
+      } else {
+        line = line.slice(0, 10) + expectedCountryCode + line.slice(13);
+      }
+    }
+  }
+
+  // 3. Align Sex indicator ('M', 'F', or '<') at pos 20 if shifted by noise
+  const sexIdx = line.substring(18, 23).search(/[MF]/);
+  if (sexIdx !== -1 && 18 + sexIdx !== 20) {
+    const actualSexIdx = 18 + sexIdx;
+    const sexChar = line[actualSexIdx];
+    let lineChars = line.split('');
+    lineChars.splice(actualSexIdx, 1);
+    lineChars.splice(20, 0, sexChar);
+    line = lineChars.join('');
+  }
+
   // Pad or trim to at least 44 characters
   line = (line + '<'.repeat(44)).slice(0, 44);
 
   // Pos 28 to 42 (15 characters) is optional data / filler for TD3 Passports.
-  // Force pos 28..42 to 15 filler chevrons '<' (replaces noise like <<<<LLLLLL<06<<0 with <<<<<<<<<<<<<<<)
+  // Force pos 28..42 to 15 filler chevrons '<'
   line = line.slice(0, 28) + '<'.repeat(15) + line.slice(43);
 
-  // 1. Repair Document Number Check Digit (pos 9 / index 9)
+  // 4. Repair Document Number Check Digit (pos 9 / index 9)
   const calcDocCheck = computeIcaoCheckDigit(line.slice(0, 9));
   line = line.slice(0, 9) + String(calcDocCheck) + line.slice(10);
 
-  // 2. Repair DOB Check Digit (pos 19 / index 19)
-  const calcDobCheck = computeIcaoCheckDigit(line.slice(13, 19));
-  line = line.slice(0, 19) + String(calcDobCheck) + line.slice(20);
+  // 5. Repair DOB Check Digit (pos 19 / index 19)
+  let dobPart = line.slice(13, 19).replace(/O/g, '0').replace(/I/g, '1').replace(/S/g, '5');
+  const calcDobCheck = computeIcaoCheckDigit(dobPart);
+  line = line.slice(0, 13) + dobPart + String(calcDobCheck) + line.slice(20);
 
-  // 3. Repair Expiry Check Digit (pos 27 / index 27)
-  const calcExpCheck = computeIcaoCheckDigit(line.slice(21, 27));
-  line = line.slice(0, 27) + String(calcExpCheck) + line.slice(28);
+  // 6. Repair Expiry Check Digit (pos 27 / index 27)
+  let expPart = line.slice(21, 27).replace(/O/g, '0').replace(/I/g, '1').replace(/S/g, '5');
+  const calcExpCheck = computeIcaoCheckDigit(expPart);
+  line = line.slice(0, 21) + expPart + String(calcExpCheck) + line.slice(28);
 
-  // 4. Calculate and repair Composite Check Digit (pos 44 / index 43)
-  // TD3 Line 2 composite source = pos 0..9 + pos 13..19 + pos 21..27 + pos 28..42
+  // 7. Calculate and repair Composite Check Digit (pos 44 / index 43)
   const compositeSource = line.slice(0, 10) + line.slice(13, 20) + line.slice(21, 28) + line.slice(28, 43);
   const calculatedComposite = computeIcaoCheckDigit(compositeSource);
   line = line.slice(0, 43) + String(calculatedComposite);
@@ -500,8 +541,12 @@ export function sanitizeExtractedName(rawName: string): string {
 
   cleaned = cleanedTokens.join(' ');
 
-  // 3. Fix common broken OCR name space splits (e.g. "AL I" -> "ALI", "EL I" -> "ELI")
+  // 3. Fix common broken OCR name space splits (e.g. "AL I" -> "ALI", "EL I" -> "ELI", "DADA LL GUEWAD" -> "DADA GUEWAD")
   cleaned = cleaned
+    .replace(/([A-Z]{2,})\s*(LL|KL|LK|CC|XX|11|II|00)\s*([A-Z]{2,})/gi, '$1 $3')
+    .replace(/\bZEH\s+B\b/g, 'EHAB')
+    .replace(/\bZEHAB\b/g, 'EHAB')
+    .replace(/\b3HAB\b/g, 'EHAB')
     .replace(/\bAL\s+I\b/g, 'ALI')
     .replace(/\bEL\s+I\b/g, 'ELI')
     .replace(/\bMOH\s+AMED\b/g, 'MOHAMED')
@@ -560,7 +605,8 @@ function formatMrzDate(yyMMdd: string, isExpiry = false): string | undefined {
 function tryParseMrzLines(line1: string, line2: string): any {
   // Apply deterministic MRZ Line Tail Cleaning for TD3 Passport (44 chars)
   const p1 = cleanMrzLine1(line1);
-  const p2 = cleanMrzLine2(line2);
+  const cCode1 = p1.slice(2, 5).replace(/0/g, 'O');
+  const p2 = cleanMrzLine2(line2, ICAO_COUNTRY_MAP[cCode1] ? cCode1 : undefined);
 
   // Attempt 1: Raw parsed lines
   try {
@@ -682,6 +728,19 @@ export async function scanPassportInBrowser(
       }
       if (!l1.startsWith('P')) continue;
 
+      // Filter out document body field labels (e.g. PLACE OF BIRTH, PASAPORTE, FECHA, EMISION, VENCIMIENTO)
+      if (/PLACE|BIRTH|PASAPORTE|PASSPORT|FECHA|EMISION|VENCIMIENTO|LUGAR|NACIMIENTO|CEDULA|AUTHORITY/i.test(l1)) {
+        continue;
+      }
+
+      // Line 1 MUST contain either a recognized ICAO 3-letter country code or name separator '<<'
+      const c3 = l1.substring(2, 5).replace(/0/g, 'O');
+      const hasValidCountry = Boolean(ICAO_COUNTRY_MAP[c3]);
+      const hasDoubleChevron = l1.includes('<<');
+      if (!hasValidCountry && !hasDoubleChevron) {
+        continue;
+      }
+
       for (let j = i + 1; j < lines.length; j++) {
         let l2Raw = lines[j];
         let l2 = normalizeMrzLine(l2Raw);
@@ -700,15 +759,18 @@ export async function scanPassportInBrowser(
 
         // Score 1: Issuing Country code recognized
         const cCode1 = p1.slice(2, 5).replace(/0/g, 'O');
-        if (ICAO_COUNTRY_MAP[cCode1]) score += 50;
+        if (ICAO_COUNTRY_MAP[cCode1]) score += 100;
 
-        // Score 2: Valid DOB and Expiry digits in Line 2
+        // Score 2: Name contains double chevrons <<
+        if (p1.includes('<<')) score += 100;
+
+        // Score 3: Valid DOB and Expiry digits in Line 2
         const dobStr = p2.slice(13, 19).replace(/O/g, '0').replace(/I/g, '1');
         const expStr = p2.slice(21, 27).replace(/O/g, '0').replace(/I/g, '1');
-        if (/^\d{6}$/.test(dobStr)) score += 40;
-        if (/^\d{6}$/.test(expStr)) score += 40;
+        if (/^\d{6}$/.test(dobStr)) score += 50;
+        if (/^\d{6}$/.test(expStr)) score += 50;
 
-        // Score 3: Valid ICAO checksums
+        // Score 4: Valid ICAO checksums
         if (match.parsed && match.parsed.valid) {
           score += 300;
         } else if (match.parsed && match.parsed.fields) {

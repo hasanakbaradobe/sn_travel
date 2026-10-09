@@ -1426,6 +1426,9 @@ export function parseNamesFromMrz(
 
   // Fix OCR digit substitutions in MRZ names (e.g. MOHA0ED -> MOHAMED, ABDAL3WLA -> ABDALMULA, ABD3LLA -> ABDALLA)
   namesSection = namesSection
+    .replace(/\bZEH<B\b/g, 'EHAB')
+    .replace(/\bZEHAB\b/g, 'EHAB')
+    .replace(/\b3HAB\b/g, 'EHAB')
     .replace(/\bMOHA0ED\b/g, 'MOHAMED')
     .replace(/\bMOHAM0ED\b/g, 'MOHAMMED')
     .replace(/\bMOHA0MED\b/g, 'MOHAMED')
@@ -1448,6 +1451,11 @@ export function parseNamesFromMrz(
   // Normalize common OCR-B separator corruptions between words and chevrons
   // e.g. '<C<', '<K<', '<L<', '<LK<', '<KL<', '<X<' -> '<'
   namesSection = namesSection.replace(/<[CKLXI1(0O]{1,2}<+/gi, '<');
+
+  // Fix OCR misreads of double chevrons '<<' as 'LL', 'KL', 'LK', 'CC', 'XX', '11', 'II', '00', '<L', 'L<' between name words
+  if (!namesSection.includes('<<')) {
+    namesSection = namesSection.replace(/([A-Z]{2,})(<*LL<*|<*KL<*|<*LK<*|<*CC<*|<*KK<*|<*XX<*|<*11<*|<*II<*|<*00<*|<L|L<)([A-Z]{2,})/gi, '$1<<$3');
+  }
 
   let surnameRaw = '';
   let givenNamesRaw = '';
@@ -1623,12 +1631,20 @@ function parseAndValidateTd3(line1: string, line2: string): ScannedPassportResul
     raw1 = raw1.substring(pIdx);
   }
 
-  // Header fix: If chars 2-4 is a country code (e.g. YEM, SDN, ARE, GBR, USA), ensure chars 0-1 is "P<"
+  // Header fix: If chars 2-4 is a country code (e.g. YEM, SDN, ARE, GBR, USA, MRT), ensure chars 0-1 is "P<"
   if (raw1.length >= 5) {
     const c3 = raw1.substring(2, 5);
     if (ICAO_COUNTRY_MAP[c3] || COUNTRY_NAME_ALIASES[c3]) {
       raw1 = 'P<' + c3 + raw1.substring(5);
     }
+  }
+
+  // Fix OCR misreads of double chevrons '<<' as 'LL', 'KL', 'LK', 'CC', 'XX', '11', 'II', '00' between name words
+  if (!raw1.includes('<<') && raw1.length > 8) {
+    const prefix = raw1.substring(0, 5);
+    let namePart = raw1.substring(5);
+    namePart = namePart.replace(/([A-Z]{2,})(LL|KL|LK|CC|XX|11|II|00)([A-Z]{2,})/g, '$1<<$3');
+    raw1 = prefix + namePart;
   }
 
   // Clean trailing OCR chevron noise in raw1 (Line 1)
@@ -1673,6 +1689,33 @@ function parseAndValidateTd3(line1: string, line2: string): ScannedPassportResul
 
   let l1 = raw1.padEnd(44, '<').substring(0, 44);
   let l2 = raw2.padEnd(44, '<').substring(0, 44);
+
+  // Line 2 Country Code Alignment: If Line 1 country code exists, ensure Line 2 pos 10..12 matches or aligns
+  const l1Country = l1.substring(2, 5).replace(/0/g, 'O');
+  if (ICAO_COUNTRY_MAP[l1Country] || COUNTRY_NAME_ALIASES[l1Country]) {
+    const curCode = l2.substring(10, 13);
+    if (!ICAO_COUNTRY_MAP[curCode] && !COUNTRY_NAME_ALIASES[curCode]) {
+      const prefix = l1Country.substring(0, 2);
+      const nearIdx = l2.substring(9, 16).indexOf(prefix);
+      if (nearIdx !== -1) {
+        const actualIdx = 9 + nearIdx;
+        l2 = l2.substring(0, 10) + l1Country + l2.substring(actualIdx + 3);
+      } else {
+        l2 = l2.substring(0, 10) + l1Country + l2.substring(13);
+      }
+    }
+  }
+
+  // Align Sex indicator ('M' / 'F') at pos 20
+  const sexIdx = l2.substring(18, 23).search(/[MF]/);
+  if (sexIdx !== -1 && 18 + sexIdx !== 20) {
+    const actualSexIdx = 18 + sexIdx;
+    const sexChar = l2[actualSexIdx];
+    let l2Chars = l2.split('');
+    l2Chars.splice(actualSexIdx, 1);
+    l2Chars.splice(20, 0, sexChar);
+    l2 = l2Chars.join('');
+  }
 
   // Force Line 2 optional data field (pos 28..42) to filler chevrons if noise
   l2 = l2.slice(0, 28) + '<'.repeat(15) + l2.slice(43);

@@ -6,6 +6,7 @@ import {
   Loader2,
   CheckCircle2,
   AlertCircle,
+  AlertTriangle,
   Copy,
   Check,
   RefreshCw,
@@ -25,12 +26,14 @@ interface PassportScannerModalProps {
   isOpen: boolean;
   onClose: () => void;
   onUseDataForNewClient: (data: ScannedPassportData) => void;
+  onOpenExistingClient?: (clientId: number, passportData?: ScannedPassportData) => void;
 }
 
 export const PassportScannerModal: React.FC<PassportScannerModalProps> = ({
   isOpen,
   onClose,
   onUseDataForNewClient,
+  onOpenExistingClient,
 }) => {
   // Input mode: 'upload' | 'camera'
   const [mode, setMode] = useState<'upload' | 'camera'>('upload');
@@ -40,6 +43,13 @@ export const PassportScannerModal: React.FC<PassportScannerModalProps> = ({
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<ScannedPassportData | null>(null);
   const [copied, setCopied] = useState(false);
+  const [existingClientMatches, setExistingClientMatches] = useState<Array<{
+    id: number;
+    client_id: string;
+    full_name: string;
+    passport_number: string;
+    country: string;
+  }>>([]);
 
   // Camera states
   const videoRef = useRef<HTMLVideoElement | null>(null);
@@ -67,6 +77,7 @@ export const PassportScannerModal: React.FC<PassportScannerModalProps> = ({
       stopCamera();
       setImagePreview(null);
       setResult(null);
+      setExistingClientMatches([]);
       setError(null);
       setScanning(false);
       setMode('upload');
@@ -207,6 +218,20 @@ export const PassportScannerModal: React.FC<PassportScannerModalProps> = ({
       });
       scanned.imagePreview = imageData.startsWith('data:') ? imageData : imagePreview || undefined;
       setResult(scanned);
+
+      // Check if passport number exists in database
+      if (scanned.passportNumber) {
+        try {
+          const dupRes = await api.checkDuplicateClient(scanned.passportNumber, scanned.fullName);
+          if (dupRes.has_duplicate && dupRes.matches.length > 0) {
+            setExistingClientMatches(dupRes.matches);
+          } else {
+            setExistingClientMatches([]);
+          }
+        } catch (e) {
+          // ignore error
+        }
+      }
     } catch (err: any) {
       console.error('Scan error:', err);
       setError(err.message || 'Could not extract passport data on device. Please ensure the bottom Machine Readable Zone (MRZ) is clear and well-lit.');
@@ -508,6 +533,62 @@ MRZ: ${result.mrzLine1 || ''} / ${result.mrzLine2 || ''}`;
                   </button>
                 </div>
               </div>
+
+              {/* Existing Client Alert Banner */}
+              {existingClientMatches.length > 0 && (
+                <div className="bg-amber-50 border-2 border-amber-300/90 rounded-2xl p-4 shadow-sm space-y-3">
+                  <div className="flex items-start gap-3">
+                    <div className="w-9 h-9 rounded-xl bg-amber-500 text-white flex items-center justify-center shrink-0 font-bold shadow-xs">
+                      <AlertTriangle className="w-5 h-5" />
+                    </div>
+                    <div className="flex-1">
+                      <h4 className="font-bold text-amber-950 text-sm sm:text-base flex items-center gap-2">
+                        <span>Passport Number Already Registered in Database!</span>
+                        <span className="px-2.5 py-0.5 bg-amber-200 text-amber-950 border border-amber-400 rounded-full text-[11px] font-extrabold uppercase tracking-wide">
+                          {existingClientMatches.length} Match
+                        </span>
+                      </h4>
+                      <p className="text-xs text-amber-800 mt-0.5">
+                        A client with passport number <span className="font-mono font-bold">{result.passportNumber}</span> is already in your database. You can edit their existing record or create a new entry:
+                      </p>
+                      <div className="mt-3 space-y-2">
+                        {existingClientMatches.map((client) => (
+                          <div
+                            key={client.id}
+                            className="bg-white border border-amber-300 rounded-xl p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 shadow-2xs"
+                          >
+                            <div>
+                              <div className="font-bold text-slate-900 text-xs sm:text-sm flex items-center gap-2">
+                                <span>{client.full_name}</span>
+                                <span className="text-xs text-slate-500 font-mono font-normal">({client.client_id})</span>
+                              </div>
+                              <div className="text-xs text-slate-600 mt-0.5">
+                                Passport: <span className="font-mono font-bold text-sky-800">{client.passport_number}</span> • Country: <span className="font-medium text-slate-800">{client.country}</span>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-2 self-end sm:self-auto">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (onOpenExistingClient) {
+                                    onOpenExistingClient(client.id, result);
+                                  }
+                                  onClose();
+                                }}
+                                className="px-3.5 py-1.5 bg-amber-600 hover:bg-amber-700 active:bg-amber-800 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-xs transition"
+                              >
+                                <UserCheck className="w-3.5 h-3.5" />
+                                <span>Edit Existing Client Record</span>
+                                <ArrowRight className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
 
               {/* Data Cards Grid */}
               <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
