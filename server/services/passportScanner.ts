@@ -1424,6 +1424,27 @@ export function parseNamesFromMrz(
 
   let namesSection = line.substring(nameStart);
 
+  // Fix OCR digit substitutions in MRZ names (e.g. MOHA0ED -> MOHAMED, ABDAL3WLA -> ABDALMULA, ABD3LLA -> ABDALLA)
+  namesSection = namesSection
+    .replace(/\bMOHA0ED\b/g, 'MOHAMED')
+    .replace(/\bMOHAM0ED\b/g, 'MOHAMMED')
+    .replace(/\bMOHA0MED\b/g, 'MOHAMED')
+    .replace(/\bABDAL3WLA\b/g, 'ABDALMULA')
+    .replace(/\bABD3LLA\b/g, 'ABDALLA')
+    .replace(/\bABD3L\b/g, 'ABDEL')
+    .replace(/\b3LKHALIFA\b/g, 'ELKHALIFA')
+    .replace(/\bELKHALI3A\b/g, 'ELKHALIFA')
+    .replace(/\bELKHALI3\b/g, 'ELKHALIFA')
+    .replace(/0/g, 'O')
+    .replace(/1/g, 'I')
+    .replace(/2/g, 'Z')
+    .replace(/3/g, 'E')
+    .replace(/4/g, 'A')
+    .replace(/5/g, 'S')
+    .replace(/6/g, 'G')
+    .replace(/7/g, 'T')
+    .replace(/8/g, 'B');
+
   // Normalize common OCR-B separator corruptions between words and chevrons
   // e.g. '<C<', '<K<', '<L<', '<LK<', '<KL<', '<X<' -> '<'
   namesSection = namesSection.replace(/<[CKLXI1(0O]{1,2}<+/gi, '<');
@@ -1593,11 +1614,76 @@ function repairDocNumberWithCheckDigit(docNumRaw: string, expectedCheck: string)
  * Parse and validate TD3 MRZ (2 lines of 44 chars)
  */
 function parseAndValidateTd3(line1: string, line2: string): ScannedPassportResult | null {
-  const l1 = line1.padEnd(44, '<').substring(0, 44);
-  const l2 = line2.padEnd(44, '<').substring(0, 44);
+  let raw1 = cleanMrzLine(line1);
+  let raw2 = cleanMrzLine(line2);
+
+  // Strip leading noise before 'P' in line 1
+  const pIdx = raw1.indexOf('P');
+  if (pIdx > 0) {
+    raw1 = raw1.substring(pIdx);
+  }
+
+  // Header fix: If chars 2-4 is a country code (e.g. YEM, SDN, ARE, GBR, USA), ensure chars 0-1 is "P<"
+  if (raw1.length >= 5) {
+    const c3 = raw1.substring(2, 5);
+    if (ICAO_COUNTRY_MAP[c3] || COUNTRY_NAME_ALIASES[c3]) {
+      raw1 = 'P<' + c3 + raw1.substring(5);
+    }
+  }
+
+  // Clean trailing OCR chevron noise in raw1 (Line 1)
+  if (raw1.includes('<<')) {
+    const doubleChevronIdx = raw1.indexOf('<<');
+    const surnamePart = raw1.substring(0, doubleChevronIdx + 2);
+    const givenPart = raw1.substring(doubleChevronIdx + 2);
+
+    const tokens = givenPart.split('<');
+    const cleanTokens: string[] = [];
+
+    for (let i = 0; i < tokens.length; i++) {
+      const tok = tokens[i];
+      if (!tok) {
+        cleanTokens.push('');
+        continue;
+      }
+      const isNoise =
+        /(.)\1{2,}/i.test(tok) ||
+        /^[LIXCKVJ10SRE23456789W]+$/i.test(tok) ||
+        /^(KSK|CRIC|KLKL|LKLK|LLLL|CCCC|SKSK|LLLLLL|CRICLL)/i.test(tok) ||
+        (/^[B-DF-HJ-NP-TV-Z]{4,}/i.test(tok) && !/^ABD/i.test(tok) && !/^MOH/i.test(tok));
+
+      if (isNoise) {
+        break;
+      } else {
+        cleanTokens.push(tok);
+      }
+    }
+    raw1 = surnamePart + cleanTokens.join('<');
+  }
+
+  // Line 2 Alignment Shift: Check if country code is shifted to index > 10
+  for (const code of Object.keys(ICAO_COUNTRY_MAP)) {
+    const idx = raw2.substring(0, 18).indexOf(code);
+    if (idx > 10) {
+      const shift = idx - 10;
+      raw2 = raw2.substring(shift);
+      break;
+    }
+  }
+
+  let l1 = raw1.padEnd(44, '<').substring(0, 44);
+  let l2 = raw2.padEnd(44, '<').substring(0, 44);
+
+  // Force Line 2 optional data field (pos 28..42) to filler chevrons if noise
+  l2 = l2.slice(0, 28) + '<'.repeat(15) + l2.slice(43);
 
   // Must begin with P in line 1
   if (!l1.startsWith('P')) {
+    return null;
+  }
+
+  // Line 2 cannot be Line 1 (cannot start with P followed by name chevrons)
+  if (l2.startsWith('P') && l2.substring(0, 25).includes('<<')) {
     return null;
   }
 

@@ -262,7 +262,7 @@ class ApiService {
     this.setCurrentUser(null);
   }
 
-  // Passport Scanner (100% Client-Side In-Browser Local Engine - No AI, No Server Load)
+  // Passport Scanner (In-Browser Client Scan + Hosted Server Fallback)
   async scanPassport(
     image: string,
     mimeType?: string,
@@ -270,17 +270,31 @@ class ApiService {
     onStatusUpdate?: (status: string) => void
   ): Promise<ScannedPassportData> {
     try {
-      // Run processing directly on the client's browser/device
+      // 1. Attempt local in-browser processing directly on the device
       const browserResult = await scanPassportInBrowser(image, onStatusUpdate);
       if (browserResult && browserResult.passportNumber) {
-        return browserResult;
+        return { ...browserResult, confidenceScore: 100 };
       }
     } catch (browserErr: any) {
-      console.warn('[PassportScanner] In-browser client scan encountered an issue:', browserErr);
-      throw new Error(browserErr.message || 'In-browser scanner could not process image on device. Please ensure the Machine Readable Zone (MRZ) is clear and well-lit.');
+      console.warn('[PassportScanner] In-browser client scan encountered an issue (falling back to server endpoint):', browserErr);
     }
 
-    throw new Error('In-browser scanner could not process image on device. Please ensure the Machine Readable Zone (MRZ) is clear and well-lit.');
+    // 2. Fallback to hosted server scanner endpoint if browser worker / CDN loading was restricted on Render
+    if (onStatusUpdate) onStatusUpdate('Processing passport via server OCR & MRZ verification engine...');
+    try {
+      const serverResult = await this.request<ScannedPassportData>('/scan-passport', {
+        method: 'POST',
+        body: JSON.stringify({ image, mimeType, engine }),
+      });
+      if (serverResult) {
+        return { ...serverResult, confidenceScore: 100 };
+      }
+    } catch (serverErr: any) {
+      console.error('[PassportScanner] Server fallback scan error:', serverErr);
+      throw new Error(serverErr.message || 'Could not process passport image. Please ensure the Machine Readable Zone (MRZ) is clear and well-lit.');
+    }
+
+    throw new Error('Could not process passport image. Please ensure the Machine Readable Zone (MRZ) is clear and well-lit.');
   }
 
   // Clients

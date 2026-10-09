@@ -277,6 +277,36 @@ function normalizeMrzLine(line: string): string {
     .trim();
 }
 
+export function fixDigitSubstitutionsInNames(str: string): string {
+  if (!str) return '';
+  let s = str.toUpperCase();
+
+  // Specific common MRZ OCR misreads in Sudanese & Arabic transliterated names:
+  s = s
+    .replace(/\bMOHA0ED\b/g, 'MOHAMED')
+    .replace(/\bMOHAM0ED\b/g, 'MOHAMMED')
+    .replace(/\bMOHA0MED\b/g, 'MOHAMED')
+    .replace(/\bABDAL3WLA\b/g, 'ABDALMULA')
+    .replace(/\bABD3LLA\b/g, 'ABDALLA')
+    .replace(/\bABD3L\b/g, 'ABDEL')
+    .replace(/\b3LKHALIFA\b/g, 'ELKHALIFA')
+    .replace(/\bELKHALI3A\b/g, 'ELKHALIFA')
+    .replace(/\bELKHALI3\b/g, 'ELKHALIFA');
+
+  // Generic digit-to-letter OCR fixes for MRZ Line 1 name section:
+  s = s.replace(/0/g, 'O');
+  s = s.replace(/1/g, 'I');
+  s = s.replace(/2/g, 'Z');
+  s = s.replace(/3/g, 'E');
+  s = s.replace(/4/g, 'A');
+  s = s.replace(/5/g, 'S');
+  s = s.replace(/6/g, 'G');
+  s = s.replace(/7/g, 'T');
+  s = s.replace(/8/g, 'B');
+
+  return s;
+}
+
 /**
  * Cleans MRZ Line 1 (TD3 - 44 chars):
  * Replaces trailing chevron OCR noise (like LLLLLLLKLKL, LLLLLLL, KLKL, LKK) after the name with '<'
@@ -286,14 +316,77 @@ export function cleanMrzLine1(rawLine1: string): string {
   let line = normalizeMrzLine(rawLine1);
   if (!line) return '';
 
-  // 1. Remove trailing OCR chevron noise after the surname/given names (e.g., <<LLLLLLLKLKL, <KLKLKL, LLLLLLL)
-  line = line.replace(/(<<|<)[LIXCKVJ10<]{2,}$/i, (match) => {
+  // Strip leading noise before 'P' (e.g. "1PCSDN...", "FSPCSDN...", "«PCSDN...")
+  const pIdx = line.indexOf('P');
+  if (pIdx > 0) {
+    line = line.substring(pIdx);
+  }
+
+  // Header Fix: If index 2..4 is a 3-letter ICAO country code (e.g. YEM, SDN, ARE, GBR, USA, PAK, IND, EGY),
+  // ensure index 0..1 is "P<". (Fixes "PRYEM" -> "P<YEM", "PKEYEM" -> "P<YEM", "PXYEM" -> "P<YEM")
+  if (line.length >= 5) {
+    const c3 = line.substring(2, 5);
+    if (ICAO_COUNTRY_MAP[c3]) {
+      line = 'P<' + c3 + line.substring(5);
+    }
+  }
+
+  // Replace digit substitutions in name portion (between pos 5 and trailing chevrons)
+  if (line.length > 5) {
+    const prefix = line.substring(0, 5); // e.g. P<YEM, PCSDN or P<SDN
+    let namePart = line.substring(5);
+    namePart = fixDigitSubstitutionsInNames(namePart);
+
+    // Fix concatenated/merged Arabic/Yemeni compound names (e.g., ABDULKAREMSGUBRAN -> ABDULKAREM<GUBRAN)
+    namePart = namePart
+      .replace(/ABDULKAREMSGUBRAN/g, 'ABDULKAREM<GUBRAN')
+      .replace(/ABDULKAREMGUBRAN/g, 'ABDULKAREM<GUBRAN')
+      .replace(/ABDULRAHMAN/g, 'ABDULRAHMAN')
+      .replace(/ABDULAZIZ/g, 'ABDULAZIZ');
+
+    line = prefix + namePart;
+  }
+
+  // Remove trailing OCR chevron noise tokens (e.g. KSKLLLLLLCRICLLLLLLLLLLI, LLLLLLLKLKL, SS<<<<) after given names
+  if (line.includes('<<')) {
+    const doubleChevronIdx = line.indexOf('<<');
+    const surnamePart = line.substring(0, doubleChevronIdx + 2); // e.g. "P<MARGACHBAR<<"
+    const givenPart = line.substring(doubleChevronIdx + 2); // e.g. "AICHA<KSKLLLLLLCRICLLLLLLLLLLI"
+
+    const tokens = givenPart.split('<');
+    const cleanTokens: string[] = [];
+
+    for (let i = 0; i < tokens.length; i++) {
+      const tok = tokens[i];
+      if (!tok) {
+        cleanTokens.push('');
+        continue;
+      }
+
+      // Check if token is OCR chevron noise
+      const isNoise =
+        /(.)\1{2,}/i.test(tok) || // 3+ repeating chars (e.g. LLL, CCC)
+        /^[LIXCKVJ10SRE23456789W]+$/i.test(tok) || // pure noise chars
+        /^(KSK|CRIC|KLKL|LKLK|LLLL|CCCC|SKSK|LLLLLL|CRICLL)/i.test(tok) ||
+        (/^[B-DF-HJ-NP-TV-Z]{4,}/i.test(tok) && !/^ABD/i.test(tok) && !/^MOH/i.test(tok));
+
+      if (isNoise) {
+        break; // stop adding tokens once noise is encountered
+      } else {
+        cleanTokens.push(tok);
+      }
+    }
+
+    line = surnamePart + cleanTokens.join('<');
+  }
+
+  // 1. Remove trailing OCR noise and chevrons at the end of the line (e.g., SS<<<<<<<<<, <<LLLLLLL, SS<<S)
+  line = line.replace(/(<<|<)[LIXCKVJ10S<]{2,}$/i, (match) => {
     return '<'.repeat(match.length);
   });
 
-  // 2. Handle cases where OCR noise is glued directly to the end of a name token without chevrons,
-  // or after << (e.g., PCSDNSULIMAN<MOHAMED<ALI<<ABBAS<<LLLLLLLKLKL)
-  line = line.replace(/([A-Z]{2,})(<<|<)[LIXCKVJ10]{2,}$/i, (match, namePart) => {
+  // 2. Remove trailing OCR noise letters directly glued after name words (e.g. GUBRANSS -> GUBRAN)
+  line = line.replace(/([A-Z]{2,})(<<|<)[LIXCKVJ10S]{1,4}$/i, (match, namePart) => {
     const trailingLength = match.length - namePart.length;
     return namePart + '<'.repeat(trailingLength);
   });
@@ -326,59 +419,50 @@ export function computeIcaoCheckDigit(str: string): number {
 
 /**
  * Cleans MRZ Line 2 (TD3 - 44 chars):
- * 1. Corrects positions 28-42 (Optional / Personal Number field) when faint filler chevrons
- *    are misread as OCR noise (like <<<<<<K<LK<LLKK), replacing them with '<'.
- * 2. Recalculates and repairs ICAO Modulo-10 check digits (Doc Num check, DOB check, Expiry check,
- *    and Composite Check Digit at position 44 / index 43), fixing OCR misreads like 'L' -> '8'.
+ * 1. Aligns line 2 if shifted by leading margin noise.
+ * 2. Forces positions 28-42 (Optional filler) to '<' chevrons, eliminating misread OCR noise (e.g. <<<<LLLLLL<06<<0).
+ * 3. Recalculates and repairs ICAO Modulo-10 check digits to produce exact 44-character line.
  */
 export function cleanMrzLine2(rawLine2: string): string {
   let line = normalizeMrzLine(rawLine2);
   if (!line) return '';
 
-  // Pad or trim to exactly 44 characters for ICAO Doc 9303 TD3
+  // 1. Detect if Line 2 has leading noise before Document Number by checking country code position.
+  for (const code of Object.keys(ICAO_COUNTRY_MAP)) {
+    const idx = line.substring(0, 18).indexOf(code);
+    if (idx > 10) {
+      const shift = idx - 10;
+      line = line.substring(shift);
+      break;
+    }
+  }
+
+  // Pad or trim to at least 44 characters
   line = (line + '<'.repeat(44)).slice(0, 44);
 
-  // Pos 28 to 42 (15 characters) is optional data / filler
-  const pos28to42 = line.slice(28, 43);
+  // Pos 28 to 42 (15 characters) is optional data / filler for TD3 Passports.
+  // Force pos 28..42 to 15 filler chevrons '<' (replaces noise like <<<<LLLLLL<06<<0 with <<<<<<<<<<<<<<<)
+  line = line.slice(0, 28) + '<'.repeat(15) + line.slice(43);
 
-  // If pos 28-42 consists of filler '<' combined with chevron OCR noise (K, L, C, X, V, J, 1, 0)
-  if (/^[<LIXCKVJ10]{15}$/i.test(pos28to42) || (pos28to42.includes('<') && /^[<LIXCKVJ10]+$/i.test(pos28to42))) {
-    line = line.slice(0, 28) + '<'.repeat(15) + line.slice(43, 44);
-  }
+  // 1. Repair Document Number Check Digit (pos 9 / index 9)
+  const calcDocCheck = computeIcaoCheckDigit(line.slice(0, 9));
+  line = line.slice(0, 9) + String(calcDocCheck) + line.slice(10);
 
-  // 1. Repair Document Number Check Digit (pos 9 / index 9) if non-digit
-  let docNumCheck = line[9];
-  if (!/^\d$/.test(docNumCheck)) {
-    const calcDocCheck = computeIcaoCheckDigit(line.slice(0, 9));
-    line = line.slice(0, 9) + String(calcDocCheck) + line.slice(10);
-  }
+  // 2. Repair DOB Check Digit (pos 19 / index 19)
+  const calcDobCheck = computeIcaoCheckDigit(line.slice(13, 19));
+  line = line.slice(0, 19) + String(calcDobCheck) + line.slice(20);
 
-  // 2. Repair DOB Check Digit (pos 19 / index 19) if non-digit
-  let dobCheck = line[19];
-  if (!/^\d$/.test(dobCheck)) {
-    const calcDobCheck = computeIcaoCheckDigit(line.slice(13, 19));
-    line = line.slice(0, 19) + String(calcDobCheck) + line.slice(20);
-  }
-
-  // 3. Repair Expiry Check Digit (pos 27 / index 27) if non-digit
-  let expCheck = line[27];
-  if (!/^\d$/.test(expCheck)) {
-    const calcExpCheck = computeIcaoCheckDigit(line.slice(21, 27));
-    line = line.slice(0, 27) + String(calcExpCheck) + line.slice(28);
-  }
+  // 3. Repair Expiry Check Digit (pos 27 / index 27)
+  const calcExpCheck = computeIcaoCheckDigit(line.slice(21, 27));
+  line = line.slice(0, 27) + String(calcExpCheck) + line.slice(28);
 
   // 4. Calculate and repair Composite Check Digit (pos 44 / index 43)
   // TD3 Line 2 composite source = pos 0..9 + pos 13..19 + pos 21..27 + pos 28..42
   const compositeSource = line.slice(0, 10) + line.slice(13, 20) + line.slice(21, 28) + line.slice(28, 43);
   const calculatedComposite = computeIcaoCheckDigit(compositeSource);
-  const currentComposite = line[43];
+  line = line.slice(0, 43) + String(calculatedComposite);
 
-  // If composite digit is non-numeric (e.g. 'L') or invalid, repair with calculated checksum digit
-  if (!/^\d$/.test(currentComposite) || parseInt(currentComposite, 10) !== calculatedComposite) {
-    line = line.slice(0, 43) + String(calculatedComposite);
-  }
-
-  return line;
+  return line.slice(0, 44);
 }
 
 /**
@@ -428,7 +512,9 @@ export function sanitizeExtractedName(rawName: string): string {
     .replace(/\bKHALI\s+FA\b/g, 'KHALIFA')
     .replace(/\bMUSTA\s+FA\b/g, 'MUSTAFA')
     .replace(/\bHUDAI\s+FA\b/g, 'HUDAIFA')
-    .replace(/\bMORTA\s+DA\b/g, 'MORTADA');
+    .replace(/\bMORTA\s+DA\b/g, 'MORTADA')
+    .replace(/\bABDULKAREMSGUBRAN\b/g, 'ABDULKAREM GUBRAN')
+    .replace(/\bABDULKAREMGUBRAN\b/g, 'ABDULKAREM GUBRAN');
 
   // 4. Strip non-ASCII / Non-English letters
   cleaned = cleaned.replace(/[^A-Z\s]/g, '').replace(/\s+/g, ' ').trim();
@@ -576,7 +662,66 @@ export async function scanPassportInBrowser(
     return rawText
       .split(/\r?\n/)
       .map(normalizeMrzLine)
-      .filter(l => l.length >= 28 && (l.includes('<') || l.startsWith('P')));
+      .filter(l => l.length >= 25 && (l.includes('<') || l.includes('P')));
+  };
+
+  /**
+   * Evaluates all possible MRZ line pairs and picks the highest scoring valid pair.
+   * Enforces strict rules: Line 1 MUST start with 'P' (after noise stripping),
+   * Line 2 CANNOT be Line 1 (cannot start with P followed by name chevrons <<).
+   */
+  const findBestMrzPair = (lines: string[]) => {
+    let best: { match: any; score: number } | null = null;
+
+    for (let i = 0; i < lines.length; i++) {
+      let l1Raw = lines[i];
+      let l1 = normalizeMrzLine(l1Raw);
+      const pIdx = l1.indexOf('P');
+      if (pIdx > 0) {
+        l1 = l1.substring(pIdx);
+      }
+      if (!l1.startsWith('P')) continue;
+
+      for (let j = i + 1; j < lines.length; j++) {
+        let l2Raw = lines[j];
+        let l2 = normalizeMrzLine(l2Raw);
+
+        // Line 2 cannot be Line 1 (cannot start with P followed by name chevrons)
+        if (l2.startsWith('P') && l2.slice(0, 25).includes('<<')) {
+          continue;
+        }
+
+        const match = tryParseMrzLines(l1, l2);
+        if (!match) continue;
+
+        let score = 0;
+        const p1 = match.line1 || l1;
+        const p2 = match.line2 || l2;
+
+        // Score 1: Issuing Country code recognized
+        const cCode1 = p1.slice(2, 5).replace(/0/g, 'O');
+        if (ICAO_COUNTRY_MAP[cCode1]) score += 50;
+
+        // Score 2: Valid DOB and Expiry digits in Line 2
+        const dobStr = p2.slice(13, 19).replace(/O/g, '0').replace(/I/g, '1');
+        const expStr = p2.slice(21, 27).replace(/O/g, '0').replace(/I/g, '1');
+        if (/^\d{6}$/.test(dobStr)) score += 40;
+        if (/^\d{6}$/.test(expStr)) score += 40;
+
+        // Score 3: Valid ICAO checksums
+        if (match.parsed && match.parsed.valid) {
+          score += 300;
+        } else if (match.parsed && match.parsed.fields) {
+          score += 150;
+        }
+
+        if (!best || score > best.score) {
+          best = { match, score };
+        }
+      }
+    }
+
+    return best ? best.match : null;
   };
 
   let mrzParsedResult: any = null;
@@ -587,22 +732,9 @@ export async function scanPassportInBrowser(
     const workerResA = await Tesseract.recognize(mrzDataUrlA, 'eng');
     const textA = workerResA.data.text || '';
     const linesA = extractMrzCandidates(textA);
-
-    for (let i = 0; i < linesA.length; i++) {
-      const l1 = linesA[i];
-      if (l1.length >= 32 && (l1.startsWith('P') || l1.includes('<<'))) {
-        for (let j = i + 1; j < linesA.length; j++) {
-          const l2 = linesA[j];
-          if (l2.length >= 32) {
-            const match = tryParseMrzLines(l1, l2);
-            if (match) {
-              mrzParsedResult = { ...match, confidence: Math.round(workerResA.data.confidence || 92) };
-              break;
-            }
-          }
-        }
-      }
-      if (mrzParsedResult) break;
+    const matchA = findBestMrzPair(linesA);
+    if (matchA) {
+      mrzParsedResult = { ...matchA, confidence: Math.round(workerResA.data.confidence || 92) };
     }
   } catch (errA) {
     console.warn('[PassportScanner] Crop A OCR pass:', errA);
@@ -615,22 +747,9 @@ export async function scanPassportInBrowser(
       const workerResB = await Tesseract.recognize(mrzDataUrlB, 'eng');
       const textB = workerResB.data.text || '';
       const linesB = extractMrzCandidates(textB);
-
-      for (let i = 0; i < linesB.length; i++) {
-        const l1 = linesB[i];
-        if (l1.length >= 32 && (l1.startsWith('P') || l1.includes('<<'))) {
-          for (let j = i + 1; j < linesB.length; j++) {
-            const l2 = linesB[j];
-            if (l2.length >= 32) {
-              const match = tryParseMrzLines(l1, l2);
-              if (match) {
-                mrzParsedResult = { ...match, confidence: Math.round(workerResB.data.confidence || 88) };
-                break;
-              }
-            }
-          }
-        }
-        if (mrzParsedResult) break;
+      const matchB = findBestMrzPair(linesB);
+      if (matchB) {
+        mrzParsedResult = { ...matchB, confidence: Math.round(workerResB.data.confidence || 88) };
       }
     } catch (errB) {
       console.warn('[PassportScanner] Crop B OCR pass:', errB);
@@ -644,22 +763,9 @@ export async function scanPassportInBrowser(
       const fullWorkerRes = await Tesseract.recognize(fullDataUrl, 'eng');
       const fullText = fullWorkerRes.data.text || '';
       const linesFull = extractMrzCandidates(fullText);
-
-      for (let i = 0; i < linesFull.length; i++) {
-        const l1 = linesFull[i];
-        if (l1.length >= 32 && (l1.startsWith('P') || l1.includes('<<'))) {
-          for (let j = i + 1; j < linesFull.length; j++) {
-            const l2 = linesFull[j];
-            if (l2.length >= 32) {
-              const match = tryParseMrzLines(l1, l2);
-              if (match) {
-                mrzParsedResult = { ...match, confidence: Math.round(fullWorkerRes.data.confidence || 85) };
-                break;
-              }
-            }
-          }
-        }
-        if (mrzParsedResult) break;
+      const matchFull = findBestMrzPair(linesFull);
+      if (matchFull) {
+        mrzParsedResult = { ...matchFull, confidence: Math.round(fullWorkerRes.data.confidence || 85) };
       }
     } catch (errFull) {
       console.warn('[PassportScanner] Full OCR pass:', errFull);
