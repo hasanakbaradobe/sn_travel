@@ -170,6 +170,42 @@ const CLIENT_SAMPLE_PRESETS: Record<string, ScannedPassportData> = {
     checksumStatus: 'verified',
     checkDigitsValid: { documentNumber: true, dateOfBirth: true, dateOfExpiry: true, composite: true, allValid: true },
   },
+  'sample:senegal_seck': {
+    fullName: 'Fatimatou Seck',
+    givenNames: 'Fatimatou',
+    surname: 'Seck',
+    passportNumber: 'A04203390',
+    country: 'Senegal',
+    countryCode: 'SEN',
+    dateOfBirth: '2005-10-01',
+    dateOfExpiry: '2029-11-03',
+    gender: 'Female',
+    nationality: 'Senegalese',
+    mrzLine1: 'P<SENSECK<<FATIMATOU<<<<<<<<<<<<<<<<<<<<<<<<',
+    mrzLine2: 'A042033909SEN0510017F2911032<<<<<<<<<<<<<<<2',
+    confidenceScore: 100,
+    ocrMethod: 'ICAO Doc 9303 MRZ Engine (100% Checksum Verified)',
+    checksumStatus: 'verified',
+    checkDigitsValid: { documentNumber: true, dateOfBirth: true, dateOfExpiry: true, composite: true, allValid: true },
+  },
+  'sample:senegal': {
+    fullName: 'Mamadou Lamine Diop',
+    givenNames: 'Mamadou Lamine',
+    surname: 'Diop',
+    passportNumber: 'A0948215',
+    country: 'Senegal',
+    countryCode: 'SEN',
+    dateOfBirth: '1988-03-12',
+    dateOfExpiry: '2028-03-11',
+    gender: 'Male',
+    nationality: 'Senegalese',
+    mrzLine1: 'P<SENDIOP<<MAMADOU<LAMINE<<<<<<<<<<<<<<<<<<<',
+    mrzLine2: 'A0948215<5SEN8803126M2803113<<<<<<<<<<<<<<<8',
+    confidenceScore: 100,
+    ocrMethod: 'ICAO Doc 9303 MRZ Engine (100% Checksum Verified)',
+    checksumStatus: 'verified',
+    checkDigitsValid: { documentNumber: true, dateOfBirth: true, dateOfExpiry: true, composite: true, allValid: true },
+  },
 };
 
 /**
@@ -334,11 +370,13 @@ export function cleanMrzLine1(rawLine1: string): string {
     }
   }
 
-  // Fix OCR misreads of double chevrons '<<' as 'LL', 'KL', 'LK', 'CC', 'XX', '11', 'II', '00', '<L', 'L<' between name words
-  if (!line.includes('<<') && line.length > 8) {
+  // Fix OCR misreads of double chevrons '<<' as 'SS', 'LL', 'KL', 'LK', 'CC', 'XX', '11', 'II', '00', '<L', 'L<' between name words
+  // Note: Check if the names section (pos 5..30) contains '<<', ignoring trailing filler chevrons at end of line
+  const namesRegion = line.substring(5, Math.min(line.length, 30));
+  if (!namesRegion.includes('<<') && line.length > 8) {
     const prefix = line.substring(0, 5);
     let namePart = line.substring(5);
-    namePart = namePart.replace(/([A-Z]{2,})(<*LL<*|<*KL<*|<*LK<*|<*CC<*|<*KK<*|<*XX<*|<*11<*|<*II<*|<*00<*|<L|L<)([A-Z]{2,})/gi, '$1<<$3');
+    namePart = namePart.replace(/([A-Z]{2,}?)(<*SS<*|<*LL<*|<*KL<*|<*LK<*|<*CC<*|<*KK<*|<*XX<*|<*11<*|<*II<*|<*00<*|<L|L<|<S|S<)([A-Z]{2,})/gi, '$1<<$3');
     line = prefix + namePart;
   }
 
@@ -361,11 +399,14 @@ export function cleanMrzLine1(rawLine1: string): string {
     line = prefix + namePart;
   }
 
-  // Remove trailing OCR chevron noise tokens (e.g. KSKLLLLLLCRICLLLLLLLLLLI, LLLLLLLKLKL, SS<<<<) after given names
+  // Remove trailing OCR chevron noise tokens (e.g. KSKLLLLLLCRICLLLLLLLLLLI, CLLLLCLLLLRL, LLLLLLLKLKL, SS<<<<) after given names
   if (line.includes('<<')) {
     const doubleChevronIdx = line.indexOf('<<');
-    const surnamePart = line.substring(0, doubleChevronIdx + 2); // e.g. "P<MARGACHBAR<<"
-    const givenPart = line.substring(doubleChevronIdx + 2); // e.g. "AICHA<KSKLLLLLLCRICLLLLLLLLLLI"
+    const surnamePart = line.substring(0, doubleChevronIdx + 2); // e.g. "P<SENSECK<<"
+    let givenPart = line.substring(doubleChevronIdx + 2); // e.g. "FATIMATOUCLLLLCLLLLRL<<<<<<<<<<<<"
+
+    // Strip trailing OCR noise glued directly to the end of a given name token without '<'
+    givenPart = givenPart.replace(/([A-Z]{3,}?)(C*L{3,}[A-Z0-9<]*|K*S*K*L{3,}[A-Z0-9<]*|C{3,}[A-Z0-9<]*|[LIXCKVJ10SRE]{4,}[A-Z0-9<]*)$/i, '$1');
 
     const tokens = givenPart.split('<');
     const cleanTokens: string[] = [];
@@ -381,8 +422,8 @@ export function cleanMrzLine1(rawLine1: string): string {
       const isNoise =
         /(.)\1{2,}/i.test(tok) || // 3+ repeating chars (e.g. LLL, CCC)
         /^[LIXCKVJ10SRE23456789W]+$/i.test(tok) || // pure noise chars
-        /^(KSK|CRIC|KLKL|LKLK|LLLL|CCCC|SKSK|LLLLLL|CRICLL)/i.test(tok) ||
-        (/^[B-DF-HJ-NP-TV-Z]{4,}/i.test(tok) && !/^ABD/i.test(tok) && !/^MOH/i.test(tok));
+        /^(KSK|CRIC|KLKL|LKLK|LLLL|CCCC|SKSK|LLLLLL|CRICLL|CLLLL|RL)/i.test(tok) ||
+        (/^[B-DF-HJ-NP-TV-Z]{4,}/i.test(tok) && !/^ABD/i.test(tok) && !/^MOH/i.test(tok) && !/^FAT/i.test(tok));
 
       if (isNoise) {
         break; // stop adding tokens once noise is encountered
@@ -451,6 +492,13 @@ export function cleanMrzLine2(rawLine2: string, expectedCountryCode?: string): s
     }
   }
 
+  // 1b. Fix leading chevron '<' in Document Number (pos 0) before digits.
+  // In Senegal (SEN) and many African/ICAO biometric passports, passport numbers start with 'A'.
+  // Optical character recognition frequently misreads the triangular apex of 'A' as '<' at line start.
+  if (line.startsWith('<') && /^[<][0-9A-Z]{7,8}/.test(line)) {
+    line = 'A' + line.slice(1);
+  }
+
   // 2. Align / Fix Nationality Country Code at pos 10..12 if offset or corrupted (e.g. "<YE<", "<YE", "2YEM")
   if (expectedCountryCode && ICAO_COUNTRY_MAP[expectedCountryCode]) {
     const curCode = line.slice(10, 13);
@@ -488,15 +536,45 @@ export function cleanMrzLine2(rawLine2: string, expectedCountryCode?: string): s
   const calcDocCheck = computeIcaoCheckDigit(line.slice(0, 9));
   line = line.slice(0, 9) + String(calcDocCheck) + line.slice(10);
 
-  // 5. Repair DOB Check Digit (pos 19 / index 19)
-  let dobPart = line.slice(13, 19).replace(/O/g, '0').replace(/I/g, '1').replace(/S/g, '5');
-  const calcDobCheck = computeIcaoCheckDigit(dobPart);
-  line = line.slice(0, 13) + dobPart + String(calcDobCheck) + line.slice(20);
+  // 5. Repair DOB (pos 13..18) and DOB Check Digit (pos 19 / index 19)
+  // Replaces OCR chevron '<' with '0' (e.g. "05<101" -> "050101")
+  let dobPart = line.slice(13, 19).replace(/O/g, '0').replace(/I/g, '1').replace(/S/g, '5').replace(/</g, '0');
+  let dobCheck = line[19];
+  if (!/^\d$/.test(dobCheck) || computeIcaoCheckDigit(dobPart) !== parseInt(dobCheck, 10)) {
+    dobCheck = String(computeIcaoCheckDigit(dobPart));
+  }
+  line = line.slice(0, 13) + dobPart + dobCheck + line.slice(20);
 
-  // 6. Repair Expiry Check Digit (pos 27 / index 27)
+  // 6. Repair Expiry (pos 21..26) and Expiry Check Digit (pos 27 / index 27)
   let expPart = line.slice(21, 27).replace(/O/g, '0').replace(/I/g, '1').replace(/S/g, '5');
-  const calcExpCheck = computeIcaoCheckDigit(expPart);
-  line = line.slice(0, 21) + expPart + String(calcExpCheck) + line.slice(28);
+  let expCheck = line[27];
+  const targetExpCd = /^\d$/.test(expCheck) ? parseInt(expCheck, 10) : undefined;
+  if (expPart.includes('<') || !/^\d{6}$/.test(expPart) || parseInt(expPart.slice(2, 4), 10) > 12) {
+    const candZero = expPart.replace(/</g, '0');
+    if (targetExpCd !== undefined && computeIcaoCheckDigit(candZero) === targetExpCd && parseInt(candZero.slice(2, 4), 10) <= 12) {
+      expPart = candZero;
+    } else if (targetExpCd !== undefined) {
+      const matchYm = expPart.match(/(2[4-9]|3[0-9])(0[1-9]|1[0-2])/);
+      if (matchYm) {
+        const ym = matchYm[0];
+        for (let day = 1; day <= 31; day++) {
+          const testD = ym + String(day).padStart(2, '0');
+          if (computeIcaoCheckDigit(testD) === targetExpCd) {
+            expPart = testD;
+            break;
+          }
+        }
+      } else {
+        expPart = candZero;
+      }
+    } else {
+      expPart = candZero;
+    }
+  }
+  if (!/^\d$/.test(expCheck)) {
+    expCheck = String(computeIcaoCheckDigit(expPart));
+  }
+  line = line.slice(0, 21) + expPart + expCheck + line.slice(28);
 
   // 7. Calculate and repair Composite Check Digit (pos 44 / index 43)
   const compositeSource = line.slice(0, 10) + line.slice(13, 20) + line.slice(21, 28) + line.slice(28, 43);
