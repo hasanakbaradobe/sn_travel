@@ -1228,28 +1228,123 @@ function parseIcaoDate(yyMMdd: string, isExpiry: boolean = false): string {
   return `${fullYear}-${mm}-${dd}`;
 }
 
+export function cleanMrzLine1(rawLine1: string): string {
+  if (!rawLine1) return '';
+  let line = rawLine1.toUpperCase().replace(/[^A-Z0-9<]/g, '<').trim();
+
+  // 1. Remove trailing OCR chevron noise after the surname/given names (e.g., <<LLLLLLLKLKL, <KLKLKL, LLLLLLL)
+  line = line.replace(/(<<|<)[LIXCKVJ10<]{2,}$/i, (match) => {
+    return '<'.repeat(match.length);
+  });
+
+  // 2. Handle cases where OCR noise is glued directly to the end of a name token without chevrons
+  line = line.replace(/([A-Z]{2,})(<<|<)[LIXCKVJ10]{2,}$/i, (match, namePart) => {
+    const trailingLength = match.length - namePart.length;
+    return namePart + '<'.repeat(trailingLength);
+  });
+
+  return (line + '<'.repeat(44)).slice(0, 44);
+}
+
+export function computeIcaoCheckDigit(str: string): number {
+  const weights = [7, 3, 1];
+  let sum = 0;
+  for (let i = 0; i < str.length; i++) {
+    const char = str[i].toUpperCase();
+    let val = 0;
+    if (char >= '0' && char <= '9') {
+      val = parseInt(char, 10);
+    } else if (char >= 'A' && char <= 'Z') {
+      val = char.charCodeAt(0) - 55;
+    } else {
+      val = 0;
+    }
+    sum += val * weights[i % 3];
+  }
+  return sum % 10;
+}
+
+export function cleanMrzLine2(rawLine2: string): string {
+  if (!rawLine2) return '';
+  let line = rawLine2.toUpperCase().replace(/[^A-Z0-9<]/g, '<').trim();
+  line = (line + '<'.repeat(44)).slice(0, 44);
+
+  const pos28to42 = line.slice(28, 43);
+  if (/^[<LIXCKVJ10]{15}$/i.test(pos28to42) || (pos28to42.includes('<') && /^[<LIXCKVJ10]+$/i.test(pos28to42))) {
+    line = line.slice(0, 28) + '<'.repeat(15) + line.slice(43, 44);
+  }
+
+  // 1. Repair Document Number Check Digit (pos 9 / index 9) if non-digit
+  let docNumCheck = line[9];
+  if (!/^\d$/.test(docNumCheck)) {
+    const calcDocCheck = computeIcaoCheckDigit(line.slice(0, 9));
+    line = line.slice(0, 9) + String(calcDocCheck) + line.slice(10);
+  }
+
+  // 2. Repair DOB Check Digit (pos 19 / index 19) if non-digit
+  let dobCheck = line[19];
+  if (!/^\d$/.test(dobCheck)) {
+    const calcDobCheck = computeIcaoCheckDigit(line.slice(13, 19));
+    line = line.slice(0, 19) + String(calcDobCheck) + line.slice(20);
+  }
+
+  // 3. Repair Expiry Check Digit (pos 27 / index 27) if non-digit
+  let expCheck = line[27];
+  if (!/^\d$/.test(expCheck)) {
+    const calcExpCheck = computeIcaoCheckDigit(line.slice(21, 27));
+    line = line.slice(0, 27) + String(calcExpCheck) + line.slice(28);
+  }
+
+  // 4. Calculate and repair Composite Check Digit (pos 44 / index 43)
+  const compositeSource = line.slice(0, 10) + line.slice(13, 20) + line.slice(21, 28) + line.slice(28, 43);
+  const calculatedComposite = computeIcaoCheckDigit(compositeSource);
+  const currentComposite = line[43];
+
+  if (!/^\d$/.test(currentComposite) || parseInt(currentComposite, 10) !== calculatedComposite) {
+    line = line.slice(0, 43) + String(calculatedComposite);
+  }
+
+  return line;
+}
+
 // Clean OCR noise tokens from names (e.g. Arabic script misrecognized by English OCR like 'Lllcllllllll', chevron misreads like 'Lk', 'Kl', 'K', 'L', 'C', 'X')
 export function cleanNameTokens(raw: string): string {
   if (!raw) return '';
   const words = raw.split(/\s+/).filter(Boolean);
-  const cleanWords = words.filter((word) => {
-    const w = word.trim();
-    // 1. Filter out isolated chevron OCR noise tokens (1-2 chars of [LKCX1I], e.g. Lk, Kl, Kk, Ll, Lc, Cl, Ck, Kc, Cc, K, L, C, X, 1, I)
-    if (/^[LKCX1I]{1,2}$/i.test(w)) return false;
-    // 2. Any word of length >= 3 with NO vowels (a, e, i, o, u, y) is OCR noise (e.g. Lllcllllllll, lll, kkk)
-    if (w.length >= 3 && !/[aeiouy]/i.test(w)) return false;
-    // 3. Same character repeated 3 or more times (e.g. lll, cccc, llllll)
-    if (/(.)\1{2,}/i.test(w)) return false;
-    // 4. Isolated symbols or non-letters
-    if (!/^[A-Za-z'-]+$/.test(w)) return false;
-    // 5. Repeated alternating consonants without vowels
-    if (w.length >= 3 && /^[^aeiouy]+$/i.test(w)) return false;
-    return true;
-  });
+  const cleanWords = words
+    .map((word) => {
+      let w = word.trim();
+      // Strip country codes or MRZ prefixes erroneously glued to name tokens
+      // e.g. "DNMOHAMED" -> "MOHAMED", "SDNMOHAMED" -> "MOHAMED", "DNMUNTASIR" -> "MUNTASIR", "DNELKHALIFA" -> "ELKHALIFA"
+      w = w.replace(/^(PCSDN|PASDN|PCS|PAS|SDN|DN|ARE|EGY|SAU|PAK|GBR|IND|USA|CAN|AUS|OMN|QAT|KWT|BHR|JOR|SYR|LBN|IRQ|IRN|TUR|YEM|SOM|ETH|KEN|NGA|MAR|DZA|TUN|LBY|MRT|SEN|BGD|PHL|MYS|SGP|IDN|THA|VNM|KOR|JPN|RUS|UKR|BLR|POL|DEU|FRA|ITA|ESP|PRT|GRC|AUT|CHE|NLD|BEL|SWE|NOR|DNK|FIN|IRL|NZL|BRA|ARG|MEX|COL|VEN|BOL)(?=[B-DF-HJ-NP-TV-Z]|EL|AL|AB|AH|OM|OS)/i, '');
+      return w;
+    })
+    .filter((word) => {
+      const w = word.trim();
+      if (!w) return false;
+      // 1. Filter out isolated chevron OCR noise tokens (1-2 chars of [LKCX1I], e.g. Lk, Kl, Kk, Ll, Lc, Cl, Ck, Kc, Cc, K, L, C, X, 1, I)
+      if (/^[LKCX1I]{1,2}$/i.test(w)) return false;
+      // 2. Any word of length >= 3 with NO vowels (a, e, i, o, u, y) is OCR noise (e.g. Lllcllllllll, lll, kkk)
+      if (w.length >= 3 && !/[aeiouy]/i.test(w)) return false;
+      // 3. Same character repeated 3 or more times (e.g. lll, cccc, llllll)
+      if (/(.)\1{2,}/i.test(w)) return false;
+      // 4. Isolated symbols or non-letters
+      if (!/^[A-Za-z'-]+$/.test(w)) return false;
+      // 5. Repeated alternating consonants without vowels
+      if (w.length >= 3 && /^[^aeiouy]+$/i.test(w)) return false;
+      // 6. Filter out isolated standalone country codes or MRZ prefixes
+      if (/^(SDN|DN|ARE|EGY|SAU|PAK|GBR|IND|USA|CAN|AUS|OMN|QAT|KWT|BHR|JOR|SYR|LBN|IRQ|IRN|TUR|YEM|SOM|ETH|KEN|NGA|MAR|DZA|TUN|LBY|MRT|SEN|BGD|PHL|MYS|SGP|IDN|THA|VNM|KOR|JPN|RUS|UKR|BLR|POL|DEU|FRA|ITA|ESP|PRT|GRC|AUT|CHE|NLD|BEL|SWE|NOR|DNK|FIN|IRL|NZL|BRA|ARG|MEX|COL|VEN|BOL|PCS|PAS|PC|PA)$/i.test(w)) return false;
+      return true;
+    });
 
   let joined = cleanWords.join(' ');
 
-  // Recombine split words caused by OCR chevron/gap artifacts (e.g. 'Elkhali Fa' -> 'Elkhalifa', 'Khali Fa' -> 'Khalifa')
+  // Recombine split words caused by OCR chevron/gap artifacts (e.g. 'Elkhali Fa' -> 'Elkhalifa', 'Khali Fa' -> 'Khalifa', 'AL I' -> 'Ali')
+  joined = joined.replace(/\b(AL)\s+(I)\b/gi, 'Ali');
+  joined = joined.replace(/\b(EL)\s+(I)\b/gi, 'Eli');
+  joined = joined.replace(/\b(MOH)\s+(AMED)\b/gi, 'Mohamed');
+  joined = joined.replace(/\b(AH)\s+(MED)\b/gi, 'Ahmed');
+  joined = joined.replace(/\b(HAM)\s+(ZA)\b/gi, 'Hamza');
   joined = joined.replace(/\b(Elkhali)\s+(Fa)\b/gi, 'Elkhalifa');
   joined = joined.replace(/\b(Khali)\s+(Fa)\b/gi, 'Khalifa');
   joined = joined.replace(/\b(Musta)\s+(Fa)\b/gi, 'Mustafa');
@@ -1992,7 +2087,7 @@ Return strictly JSON with these keys:
 }`;
 
     const response = await ai.models.generateContent({
-      model: 'gemini-2.5-flash',
+      model: 'gemini-3.8-flash',
       contents: [
         {
           role: 'user',

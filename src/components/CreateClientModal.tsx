@@ -138,18 +138,32 @@ export const CreateClientModal: React.FC<CreateClientModalProps> = ({
     if (!raw) return '';
     let cleaned = raw
       .split(/\s+/)
-      .filter((w) => {
-        const s = w.trim();
+      .map((w) => {
+        let s = w.trim();
+        // Strip country codes or MRZ prefixes erroneously glued to name tokens
+        // e.g. "DNMOHAMED" -> "MOHAMED", "SDNMOHAMED" -> "MOHAMED", "DNMUNTASIR" -> "MUNTASIR", "DNELKHALIFA" -> "ELKHALIFA"
+        s = s.replace(/^(PCSDN|PASDN|PCS|PAS|SDN|DN|ARE|EGY|SAU|PAK|GBR|IND|USA|CAN|AUS|OMN|QAT|KWT|BHR|JOR|SYR|LBN|IRQ|IRN|TUR|YEM|SOM|ETH|KEN|NGA|MAR|DZA|TUN|LBY|MRT|SEN|BGD|PHL|MYS|SGP|IDN|THA|VNM|KOR|JPN|RUS|UKR|BLR|POL|DEU|FRA|ITA|ESP|PRT|GRC|AUT|CHE|NLD|BEL|SWE|NOR|DNK|FIN|IRL|NZL|BRA|ARG|MEX|COL|VEN|BOL)(?=[B-DF-HJ-NP-TV-Z]|EL|AL|AB|AH|OM|OS)/i, '');
+        return s;
+      })
+      .filter((s) => {
+        if (!s) return false;
         // Remove isolated chevron noise tokens (Lk, Kl, Kk, Ll, Lc, Cl, Ck, Kc, Cc, K, L, C, X, 1, I)
         if (/^[LKCX1I]{1,2}$/i.test(s)) return false;
         // Remove OCR noise artifacts (length >= 3 with no vowels, or 3+ repeated characters)
         if (s.length >= 3 && !/[aeiouy]/i.test(s)) return false;
         if (/(.)\1{2,}/i.test(s)) return false;
+        // Filter out isolated standalone country codes or MRZ prefixes
+        if (/^(SDN|DN|ARE|EGY|SAU|PAK|GBR|IND|USA|CAN|AUS|OMN|QAT|KWT|BHR|JOR|SYR|LBN|IRQ|IRN|TUR|YEM|SOM|ETH|KEN|NGA|MAR|DZA|TUN|LBY|MRT|SEN|BGD|PHL|MYS|SGP|IDN|THA|VNM|KOR|JPN|RUS|UKR|BLR|POL|DEU|FRA|ITA|ESP|PRT|GRC|AUT|CHE|NLD|BEL|SWE|NOR|DNK|FIN|IRL|NZL|BRA|ARG|MEX|COL|VEN|BOL|PCS|PAS|PC|PA)$/i.test(s)) return false;
         return true;
       })
       .join(' ');
 
     // Recombine split names caused by OCR chevron/gap cuts
+    cleaned = cleaned.replace(/\b(AL)\s+(I)\b/gi, 'Ali');
+    cleaned = cleaned.replace(/\b(EL)\s+(I)\b/gi, 'Eli');
+    cleaned = cleaned.replace(/\b(MOH)\s+(AMED)\b/gi, 'Mohamed');
+    cleaned = cleaned.replace(/\b(AH)\s+(MED)\b/gi, 'Ahmed');
+    cleaned = cleaned.replace(/\b(HAM)\s+(ZA)\b/gi, 'Hamza');
     cleaned = cleaned.replace(/\b(Elkhali)\s+(Fa)\b/gi, 'Elkhalifa');
     cleaned = cleaned.replace(/\b(Khali)\s+(Fa)\b/gi, 'Khalifa');
     cleaned = cleaned.replace(/\b(Musta)\s+(Fa)\b/gi, 'Mustafa');
@@ -191,7 +205,9 @@ export const CreateClientModal: React.FC<CreateClientModalProps> = ({
     setInlineScanStatus('Analyzing passport with ICAO 9303 MRZ Engine...');
     setError(null);
     try {
-      const scanned = await api.scanPassport(imageData, mimeType, 'tesseract');
+      const scanned = await api.scanPassport(imageData, mimeType, 'tesseract', (msg) => {
+        setInlineScanStatus(msg);
+      });
       scanned.imagePreview = imageData.startsWith('data:') ? imageData : undefined;
       applyPassportData(scanned);
     } catch (err: any) {

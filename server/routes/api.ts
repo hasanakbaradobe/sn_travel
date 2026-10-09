@@ -981,15 +981,16 @@ apiRouter.get('/activity', (req: Request, res: Response) => {
 // --------------------------------------------------------------------------
 // Database Status & SQL Backup / Restore Engine
 // --------------------------------------------------------------------------
-apiRouter.get('/db/status', async (_req: Request, res: Response) => {
-  await dbService.syncFromMySQL();
+apiRouter.get('/db/status', async (req: Request, res: Response) => {
+  const force = req.query.force === 'true';
+  await dbService.syncFromMySQL(force);
   const status = dbService.getStatus();
   return res.json(status);
 });
 
 apiRouter.post('/db/sync', async (_req: Request, res: Response) => {
   try {
-    const status = await dbService.syncFromMySQL();
+    const status = await dbService.syncFromMySQL(true);
     return res.json({
       message: 'Successfully synchronized live database records from MySQL',
       status,

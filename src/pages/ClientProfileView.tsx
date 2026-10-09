@@ -106,13 +106,15 @@ export const ClientProfileView: React.FC<ClientProfileViewProps> = ({
     const file = e.target.files?.[0];
     if (!file) return;
     setProfileScanLoading(true);
-    setProfileScanMsg('Scanning passport with Gemini 3.8 Flash...');
+    setProfileScanMsg('Scanning passport on local device browser...');
     try {
       const reader = new FileReader();
       reader.onload = async (evt) => {
         const dataUrl = evt.target?.result as string;
         try {
-          const scanned = await api.scanPassport(dataUrl, file.type);
+          const scanned = await api.scanPassport(dataUrl, file.type, 'auto', (msg) => {
+            setProfileScanMsg(msg);
+          });
           setEditFormData((prev: any) => ({
             ...prev,
             full_name: scanned.fullName || prev.full_name,

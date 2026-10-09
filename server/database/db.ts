@@ -37,6 +37,14 @@ if (DB_HOST && DB_USER) {
       dateStrings: true,
     });
     
+    (pool as any).on('error', (err: any) => {
+      console.warn('[MySQL Pool Error]:', err?.message || err);
+      if (err?.code === 'PROTOCOL_CONNECTION_LOST' || err?.code === 'ECONNRESET') {
+        isConnectedToMySQL = false;
+        connectionError = err.message;
+      }
+    });
+
     // Quick probe
     pool.getConnection()
       .then(conn => {
@@ -44,7 +52,7 @@ if (DB_HOST && DB_USER) {
         connectionError = null;
         console.log(`[Database] Connected to MySQL database "${DB_NAME}" at ${DB_HOST}:${DB_PORT}`);
         conn.release();
-        syncFromMySQL();
+        syncFromMySQL(true);
       })
       .catch(err => {
         isConnectedToMySQL = false;
@@ -616,64 +624,65 @@ async function deleteClientFromMySQL(id: number, clientIdString?: string): Promi
   }
 }
 
-async function syncFromMySQL() {
+let lastSyncTime = 0;
+const SYNC_CACHE_TTL_MS = 5000; // 5 seconds cache to prevent hammering MySQL on every sub-second request
+
+async function syncFromMySQL(force = false) {
   if (!pool || !isConnectedToMySQL) return;
+  const now = Date.now();
+  if (!force && (now - lastSyncTime < SYNC_CACHE_TTL_MS)) {
+    return; // Serve cached in-memory store immediately
+  }
+
   try {
-    const [u]: any = await pool.query('SELECT * FROM users');
+    const [
+      [u], [c], [cl], [cf], [cfv], [vt], [va], [ash], [t], [cm], [al], [h], [hr], [hb], [s]
+    ]: any[] = await Promise.all([
+      pool.query('SELECT * FROM users'),
+      pool.query('SELECT * FROM countries ORDER BY display_order ASC, name ASC'),
+      pool.query('SELECT * FROM clients'),
+      pool.query('SELECT * FROM client_custom_fields ORDER BY display_order ASC'),
+      pool.query('SELECT * FROM client_custom_field_values'),
+      pool.query('SELECT * FROM visa_types'),
+      pool.query('SELECT * FROM visa_applications'),
+      pool.query('SELECT * FROM application_status_history'),
+      pool.query('SELECT * FROM tasks'),
+      pool.query('SELECT * FROM comments'),
+      pool.query('SELECT * FROM activity_logs'),
+      pool.query('SELECT * FROM hotels'),
+      pool.query('SELECT * FROM hotel_rooms'),
+      pool.query('SELECT * FROM hotel_bookings'),
+      pool.query('SELECT * FROM settings'),
+    ]);
+
     if (Array.isArray(u) && u.length > 0) store.users = u;
-
-    const [c]: any = await pool.query('SELECT * FROM countries ORDER BY display_order ASC, name ASC');
     if (Array.isArray(c) && c.length > 0) store.countries = c;
-
-    const [cl]: any = await pool.query('SELECT * FROM clients');
     if (Array.isArray(cl)) {
       store.clients = cl.map((item: any) => ({
         ...item,
         date_of_birth: item.date_of_birth ? String(item.date_of_birth).slice(0, 10) : null,
       }));
     }
-
-    const [cf]: any = await pool.query('SELECT * FROM client_custom_fields ORDER BY display_order ASC');
     if (Array.isArray(cf) && cf.length > 0) store.client_custom_fields = cf;
-
-    const [cfv]: any = await pool.query('SELECT * FROM client_custom_field_values');
     if (Array.isArray(cfv)) store.client_custom_field_values = cfv;
-
-    const [vt]: any = await pool.query('SELECT * FROM visa_types');
     if (Array.isArray(vt) && vt.length > 0) store.visa_types = vt;
-
-    const [va]: any = await pool.query('SELECT * FROM visa_applications');
     if (Array.isArray(va)) {
       store.visa_applications = va.map((item: any) => ({
         ...item,
         delivery_date: item.delivery_date ? String(item.delivery_date).slice(0, 10) : null,
       }));
     }
-
-    const [ash]: any = await pool.query('SELECT * FROM application_status_history');
     if (Array.isArray(ash)) store.application_status_history = ash;
-
-    const [t]: any = await pool.query('SELECT * FROM tasks');
     if (Array.isArray(t)) {
       store.tasks = t.map((item: any) => ({
         ...item,
         due_date: item.due_date ? String(item.due_date).slice(0, 10) : new Date().toISOString().slice(0, 10),
       }));
     }
-
-    const [cm]: any = await pool.query('SELECT * FROM comments');
     if (Array.isArray(cm)) store.comments = cm;
-
-    const [al]: any = await pool.query('SELECT * FROM activity_logs');
     if (Array.isArray(al)) store.activity_logs = al;
-
-    const [h]: any = await pool.query('SELECT * FROM hotels');
     if (Array.isArray(h) && h.length > 0) store.hotels = h;
-
-    const [hr]: any = await pool.query('SELECT * FROM hotel_rooms');
     if (Array.isArray(hr)) store.hotel_rooms = hr;
-
-    const [hb]: any = await pool.query('SELECT * FROM hotel_bookings');
     if (Array.isArray(hb)) {
       store.hotel_bookings = hb.map((item: any) => ({
         ...item,
@@ -681,8 +690,6 @@ async function syncFromMySQL() {
         check_out_date: item.check_out_date ? String(item.check_out_date).slice(0, 10) : new Date().toISOString().slice(0, 10),
       }));
     }
-
-    const [s]: any = await pool.query('SELECT * FROM settings');
     if (Array.isArray(s) && s.length > 0) store.settings = s;
 
     // Recalculate nextIds safely
@@ -704,8 +711,8 @@ async function syncFromMySQL() {
       settings: Math.max(...(store.settings || []).map(x => x.id), 0) + 1,
     };
 
+    lastSyncTime = Date.now();
     saveStore(store);
-    console.log(`[Database] Synchronized live data from MySQL "${DB_NAME}" (${store.clients.length} clients, ${store.users.length} users, ${store.settings.length} settings)`);
   } catch (err: any) {
     console.warn('[Database] Sync from MySQL encountered an issue:', err.message);
   }
@@ -715,8 +722,8 @@ async function syncFromMySQL() {
 // Database Interface Service
 // --------------------------------------------------------------------------
 export const dbService = {
-  async syncFromMySQL() {
-    await syncFromMySQL();
+  async syncFromMySQL(force = false) {
+    await syncFromMySQL(force);
     return this.getStatus();
   },
 

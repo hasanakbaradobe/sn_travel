@@ -28,7 +28,16 @@ import {
   PaginatedResponse,
 } from '../types';
 
+import { scanPassportInBrowser } from './clientPassportScanner';
+
 const API_BASE = '/api';
+const CACHE_KEY_PREFIX = 'sn_api_cache_';
+const DEFAULT_CACHE_TTL_MS = 60 * 1000; // 1 minute default TTL
+
+interface CacheOptions extends RequestInit {
+  skipCache?: boolean;
+  cacheTtl?: number;
+}
 
 class ApiService {
   private token: string | null = null;
@@ -53,6 +62,59 @@ class ApiService {
     }
   }
 
+  /**
+   * Purge sessionStorage GET response cache
+   */
+  public clearCache(pattern?: string): void {
+    try {
+      if (typeof window === 'undefined' || !window.sessionStorage) return;
+      const keysToRemove: string[] = [];
+      for (let i = 0; i < sessionStorage.length; i++) {
+        const key = sessionStorage.key(i);
+        if (key && key.startsWith(CACHE_KEY_PREFIX)) {
+          if (!pattern || key.includes(pattern)) {
+            keysToRemove.push(key);
+          }
+        }
+      }
+      keysToRemove.forEach((key) => sessionStorage.removeItem(key));
+    } catch (e) {
+      console.warn('[ApiService] Failed to clear sessionStorage cache:', e);
+    }
+  }
+
+  private getCachedResponse<T>(endpoint: string, ttlMs: number = DEFAULT_CACHE_TTL_MS): T | null {
+    try {
+      if (typeof window === 'undefined' || !window.sessionStorage) return null;
+      const raw = sessionStorage.getItem(`${CACHE_KEY_PREFIX}${endpoint}`);
+      if (!raw) return null;
+
+      const parsed = JSON.parse(raw);
+      if (parsed && typeof parsed.timestamp === 'number' && 'data' in parsed) {
+        if (Date.now() - parsed.timestamp < ttlMs) {
+          return parsed.data as T;
+        }
+      }
+      sessionStorage.removeItem(`${CACHE_KEY_PREFIX}${endpoint}`);
+    } catch (e) {
+      // Ignore parse or storage errors
+    }
+    return null;
+  }
+
+  private setCachedResponse<T>(endpoint: string, data: T): void {
+    try {
+      if (typeof window === 'undefined' || !window.sessionStorage) return;
+      const payload = JSON.stringify({
+        timestamp: Date.now(),
+        data,
+      });
+      sessionStorage.setItem(`${CACHE_KEY_PREFIX}${endpoint}`, payload);
+    } catch (e) {
+      console.warn('[ApiService] Failed to write to sessionStorage cache:', e);
+    }
+  }
+
   onAuthError(callback: () => void) {
     this.authErrorListeners.push(callback);
     return () => {
@@ -66,6 +128,7 @@ class ApiService {
 
   setCurrentUser(user: User | null, token?: string) {
     this.currentUser = user;
+    this.clearCache();
     if (user && token) {
       this.token = token;
       localStorage.setItem('sn_user', JSON.stringify(user));
@@ -77,7 +140,19 @@ class ApiService {
     }
   }
 
-  private async request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
+  private async request<T>(endpoint: string, options: CacheOptions = {}): Promise<T> {
+    const method = (options.method || 'GET').toUpperCase();
+    const isGet = method === 'GET';
+    const ttl = options.cacheTtl ?? DEFAULT_CACHE_TTL_MS;
+
+    // 1. Check sessionStorage cache for GET requests
+    if (isGet && !options.skipCache) {
+      const cached = this.getCachedResponse<T>(endpoint, ttl);
+      if (cached !== null) {
+        return cached;
+      }
+    }
+
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       ...(options.headers as Record<string, string>),
@@ -87,8 +162,10 @@ class ApiService {
       headers['Authorization'] = `Bearer ${this.token}`;
     }
 
+    const { skipCache, cacheTtl, ...fetchOptions } = options;
+
     const response = await fetch(`${API_BASE}${endpoint}`, {
-      ...options,
+      ...fetchOptions,
       headers,
     });
 
@@ -116,7 +193,19 @@ class ApiService {
       throw error;
     }
 
-    return response.json();
+    const data: T = await response.json();
+
+    // 2. Cache successful GET response in sessionStorage
+    if (isGet && !options.skipCache) {
+      this.setCachedResponse<T>(endpoint, data);
+    }
+
+    // 3. Automatically invalidate cache on mutations (POST, PUT, PATCH, DELETE)
+    if (!isGet) {
+      this.clearCache();
+    }
+
+    return data;
   }
 
   // Auth
@@ -173,12 +262,25 @@ class ApiService {
     this.setCurrentUser(null);
   }
 
-  // Passport Scanner
-  async scanPassport(image: string, mimeType?: string, engine?: 'gemini' | 'tesseract' | 'auto'): Promise<ScannedPassportData> {
-    return this.request<ScannedPassportData>('/scan-passport', {
-      method: 'POST',
-      body: JSON.stringify({ image, mimeType, engine }),
-    });
+  // Passport Scanner (100% Client-Side In-Browser Local Engine - No AI, No Server Load)
+  async scanPassport(
+    image: string,
+    mimeType?: string,
+    engine?: string,
+    onStatusUpdate?: (status: string) => void
+  ): Promise<ScannedPassportData> {
+    try {
+      // Run processing directly on the client's browser/device
+      const browserResult = await scanPassportInBrowser(image, onStatusUpdate);
+      if (browserResult && browserResult.passportNumber) {
+        return browserResult;
+      }
+    } catch (browserErr: any) {
+      console.warn('[PassportScanner] In-browser client scan encountered an issue:', browserErr);
+      throw new Error(browserErr.message || 'In-browser scanner could not process image on device. Please ensure the Machine Readable Zone (MRZ) is clear and well-lit.');
+    }
+
+    throw new Error('In-browser scanner could not process image on device. Please ensure the Machine Readable Zone (MRZ) is clear and well-lit.');
   }
 
   // Clients

@@ -36,32 +36,51 @@ app.use((err: any, _req: express.Request, res: express.Response, _next: express.
   }
 });
 
-// Locate static dist folder (checks process.cwd()/dist and __dirname/dist)
-const candidateDistPaths = [
-  path.resolve(process.cwd(), 'dist'),
-  path.resolve(__dirname, 'dist'),
-];
+// Locate static dist folder (checks process.cwd()/dist and __dirname/dist dynamically)
+const getDistPath = (): string | null => {
+  const candidateDistPaths = [
+    path.resolve(process.cwd(), 'dist'),
+    path.resolve(__dirname, 'dist'),
+    path.resolve(process.cwd(), 'public'),
+  ];
+  return candidateDistPaths.find((p) => fs.existsSync(path.join(p, 'index.html'))) || null;
+};
 
-const distPath = candidateDistPaths.find((p) => fs.existsSync(path.join(p, 'index.html')));
+// Middleware to serve static files dynamically
+app.use((req, res, next) => {
+  if (req.path.startsWith('/api')) {
+    return next();
+  }
 
-if (distPath) {
-  console.log(`[Server] Serving static frontend from: ${distPath}`);
-  app.use(express.static(distPath));
+  const currentDistPath = getDistPath();
+  if (currentDistPath) {
+    express.static(currentDistPath, {
+      maxAge: req.path.startsWith('/assets/') ? '1y' : '0',
+      setHeaders: (res, filePath) => {
+        if (filePath.endsWith('.html')) {
+          res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+        }
+      },
+    })(req, res, next);
+  } else {
+    next();
+  }
+});
 
-  app.get('*', (_req, res) => {
-    const indexPath = path.join(distPath, 'index.html');
+// SPA wildcard fallback
+app.get('*', (_req, res) => {
+  const currentDistPath = getDistPath();
+  if (currentDistPath) {
+    const indexPath = path.join(currentDistPath, 'index.html');
     if (fs.existsSync(indexPath)) {
-      res.sendFile(indexPath);
-    } else {
-      res.status(404).send('Frontend index.html not found. Please run "npm run build".');
+      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
+      return res.sendFile(indexPath);
     }
-  });
-} else {
-  console.warn('[Server] Warning: Could not locate built "dist/index.html". Ensure "npm run build" ran successfully.');
-  app.get('*', (_req, res) => {
-    res.status(404).send('Frontend build (dist/index.html) is missing. Please ensure your Render build command is: "npm run build" or "bun run build".');
-  });
-}
+  }
+  return res
+    .status(404)
+    .send('Frontend build (dist/index.html) is missing. Please ensure your Render build command is set to "npm run build" and start command is "npm start".');
+});
 
 app.listen(PORT, () => {
   console.log(`Server is running on port ${PORT}`);
