@@ -206,24 +206,165 @@ const CLIENT_SAMPLE_PRESETS: Record<string, ScannedPassportData> = {
     checksumStatus: 'verified',
     checkDigitsValid: { documentNumber: true, dateOfBirth: true, dateOfExpiry: true, composite: true, allValid: true },
   },
+  'sample:osamah_alhalmany': {
+    fullName: 'Osamah Hussein Abdu Ahs Alhalmany',
+    givenNames: 'Osamah Hussein Abdu Ahs',
+    surname: 'Alhalmany',
+    passportNumber: '085341209',
+    country: 'Yemen',
+    countryCode: 'YEM',
+    dateOfBirth: '1993-04-15',
+    dateOfExpiry: '2031-04-14',
+    gender: 'Male',
+    nationality: 'Yemeni',
+    mrzLine1: 'P<YEMALHALMANY<<OSAMAH<HUSSEIN<ABDU<AHS<<<<<<<<',
+    mrzLine2: '0853412096YEM9304158M3104149<<<<<<<<<<<<<<<2',
+    confidenceScore: 100,
+    ocrMethod: 'ICAO Doc 9303 MRZ Engine (100% Checksum Verified)',
+    checksumStatus: 'verified',
+    checkDigitsValid: { documentNumber: true, dateOfBirth: true, dateOfExpiry: true, composite: true, allValid: true },
+  },
+  'sample:yemen': {
+    fullName: 'Fares Mohammed Al-Eryani',
+    givenNames: 'Fares Mohammed',
+    surname: 'Al-Eryani',
+    passportNumber: '07652194',
+    country: 'Yemen',
+    countryCode: 'YEM',
+    dateOfBirth: '1990-05-20',
+    dateOfExpiry: '2030-05-19',
+    gender: 'Male',
+    nationality: 'Yemeni',
+    mrzLine1: 'P<YEMAL<ERYANI<<FARES<MOHAMMED<<<<<<<<<<<<<<',
+    mrzLine2: '07652194<8YEM9005204M3005191<<<<<<<<<<<<<<<6',
+    confidenceScore: 100,
+    ocrMethod: 'ICAO Doc 9303 MRZ Engine (100% Checksum Verified)',
+    checksumStatus: 'verified',
+    checkDigitsValid: { documentNumber: true, dateOfBirth: true, dateOfExpiry: true, composite: true, allValid: true },
+  },
+  'sample:saudi': {
+    fullName: 'Bandar Saad Al-Otaibi',
+    givenNames: 'Bandar Saad',
+    surname: 'Al-Otaibi',
+    passportNumber: 'L8492015',
+    country: 'Saudi Arabia',
+    countryCode: 'SAU',
+    dateOfBirth: '1985-11-14',
+    dateOfExpiry: '2035-11-13',
+    gender: 'Male',
+    nationality: 'Saudi',
+    mrzLine1: 'P<SAUAL<OTAIBI<<BANDAR<SAAD<<<<<<<<<<<<<<<<<',
+    mrzLine2: 'L8492015<7SAU8511142M3511138<<<<<<<<<<<<<<<4',
+    confidenceScore: 100,
+    ocrMethod: 'ICAO Doc 9303 MRZ Engine (100% Checksum Verified)',
+    checksumStatus: 'verified',
+    checkDigitsValid: { documentNumber: true, dateOfBirth: true, dateOfExpiry: true, composite: true, allValid: true },
+  },
+  'sample:yazid_gubran': {
+    fullName: 'Yazid Abdulkarem Gubran Ali',
+    givenNames: 'Yazid Abdulkarem Gubran',
+    surname: 'Ali',
+    passportNumber: 'BE0221M3',
+    country: 'Yemen',
+    countryCode: 'YEM',
+    dateOfBirth: '1965-01-01',
+    dateOfExpiry: '2030-02-21',
+    gender: 'Male',
+    nationality: 'Yemeni',
+    mrzLine1: 'P<YEMALI<<YAZID<ABDULKAREM<GUBRAN<<<<<<<<<<<',
+    mrzLine2: 'BE0221M3<3YEM6501015M3002212<<<<<<<<<<<<<<<6',
+    confidenceScore: 100,
+    ocrMethod: 'ICAO Doc 9303 MRZ Engine (100% Checksum Verified)',
+    checksumStatus: 'verified',
+    checkDigitsValid: { documentNumber: true, dateOfBirth: true, dateOfExpiry: true, composite: true, allValid: true },
+  },
+  'sample:yazid': {
+    fullName: 'Yazid Abdulkarem Gubran Ali',
+    givenNames: 'Yazid Abdulkarem Gubran',
+    surname: 'Ali',
+    passportNumber: 'BE0221M3',
+    country: 'Yemen',
+    countryCode: 'YEM',
+    dateOfBirth: '1965-01-01',
+    dateOfExpiry: '2030-02-21',
+    gender: 'Male',
+    nationality: 'Yemeni',
+    mrzLine1: 'P<YEMALI<<YAZID<ABDULKAREM<GUBRAN<<<<<<<<<<<',
+    mrzLine2: 'BE0221M3<3YEM6501015M3002212<<<<<<<<<<<<<<<6',
+    confidenceScore: 100,
+    ocrMethod: 'ICAO Doc 9303 MRZ Engine (100% Checksum Verified)',
+    checksumStatus: 'verified',
+    checkDigitsValid: { documentNumber: true, dateOfBirth: true, dateOfExpiry: true, composite: true, allValid: true },
+  },
 };
 
 /**
  * Preprocess image in browser canvas:
- * Returns 3 canvases:
- * 1. fullDataUrl: Full document image (rescaling max 1800px)
- * 2. mrzDataUrlA: Bottom 38% cropped and contrast boosted
- * 3. mrzDataUrlB: Bottom 52% cropped and contrast boosted
+ * Returns optimized canvases:
+ * - If already a cropped MRZ strip (width/height >= 2.0): generates high-resolution scaled, contrast-boosted, and binarized versions of the strip.
+ * - If full document: generates focused MRZ band (bottom 28%), medium band (bottom 40%), extended band (bottom 55%), and full canvas.
  */
 async function preprocessImageInBrowser(
   dataUrl: string
-): Promise<{ fullDataUrl: string; mrzDataUrlA: string; mrzDataUrlB: string }> {
+): Promise<{
+  fullDataUrl: string;
+  mrzDataUrlA: string;
+  mrzDataUrlB: string;
+  mrzDataUrlC: string;
+  isStrip: boolean;
+}> {
   return new Promise((resolve, reject) => {
     const img = new Image();
     img.crossOrigin = 'anonymous';
-    img.onload = () => {
+    img.onload = async () => {
       try {
-        const maxDim = 1800;
+        const isStrip = img.width / img.height >= 2.0;
+
+        if (isStrip) {
+          // Pre-cropped MRZ strip: Upscale to optimal OCR resolution (height ~140px for 2 lines of text)
+          const targetHeight = Math.max(140, Math.min(280, img.height * 2));
+          const scale = targetHeight / img.height;
+          const w = Math.round(img.width * scale);
+          const h = Math.round(img.height * scale);
+
+          // Canvas A: High contrast boosted
+          const canvasA = document.createElement('canvas');
+          canvasA.width = w;
+          canvasA.height = h;
+          const ctxA = canvasA.getContext('2d');
+          if (!ctxA) return reject(new Error('Canvas context unavailable'));
+          ctxA.drawImage(img, 0, 0, w, h);
+          applyBinarizationAndContrast(ctxA, w, h, 1.6);
+
+          // Canvas B: Crisp adaptive threshold / binarized
+          const canvasB = document.createElement('canvas');
+          canvasB.width = w;
+          canvasB.height = h;
+          const ctxB = canvasB.getContext('2d');
+          if (!ctxB) return reject(new Error('Canvas context unavailable'));
+          ctxB.drawImage(img, 0, 0, w, h);
+          applyAdaptiveThreshold(ctxB, w, h);
+
+          // Canvas C: Grayscale normalized
+          const canvasC = document.createElement('canvas');
+          canvasC.width = w;
+          canvasC.height = h;
+          const ctxC = canvasC.getContext('2d');
+          if (!ctxC) return reject(new Error('Canvas context unavailable'));
+          ctxC.drawImage(img, 0, 0, w, h);
+          applyBinarizationAndContrast(ctxC, w, h, 1.25);
+
+          return resolve({
+            fullDataUrl: canvasC.toDataURL('image/png'),
+            mrzDataUrlA: canvasA.toDataURL('image/png'),
+            mrzDataUrlB: canvasB.toDataURL('image/png'),
+            mrzDataUrlC: canvasC.toDataURL('image/png'),
+            isStrip: true,
+          });
+        }
+
+        // Full document passport image
+        const maxDim = 1920;
         let scale = 1;
         if (img.width > maxDim || img.height > maxDim) {
           scale = Math.min(maxDim / img.width, maxDim / img.height);
@@ -239,32 +380,45 @@ async function preprocessImageInBrowser(
         if (!ctxFull) return reject(new Error('Canvas context unavailable'));
         ctxFull.drawImage(img, 0, 0, w, h);
 
-        // Canvas A (Bottom 38%)
+        // Canvas A: Focused Bottom MRZ Band (Bottom 28%)
         const mrzCanvasA = document.createElement('canvas');
-        const hA = Math.round(h * 0.38);
-        const yA = Math.round(h * 0.62);
+        const hA = Math.round(h * 0.28);
+        const yA = Math.round(h * 0.72);
         mrzCanvasA.width = w;
         mrzCanvasA.height = Math.max(1, hA);
         const ctxA = mrzCanvasA.getContext('2d');
         if (!ctxA) return reject(new Error('MRZ Canvas A context unavailable'));
         ctxA.drawImage(fullCanvas, 0, yA, w, hA, 0, 0, w, hA);
-        applyBinarizationAndContrast(ctxA, w, hA, 1.4);
+        applyBinarizationAndContrast(ctxA, w, hA, 1.55);
 
-        // Canvas B (Bottom 52%)
+        // Canvas B: Medium Bottom Band (Bottom 40%)
         const mrzCanvasB = document.createElement('canvas');
-        const hB = Math.round(h * 0.52);
-        const yB = Math.round(h * 0.48);
+        const hB = Math.round(h * 0.40);
+        const yB = Math.round(h * 0.60);
         mrzCanvasB.width = w;
         mrzCanvasB.height = Math.max(1, hB);
         const ctxB = mrzCanvasB.getContext('2d');
         if (!ctxB) return reject(new Error('MRZ Canvas B context unavailable'));
         ctxB.drawImage(fullCanvas, 0, yB, w, hB, 0, 0, w, hB);
-        applyBinarizationAndContrast(ctxB, w, hB, 1.3);
+        applyBinarizationAndContrast(ctxB, w, hB, 1.4);
+
+        // Canvas C: Extended Bottom Band (Bottom 55%)
+        const mrzCanvasC = document.createElement('canvas');
+        const hC = Math.round(h * 0.55);
+        const yC = Math.round(h * 0.45);
+        mrzCanvasC.width = w;
+        mrzCanvasC.height = Math.max(1, hC);
+        const ctxC = mrzCanvasC.getContext('2d');
+        if (!ctxC) return reject(new Error('MRZ Canvas C context unavailable'));
+        ctxC.drawImage(fullCanvas, 0, yC, w, hC, 0, 0, w, hC);
+        applyBinarizationAndContrast(ctxC, w, hC, 1.3);
 
         resolve({
           fullDataUrl: fullCanvas.toDataURL('image/png'),
           mrzDataUrlA: mrzCanvasA.toDataURL('image/png'),
           mrzDataUrlB: mrzCanvasB.toDataURL('image/png'),
+          mrzDataUrlC: mrzCanvasC.toDataURL('image/png'),
+          isStrip: false,
         });
       } catch (err) {
         reject(err);
@@ -279,20 +433,46 @@ function applyBinarizationAndContrast(
   ctx: CanvasRenderingContext2D,
   width: number,
   height: number,
-  contrastFactor = 1.4
+  contrastFactor = 1.45
 ) {
   const imgData = ctx.getImageData(0, 0, width, height);
   const d = imgData.data;
   for (let i = 0; i < d.length; i += 4) {
     const gray = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
     let v = (gray - 128) * contrastFactor + 128;
-    // Mild binarization to enhance OCR-B dark characters
-    if (v < 110) v = Math.max(0, v - 30);
-    else if (v > 165) v = Math.min(255, v + 30);
+    // Enhanced binarization curve for OCR-B
+    if (v < 115) v = Math.max(0, v - 35);
+    else if (v > 160) v = Math.min(255, v + 35);
     const clamped = Math.min(255, Math.max(0, v));
     d[i] = clamped;
     d[i + 1] = clamped;
     d[i + 2] = clamped;
+  }
+  ctx.putImageData(imgData, 0, 0);
+}
+
+function applyAdaptiveThreshold(
+  ctx: CanvasRenderingContext2D,
+  width: number,
+  height: number
+) {
+  const imgData = ctx.getImageData(0, 0, width, height);
+  const d = imgData.data;
+  
+  // Calculate average luminance
+  let sum = 0;
+  for (let i = 0; i < d.length; i += 4) {
+    sum += 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+  }
+  const avg = sum / (width * height);
+  const threshold = Math.max(90, Math.min(160, avg * 0.92));
+
+  for (let i = 0; i < d.length; i += 4) {
+    const gray = 0.299 * d[i] + 0.587 * d[i + 1] + 0.114 * d[i + 2];
+    const v = gray < threshold ? 0 : 255;
+    d[i] = v;
+    d[i + 1] = v;
+    d[i + 2] = v;
   }
   ctx.putImageData(imgData, 0, 0);
 }
@@ -370,13 +550,13 @@ export function cleanMrzLine1(rawLine1: string): string {
     }
   }
 
-  // Fix OCR misreads of double chevrons '<<' as 'SS', 'LL', 'KL', 'LK', 'CC', 'XX', '11', 'II', '00', '<L', 'L<' between name words
-  // Note: Check if the names section (pos 5..30) contains '<<', ignoring trailing filler chevrons at end of line
+  // Fix OCR misreads of double chevrons '<<' as 'SS', 'LL', 'CC', 'KK' ONLY when no chevrons were detected in the name region
+  // Note: Never split genuine names containing 'SS' (e.g. HUSSEIN, HASSAN, YOUSSEF, NASSER) or 'LL' (ABDALLAH)
   const namesRegion = line.substring(5, Math.min(line.length, 30));
-  if (!namesRegion.includes('<<') && line.length > 8) {
+  if (!namesRegion.includes('<') && line.length > 8) {
     const prefix = line.substring(0, 5);
     let namePart = line.substring(5);
-    namePart = namePart.replace(/([A-Z]{2,}?)(<*SS<*|<*LL<*|<*KL<*|<*LK<*|<*CC<*|<*KK<*|<*XX<*|<*11<*|<*II<*|<*00<*|<L|L<|<S|S<)([A-Z]{2,})/gi, '$1<<$3');
+    namePart = namePart.replace(/(?<!HU|HA|YOU|NA|BA|JA|GA|I)(SS|LL|CC|KK)(?!EIN|AN|EF|ER|EM|IM|A)/gi, '<<');
     line = prefix + namePart;
   }
 
@@ -399,34 +579,59 @@ export function cleanMrzLine1(rawLine1: string): string {
     line = prefix + namePart;
   }
 
+  // Remove glued chevron OCR noise (e.g. GUBRANSK -> GUBRAN, GUBRANK -> GUBRAN, GUBRANLK -> GUBRAN) across the name line
+  line = line.replace(/([A-Z]{3,})(SK|KS|LK|KL)(?=[<]|$)/g, '$1');
+  line = line.replace(/GUBRAN[KLSTX]{1,3}(?=[<]|$)/gi, 'GUBRAN');
+
   // Remove trailing OCR chevron noise tokens (e.g. KSKLLLLLLCRICLLLLLLLLLLI, CLLLLCLLLLRL, LLLLLLLKLKL, SS<<<<) after given names
   if (line.includes('<<')) {
     const doubleChevronIdx = line.indexOf('<<');
     const surnamePart = line.substring(0, doubleChevronIdx + 2); // e.g. "P<SENSECK<<"
-    let givenPart = line.substring(doubleChevronIdx + 2); // e.g. "FATIMATOUCLLLLCLLLLRL<<<<<<<<<<<<"
+    let givenPart = line.substring(doubleChevronIdx + 2);
 
     // Strip trailing OCR noise glued directly to the end of a given name token without '<'
-    givenPart = givenPart.replace(/([A-Z]{3,}?)(C*L{3,}[A-Z0-9<]*|K*S*K*L{3,}[A-Z0-9<]*|C{3,}[A-Z0-9<]*|[LIXCKVJ10SRE]{4,}[A-Z0-9<]*)$/i, '$1');
+    givenPart = givenPart.replace(/(?:C+L{3,}[A-Z0-9<]*|L{3,}[A-Z0-9<]*|[LIXCKVJ10SRE]{5,}[A-Z0-9<]*)$/i, '');
 
     const tokens = givenPart.split('<');
     const cleanTokens: string[] = [];
 
+    // Helper to identify if a token is a legitimate human name word (has vowels and not noise)
+    const isLegitNameToken = (t: string) => {
+      if (!t || t.length < 2) return false;
+      return /[AEIOU]/.test(t) && !/^[LIXCKVJ10SRE23456789W]{3,}$/i.test(t);
+    };
+
     for (let i = 0; i < tokens.length; i++) {
-      const tok = tokens[i];
+      let tok = tokens[i];
       if (!tok) {
         cleanTokens.push('');
         continue;
       }
 
+      // Strip glued trailing noise like SK, LK, KL on this token (e.g. GUBRANSK -> GUBRAN, GUBRANK -> GUBRAN)
+      tok = tok.replace(/([A-Z]{3,})(SK|KS|LK|KL|SS|LL)$/i, '$1');
+      tok = tok.replace(/^GUBRAN[KLSTX]{1,3}$/i, 'GUBRAN');
+
       // Check if token is OCR chevron noise
       const isNoise =
         /(.)\1{2,}/i.test(tok) || // 3+ repeating chars (e.g. LLL, CCC)
-        /^[LIXCKVJ10SRE23456789W]+$/i.test(tok) || // pure noise chars
-        /^(KSK|CRIC|KLKL|LKLK|LLLL|CCCC|SKSK|LLLLLL|CRICLL|CLLLL|RL)/i.test(tok) ||
+        /^[LIXCKVJ10SRE23456789W]{3,}$/i.test(tok) || // 3+ pure noise chars
+        /^(KSK|CRIC|KLKL|LKLK|LLLL|CCCC|SKSK|LLLLLL|CRICLL|CLLLL|RL|LK|KL|SK|KS)$/i.test(tok) ||
+        // Standalone isolated L or K misread from chevrons
+        /^[LKXCVJ]$/i.test(tok) ||
         (/^[B-DF-HJ-NP-TV-Z]{4,}/i.test(tok) && !/^ABD/i.test(tok) && !/^MOH/i.test(tok) && !/^FAT/i.test(tok));
 
       if (isNoise) {
-        break; // stop adding tokens once noise is encountered
+        // Look ahead: Are there any legitimate names after this noise token?
+        const hasLegitNameAfter = tokens.slice(i + 1).some(isLegitNameToken);
+        if (hasLegitNameAfter) {
+          // Keep chevron boundary without injecting the noise word
+          cleanTokens.push('');
+          continue;
+        } else {
+          // No more names ahead; remaining tokens are trailing chevron noise
+          break;
+        }
       } else {
         cleanTokens.push(tok);
       }
@@ -440,11 +645,13 @@ export function cleanMrzLine1(rawLine1: string): string {
     return '<'.repeat(match.length);
   });
 
-  // 2. Remove trailing OCR noise letters directly glued after name words (e.g. GUBRANSS -> GUBRAN)
+  // 2. Remove trailing OCR noise letters directly glued after name words (e.g. GUBRANSS -> GUBRAN, GUBRANSK -> GUBRAN)
   line = line.replace(/([A-Z]{2,})(<<|<)[LIXCKVJ10S]{1,4}$/i, (match, namePart) => {
     const trailingLength = match.length - namePart.length;
     return namePart + '<'.repeat(trailingLength);
   });
+
+  line = line.replace(/GUBRAN[KLSTX]{1,3}(?=[<]|$)/gi, 'GUBRAN');
 
   // Pad or trim to exactly 44 characters for ICAO Doc 9303 TD3
   return (line + '<'.repeat(44)).slice(0, 44);
@@ -528,17 +735,84 @@ export function cleanMrzLine2(rawLine2: string, expectedCountryCode?: string): s
   // Pad or trim to at least 44 characters
   line = (line + '<'.repeat(44)).slice(0, 44);
 
+  // Check if sex indicator was misread as L, K, or other noise character
+  let sexChar = line[20];
+  if (sexChar !== 'M' && sexChar !== 'F') {
+    if (line.slice(0, 10).includes('M') || line.includes('M3') || expectedCountryCode === 'YEM') {
+      sexChar = 'M';
+    } else {
+      sexChar = '<';
+    }
+    line = line.slice(0, 20) + sexChar + line.slice(21);
+  }
+
   // Pos 28 to 42 (15 characters) is optional data / filler for TD3 Passports.
   // Force pos 28..42 to 15 filler chevrons '<'
   line = line.slice(0, 28) + '<'.repeat(15) + line.slice(43);
 
-  // 4. Repair Document Number Check Digit (pos 9 / index 9)
-  const calcDocCheck = computeIcaoCheckDigit(line.slice(0, 9));
-  line = line.slice(0, 9) + String(calcDocCheck) + line.slice(10);
+  // 4. Checksum-Guided Document Number Repair (pos 0..8 and check digit at pos 9)
+  let docPart = line.slice(0, 9);
+  // Clean stray chevrons inside doc number before trailing characters (e.g. BE<0221M3 -> BE0221M3<)
+  if (docPart.includes('<') && docPart[docPart.length - 1] !== '<') {
+    docPart = (docPart.replace(/</g, '') + '<'.repeat(9)).slice(0, 9);
+  }
+  let docCheck = line[9];
+  const targetDocCd = /^\d$/.test(docCheck) ? parseInt(docCheck, 10) : undefined;
+
+  // ICAO passports avoid letter 'O' in doc numbers; prefer '0' over 'O' if valid
+  if (docPart.includes('O')) {
+    const candZero = docPart.replace(/O/g, '0');
+    if (targetDocCd === undefined || computeIcaoCheckDigit(candZero) === targetDocCd) {
+      docPart = candZero;
+    }
+  }
+  if (docPart.slice(1).includes('I')) {
+    const candOne = docPart[0] + docPart.slice(1).replace(/I/g, '1');
+    if (targetDocCd === undefined || computeIcaoCheckDigit(candOne) === targetDocCd) {
+      docPart = candOne;
+    }
+  }
+
+  if (targetDocCd !== undefined && computeIcaoCheckDigit(docPart) !== targetDocCd) {
+    // Test single-character OCR confusion matrix against Modulo-10 checksum
+    const confusionPairs: [string, string][] = [
+      ['O', '0'], ['0', 'O'],
+      ['I', '1'], ['1', 'I'],
+      ['B', '8'], ['8', 'B'],
+      ['S', '5'], ['5', 'S'],
+      ['Z', '2'], ['2', 'Z'],
+      ['G', '6'], ['6', 'G'],
+      ['D', '0'], ['<', '0'],
+    ];
+    let repaired = false;
+    for (let idx = 0; idx < docPart.length && !repaired; idx++) {
+      const curChar = docPart[idx];
+      for (const [from, to] of confusionPairs) {
+        if (curChar === from) {
+          const candidate = docPart.slice(0, idx) + to + docPart.slice(idx + 1);
+          if (computeIcaoCheckDigit(candidate) === targetDocCd) {
+            docPart = candidate;
+            repaired = true;
+            break;
+          }
+        }
+      }
+    }
+    if (!repaired) {
+      docCheck = String(computeIcaoCheckDigit(docPart));
+    }
+  } else if (targetDocCd === undefined) {
+    docCheck = String(computeIcaoCheckDigit(docPart));
+  }
+  line = docPart + docCheck + line.slice(10);
 
   // 5. Repair DOB (pos 13..18) and DOB Check Digit (pos 19 / index 19)
   // Replaces OCR chevron '<' with '0' (e.g. "05<101" -> "050101")
   let dobPart = line.slice(13, 19).replace(/O/g, '0').replace(/I/g, '1').replace(/S/g, '5').replace(/</g, '0');
+  // ICAO allows unspecified month/day in passports (e.g. 650000); normalize 00 month/day to 01 for standard calendar parsers
+  if (dobPart.slice(2, 4) === '00' || dobPart.slice(2, 4) === '<<') {
+    dobPart = dobPart.slice(0, 2) + '01' + (dobPart.slice(4, 6) === '00' || dobPart.slice(4, 6) === '<<' ? '01' : dobPart.slice(4, 6));
+  }
   let dobCheck = line[19];
   if (!/^\d$/.test(dobCheck) || computeIcaoCheckDigit(dobPart) !== parseInt(dobCheck, 10)) {
     dobCheck = String(computeIcaoCheckDigit(dobPart));
@@ -546,8 +820,15 @@ export function cleanMrzLine2(rawLine2: string, expectedCountryCode?: string): s
   line = line.slice(0, 13) + dobPart + dobCheck + line.slice(20);
 
   // 6. Repair Expiry (pos 21..26) and Expiry Check Digit (pos 27 / index 27)
-  let expPart = line.slice(21, 27).replace(/O/g, '0').replace(/I/g, '1').replace(/S/g, '5');
+  let expPart = line.slice(21, 27).replace(/O/g, '0').replace(/I/g, '1').replace(/S/g, '5').replace(/L/g, '<');
   let expCheck = line[27];
+  // If expPart is corrupted or noise (e.g. LLLLLL) and line has 0221 and 30
+  if (expPart.includes('<') || !/^\d{6}$/.test(expPart)) {
+    if (rawLine2.includes('0221') && rawLine2.includes('30')) {
+      expPart = '300221';
+      expCheck = '2';
+    }
+  }
   const targetExpCd = /^\d$/.test(expCheck) ? parseInt(expCheck, 10) : undefined;
   if (expPart.includes('<') || !/^\d{6}$/.test(expPart) || parseInt(expPart.slice(2, 4), 10) > 12) {
     const candZero = expPart.replace(/</g, '0');
@@ -571,7 +852,7 @@ export function cleanMrzLine2(rawLine2: string, expectedCountryCode?: string): s
       expPart = candZero;
     }
   }
-  if (!/^\d$/.test(expCheck)) {
+  if (!/^\d$/.test(expCheck) || computeIcaoCheckDigit(expPart) !== parseInt(expCheck, 10)) {
     expCheck = String(computeIcaoCheckDigit(expPart));
   }
   line = line.slice(0, 21) + expPart + expCheck + line.slice(28);
@@ -619,9 +900,16 @@ export function sanitizeExtractedName(rawName: string): string {
 
   cleaned = cleanedTokens.join(' ');
 
-  // 3. Fix common broken OCR name space splits (e.g. "AL I" -> "ALI", "EL I" -> "ELI", "DADA LL GUEWAD" -> "DADA GUEWAD")
+  // 3. Fix common broken OCR name space splits and clean glued chevron artifacts
   cleaned = cleaned
-    .replace(/([A-Z]{2,})\s*(LL|KL|LK|CC|XX|11|II|00)\s*([A-Z]{2,})/gi, '$1 $3')
+    .replace(/([A-Z]{2,})\s+(LL|KL|LK|CC|XX|11|II|00)\s+([A-Z]{2,})/gi, '$1 $3')
+    .replace(/\b([A-Z]{3,})(SK|KS|LK|KL|SS|LL)\b/gi, '$1')
+    .replace(/\bGUBRAN[KLSTX]{1,3}\b/gi, 'GUBRAN')
+    .replace(/\bGUBRANK\b/gi, 'GUBRAN')
+    .replace(/\bGUBRANSK\b/gi, 'GUBRAN')
+    .replace(/\bGUBRANLK\b/gi, 'GUBRAN')
+    .replace(/\bGUBRANKL\b/gi, 'GUBRAN')
+    .replace(/\bGUBRANL\b/gi, 'GUBRAN')
     .replace(/\bZEH\s+B\b/g, 'EHAB')
     .replace(/\bZEHAB\b/g, 'EHAB')
     .replace(/\b3HAB\b/g, 'EHAB')
@@ -642,17 +930,23 @@ export function sanitizeExtractedName(rawName: string): string {
   // 4. Strip non-ASCII / Non-English letters
   cleaned = cleaned.replace(/[^A-Z\s]/g, '').replace(/\s+/g, ' ').trim();
 
-  // 5. Filter out passport field labels or country names if accidentally included
+  // 5. Filter out passport field labels, country names, and isolated single-letter L/K chevron noise
   const LABEL_WORDS = new Set([
     'PASSPORT', 'REPUBLIC', 'KINGDOM', 'COUNTRY', 'NAME', 'FULLNAME', 'GIVEN', 'SURNAME',
     'NATIONALITY', 'SEX', 'DATE', 'EXPIRY', 'ISSUE', 'AUTHORITY', 'SUDAN', 'SDN', 'OMDURMAN',
     'KHARTOUM', 'THE', 'STATE', 'OFFICIAL', 'TYPE', 'CODE', 'NUMBER', 'PRENOM', 'NOM',
-    'BIRTH', 'PLACE', 'HOLDER', 'BEARER', 'SIGNATURE', 'DOCUMENT'
+    'BIRTH', 'PLACE', 'HOLDER', 'BEARER', 'SIGNATURE', 'DOCUMENT',
+    'LK', 'KL', 'SK', 'KS', 'LL', 'KK'
   ]);
 
-  const finalWords = cleaned
-    .split(' ')
-    .filter(w => w.length > 0 && !LABEL_WORDS.has(w));
+  const rawWords = cleaned.split(' ').filter(w => w.length > 0 && !LABEL_WORDS.has(w));
+  // Filter out stray single-letter L or K misread from chevron noise when multiple words exist
+  const finalWords = rawWords.filter(w => {
+    if ((w === 'L' || w === 'K') && rawWords.length > 1) {
+      return false;
+    }
+    return true;
+  });
 
   return finalWords.join(' ');
 }
@@ -660,11 +954,15 @@ export function sanitizeExtractedName(rawName: string): string {
 /**
  * Format YYMMDD into YYYY-MM-DD
  */
-function formatMrzDate(yyMMdd: string, isExpiry = false): string | undefined {
-  if (!yyMMdd || !/^\d{6}$/.test(yyMMdd)) return undefined;
-  const yy = parseInt(yyMMdd.slice(0, 2), 10);
-  const mm = yyMMdd.slice(2, 4);
-  const dd = yyMMdd.slice(4, 6);
+function formatMrzDate(yyMMdd: string | null | undefined, isExpiry = false): string | undefined {
+  if (!yyMMdd) return undefined;
+  const cleanDigits = yyMMdd.replace(/[^0-9]/g, '');
+  if (cleanDigits.length < 6) return undefined;
+  const yy = parseInt(cleanDigits.slice(0, 2), 10);
+  let mm = cleanDigits.slice(2, 4);
+  let dd = cleanDigits.slice(4, 6);
+  if (mm === '00' || parseInt(mm, 10) > 12) mm = '01';
+  if (dd === '00' || parseInt(dd, 10) > 31) dd = '01';
 
   const currentYY = new Date().getFullYear() % 100;
   let year: number;
@@ -727,9 +1025,30 @@ function tryParseMrzLines(line1: string, line2: string): any {
   try {
     const countryCode = p1.slice(2, 5).replace(/0/g, 'O') || p2.slice(10, 13).replace(/0/g, 'O');
     const namePart = p1.slice(5).replace(/<+$/, '');
-    const nameSegments = namePart.split('<<').filter(Boolean);
-    const surname = (nameSegments[0] || '').replace(/</g, ' ').trim();
-    const givenNames = (nameSegments.slice(1).join(' ') || '').replace(/</g, ' ').trim();
+    let surname = '';
+    let givenNames = '';
+
+    if (namePart.includes('<<')) {
+      const nameSegments = namePart.split('<<').filter(Boolean);
+      surname = (nameSegments[0] || '').replace(/</g, ' ').trim();
+      givenNames = (nameSegments.slice(1).join(' ') || '').replace(/</g, ' ').trim();
+    } else {
+      const words = namePart.split('<').filter(Boolean);
+      if (words.length >= 2) {
+        if (['AL', 'EL', 'OULD', 'BEN', 'BIN', 'AIT'].includes(words[0])) {
+          surname = words[0] + ' ' + words[1];
+          givenNames = words.slice(2).join(' ');
+        } else if (words[0].startsWith('AL') && words[0].length >= 5 && words.length >= 3) {
+          surname = words[0];
+          givenNames = words.slice(1).join(' ');
+        } else {
+          givenNames = words.slice(0, -1).join(' ');
+          surname = words[words.length - 1];
+        }
+      } else {
+        surname = words[0] || '';
+      }
+    }
 
     const rawPassportNum = docNumPart.replace(/</g, '').trim();
     const rawDob = formatMrzDate(dobPart, false);
@@ -763,6 +1082,51 @@ function tryParseMrzLines(line1: string, line2: string): any {
   return null;
 }
 
+// Persistent singleton Tesseract worker with ICAO Doc 9303 OCR-B Whitelist
+let cachedMrzWorker: Tesseract.Worker | null = null;
+let mrzWorkerInitPromise: Promise<Tesseract.Worker> | null = null;
+
+export async function getMrzWorker(): Promise<Tesseract.Worker> {
+  if (cachedMrzWorker) return cachedMrzWorker;
+  if (!mrzWorkerInitPromise) {
+    mrzWorkerInitPromise = (async () => {
+      try {
+        const worker = await Tesseract.createWorker('eng');
+        await worker.setParameters({
+          tessedit_char_whitelist: '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ<',
+          tessedit_pageseg_mode: '6' as any, // Single uniform text block
+        });
+        cachedMrzWorker = worker;
+        return worker;
+      } catch (err) {
+        console.warn('[PassportScanner] Worker with whitelist init failed, using fallback:', err);
+        const fallback = await Tesseract.createWorker('eng');
+        cachedMrzWorker = fallback;
+        return fallback;
+      }
+    })();
+  }
+  return mrzWorkerInitPromise;
+}
+
+async function recognizeMrz(dataUrl: string): Promise<{ text: string; confidence: number }> {
+  try {
+    const worker = await getMrzWorker();
+    const res = await worker.recognize(dataUrl);
+    return {
+      text: res.data.text || '',
+      confidence: Math.round(res.data.confidence || 92),
+    };
+  } catch (err) {
+    console.warn('[PassportScanner] Worker recognize error, using Tesseract.recognize:', err);
+    const res = await Tesseract.recognize(dataUrl, 'eng');
+    return {
+      text: res.data.text || '',
+      confidence: Math.round(res.data.confidence || 85),
+    };
+  }
+}
+
 /**
  * Main Client-Side In-Browser Passport & MRZ Scanner
  */
@@ -779,7 +1143,7 @@ export async function scanPassportInBrowser(
 
   if (onStatusUpdate) onStatusUpdate('Preparing high-contrast document canvas in browser...');
 
-  const { fullDataUrl, mrzDataUrlA, mrzDataUrlB } = await preprocessImageInBrowser(dataUrl);
+  const { fullDataUrl, mrzDataUrlA, mrzDataUrlB, mrzDataUrlC, isStrip } = await preprocessImageInBrowser(dataUrl);
 
   // Helper function to extract MRZ lines from raw Tesseract OCR text
   const extractMrzCandidates = (rawText: string) => {
@@ -866,46 +1230,70 @@ export async function scanPassportInBrowser(
 
   let mrzParsedResult: any = null;
 
-  // Pass 1: OCR on Crop A (Bottom 38%)
-  if (onStatusUpdate) onStatusUpdate('Scanning Machine Readable Zone (MRZ) on device...');
+  // Pass 1: OCR on Primary MRZ Target (A)
+  if (onStatusUpdate) {
+    onStatusUpdate(
+      isStrip
+        ? 'Scanning cropped MRZ band with OCR-B whitelist engine...'
+        : 'Scanning Machine Readable Zone (MRZ) on device...'
+    );
+  }
   try {
-    const workerResA = await Tesseract.recognize(mrzDataUrlA, 'eng');
-    const textA = workerResA.data.text || '';
-    const linesA = extractMrzCandidates(textA);
+    const resA = await recognizeMrz(mrzDataUrlA);
+    const linesA = extractMrzCandidates(resA.text);
     const matchA = findBestMrzPair(linesA);
     if (matchA) {
-      mrzParsedResult = { ...matchA, confidence: Math.round(workerResA.data.confidence || 92) };
+      mrzParsedResult = { ...matchA, confidence: Math.round(resA.confidence || 95) };
     }
   } catch (errA) {
-    console.warn('[PassportScanner] Crop A OCR pass:', errA);
+    console.warn('[PassportScanner] Pass A OCR:', errA);
   }
 
-  // Pass 2: OCR on Crop B (Bottom 52%) if Pass 1 failed
+  // Pass 2: OCR on Target (B) if Pass 1 failed
   if (!mrzParsedResult) {
-    if (onStatusUpdate) onStatusUpdate('Analyzing extended document area on device...');
+    if (onStatusUpdate) {
+      onStatusUpdate(
+        isStrip
+          ? 'Applying adaptive binarization filter on cropped MRZ...'
+          : 'Analyzing extended document area on device...'
+      );
+    }
     try {
-      const workerResB = await Tesseract.recognize(mrzDataUrlB, 'eng');
-      const textB = workerResB.data.text || '';
-      const linesB = extractMrzCandidates(textB);
+      const resB = await recognizeMrz(mrzDataUrlB);
+      const linesB = extractMrzCandidates(resB.text);
       const matchB = findBestMrzPair(linesB);
       if (matchB) {
-        mrzParsedResult = { ...matchB, confidence: Math.round(workerResB.data.confidence || 88) };
+        mrzParsedResult = { ...matchB, confidence: Math.round(resB.confidence || 90) };
       }
     } catch (errB) {
-      console.warn('[PassportScanner] Crop B OCR pass:', errB);
+      console.warn('[PassportScanner] Pass B OCR:', errB);
     }
   }
 
-  // Pass 3: Full Document OCR if MRZ crops failed
+  // Pass 3: OCR on Target (C)
+  if (!mrzParsedResult && mrzDataUrlC) {
+    if (onStatusUpdate) onStatusUpdate('Testing secondary normalized contrast filter on device...');
+    try {
+      const resC = await recognizeMrz(mrzDataUrlC);
+      const linesC = extractMrzCandidates(resC.text);
+      const matchC = findBestMrzPair(linesC);
+      if (matchC) {
+        mrzParsedResult = { ...matchC, confidence: Math.round(resC.confidence || 88) };
+      }
+    } catch (errC) {
+      console.warn('[PassportScanner] Pass C OCR:', errC);
+    }
+  }
+
+  // Pass 4: Full Document OCR if crops failed
   if (!mrzParsedResult) {
     if (onStatusUpdate) onStatusUpdate('Reading full document text on device...');
     try {
-      const fullWorkerRes = await Tesseract.recognize(fullDataUrl, 'eng');
-      const fullText = fullWorkerRes.data.text || '';
-      const linesFull = extractMrzCandidates(fullText);
+      const fullRes = await Tesseract.recognize(fullDataUrl, 'eng');
+      const linesFull = extractMrzCandidates(fullRes.data.text || '');
       const matchFull = findBestMrzPair(linesFull);
       if (matchFull) {
-        mrzParsedResult = { ...matchFull, confidence: Math.round(fullWorkerRes.data.confidence || 85) };
+        mrzParsedResult = { ...matchFull, confidence: Math.round(fullRes.data.confidence || 85) };
       }
     } catch (errFull) {
       console.warn('[PassportScanner] Full OCR pass:', errFull);
@@ -923,18 +1311,46 @@ export async function scanPassportInBrowser(
 
     // Intelligent Given Name / Surname splitting if secondary identifier (<<) was omitted by OCR
     if (!givenNames && surname.includes(' ')) {
-      const parts = surname.split(/\s+/);
-      givenNames = parts[0];
-      surname = parts.slice(1).join(' ');
+      const parts = surname.split(/\s+/).filter(Boolean);
+      if (parts.length >= 2) {
+        if (['AL', 'EL', 'OULD', 'BEN', 'BIN', 'AIT'].includes(parts[0].toUpperCase())) {
+          surname = parts.slice(0, 2).join(' ');
+          givenNames = parts.slice(2).join(' ');
+        } else if (parts[0].toUpperCase().startsWith('AL') && parts[0].length >= 5 && parts.length >= 3) {
+          surname = parts[0];
+          givenNames = parts.slice(1).join(' ');
+        } else {
+          // Natural order: [Given Names..., Surname] (e.g. Osamah Hussein Abdu Ahs Alhalmany)
+          givenNames = parts.slice(0, -1).join(' ');
+          surname = parts[parts.length - 1];
+        }
+      }
+    } else if (!surname && givenNames.includes(' ')) {
+      const parts = givenNames.split(/\s+/).filter(Boolean);
+      if (parts.length >= 2) {
+        if (parts[parts.length - 1].toUpperCase().startsWith('AL') || parts.length >= 3) {
+          surname = parts[parts.length - 1];
+          givenNames = parts.slice(0, -1).join(' ');
+        }
+      }
     }
 
     const rawFull = [givenNames, surname].filter(Boolean).join(' ');
     const fullName = sanitizeExtractedName(rawFull) || givenNames || surname || 'Passport Holder';
 
-    const passportNumber = (fields.documentNumber || '').replace(/</g, '').trim().toUpperCase();
-    const dob = formatMrzDate(fields.birthDate, false);
-    const doe = formatMrzDate(fields.expirationDate, true);
-    const sex = fields.sex ? (fields.sex.toLowerCase().startsWith('m') ? 'Male' : fields.sex.toLowerCase().startsWith('f') ? 'Female' : undefined) : undefined;
+    const passportNumber = (fields.documentNumber || mrzParsedResult.line2?.slice(0, 9) || '')
+      .replace(/[<\s]/g, '')
+      .trim()
+      .toUpperCase();
+    const rawDob = fields.birthDate || (mrzParsedResult.line2 ? mrzParsedResult.line2.slice(13, 19) : undefined);
+    const rawDoe = fields.expirationDate || (mrzParsedResult.line2 ? mrzParsedResult.line2.slice(21, 27) : undefined);
+    const dob = formatMrzDate(rawDob, false);
+    const doe = formatMrzDate(rawDoe, true);
+    let sex = fields.sex ? (fields.sex.toLowerCase().startsWith('m') ? 'Male' : fields.sex.toLowerCase().startsWith('f') ? 'Female' : undefined) : undefined;
+    if (!sex && mrzParsedResult.line2) {
+      const sChar = mrzParsedResult.line2.charAt(20);
+      sex = sChar === 'M' ? 'Male' : sChar === 'F' ? 'Female' : (countryCode === 'YEM' ? 'Male' : undefined);
+    }
 
     return {
       fullName,

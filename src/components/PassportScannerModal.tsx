@@ -18,9 +18,11 @@ import {
   FileText,
   Eye,
   CheckCheck,
+  Crop,
 } from 'lucide-react';
 import { api } from '../services/api';
 import { ScannedPassportData } from '../types';
+import { PassportCropper } from './PassportCropper';
 
 interface PassportScannerModalProps {
   isOpen: boolean;
@@ -38,6 +40,8 @@ export const PassportScannerModal: React.FC<PassportScannerModalProps> = ({
   // Input mode: 'upload' | 'camera'
   const [mode, setMode] = useState<'upload' | 'camera'>('upload');
   const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [originalImage, setOriginalImage] = useState<string | null>(null);
+  const [showCropper, setShowCropper] = useState<boolean>(false);
   const [scanning, setScanning] = useState(false);
   const [scanStep, setScanStep] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
@@ -76,6 +80,8 @@ export const PassportScannerModal: React.FC<PassportScannerModalProps> = ({
     if (!isOpen) {
       stopCamera();
       setImagePreview(null);
+      setOriginalImage(null);
+      setShowCropper(false);
       setResult(null);
       setExistingClientMatches([]);
       setError(null);
@@ -142,7 +148,9 @@ export const PassportScannerModal: React.FC<PassportScannerModalProps> = ({
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     const dataUrl = canvas.toDataURL('image/jpeg', 0.95);
     stopCamera();
+    setOriginalImage(dataUrl);
     setImagePreview(dataUrl);
+    setShowCropper(false);
     processScan(dataUrl);
   };
 
@@ -158,8 +166,10 @@ export const PassportScannerModal: React.FC<PassportScannerModalProps> = ({
     const reader = new FileReader();
     reader.onload = (evt) => {
       const dataUrl = evt.target?.result as string;
+      setOriginalImage(dataUrl);
       setImagePreview(dataUrl);
-      processScan(dataUrl, file.type);
+      setShowCropper(false);
+      processScan(dataUrl);
     };
     reader.readAsDataURL(file);
   };
@@ -173,8 +183,10 @@ export const PassportScannerModal: React.FC<PassportScannerModalProps> = ({
     const reader = new FileReader();
     reader.onload = (evt) => {
       const dataUrl = evt.target?.result as string;
+      setOriginalImage(dataUrl);
       setImagePreview(dataUrl);
-      processScan(dataUrl, file.type);
+      setShowCropper(false);
+      processScan(dataUrl);
     };
     reader.readAsDataURL(file);
   };
@@ -310,17 +322,56 @@ MRZ: ${result.mrzLine1 || ''} / ${result.mrzLine2 || ''}`;
         {/* Modal Body */}
         <div className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6">
           {error && (
-            <div className="p-3.5 bg-red-50 border border-red-200 text-red-800 rounded-xl text-xs sm:text-sm flex items-start gap-2.5">
-              <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
-              <div className="flex-1">
-                <span className="font-semibold">Scanner Notice: </span>
-                {error}
+            <div className="p-3.5 bg-red-50 border border-red-200 text-red-800 rounded-xl text-xs sm:text-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
+              <div className="flex items-start gap-2.5">
+                <AlertCircle className="w-4 h-4 text-red-600 shrink-0 mt-0.5" />
+                <div className="flex-1">
+                  <span className="font-semibold">Scanner Notice: </span>
+                  {error}
+                </div>
               </div>
+              {originalImage && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowCropper(true);
+                    setError(null);
+                  }}
+                  className="px-3.5 py-1.5 bg-sky-700 hover:bg-sky-800 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 shrink-0 shadow-xs transition"
+                >
+                  <Crop className="w-3.5 h-3.5" />
+                  <span>Open Precision Cropper</span>
+                </button>
+              )}
             </div>
           )}
 
+          {/* Interactive Precision Cropper View */}
+          {showCropper && originalImage && !scanning && (
+            <PassportCropper
+              imageSrc={originalImage}
+              onApplyCrop={(croppedUrl) => {
+                setShowCropper(false);
+                setImagePreview(croppedUrl);
+                processScan(croppedUrl);
+              }}
+              onCancel={() => {
+                setShowCropper(false);
+                if (!result) {
+                  setImagePreview(null);
+                  setOriginalImage(null);
+                }
+              }}
+              onQuickScanFull={() => {
+                setShowCropper(false);
+                setImagePreview(originalImage);
+                processScan(originalImage);
+              }}
+            />
+          )}
+
           {/* Mode & Engine Switcher Bar */}
-          {!result && (
+          {!result && !showCropper && (
             <div className="space-y-4">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between border-b border-slate-200 pb-3 gap-3">
                 <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-xl">
@@ -385,9 +436,57 @@ MRZ: ${result.mrzLine1 || ''} / ${result.mrzLine2 || ''}`;
                       Supports JPG, PNG, WEBP, or scanned passport images. The engine extracts and verifies Full Name, Document Number, Nationality, and Dates with 100% mathematical accuracy.
                     </p>
                   </div>
-                  <div className="flex items-center gap-2 pt-2 text-[11px] text-emerald-700 font-medium">
-                    <ShieldCheck className="w-4 h-4 text-emerald-600" />
-                    <span>100% Offline ICAO Doc 9303 Standard. Your documents never leave your server.</span>
+                  <div className="flex flex-wrap items-center justify-center gap-2 pt-2 text-[11px] font-medium">
+                    <span className="flex items-center gap-1.5 text-emerald-800 bg-emerald-50 px-2.5 py-1 rounded-full border border-emerald-200">
+                      <ShieldCheck className="w-3.5 h-3.5 text-emerald-600" />
+                      <span>100% Offline Device Browser</span>
+                    </span>
+                    <span className="flex items-center gap-1.5 text-sky-800 bg-sky-50 px-2.5 py-1 rounded-full border border-sky-200">
+                      <Crop className="w-3.5 h-3.5 text-sky-600" />
+                      <span>Optional Precision Crop &amp; Rotate Tool</span>
+                    </span>
+                  </div>
+
+                  {/* Quick Test Samples */}
+                  <div className="pt-3 border-t border-slate-200/80 w-full flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">Try Demo Passports:</span>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); handleSampleSelect('sample:yazid_gubran'); }}
+                        className="px-2.5 py-1 text-xs font-medium bg-white hover:bg-sky-50 hover:text-sky-700 hover:border-sky-300 text-slate-700 rounded-lg border border-slate-200 shadow-2xs transition"
+                      >
+                        🇾🇪 Yazid Abdulkarem Gubran
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); handleSampleSelect('sample:osamah_alhalmany'); }}
+                        className="px-2.5 py-1 text-xs font-medium bg-white hover:bg-sky-50 hover:text-sky-700 hover:border-sky-300 text-slate-700 rounded-lg border border-slate-200 shadow-2xs transition"
+                      >
+                        🇾🇪 Osamah Alhalmany
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); handleSampleSelect('sample:senegal_seck'); }}
+                        className="px-2.5 py-1 text-xs font-medium bg-white hover:bg-sky-50 hover:text-sky-700 hover:border-sky-300 text-slate-700 rounded-lg border border-slate-200 shadow-2xs transition"
+                      >
+                        🇸🇳 Fatimatou Seck
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); handleSampleSelect('sample:yemen'); }}
+                        className="px-2.5 py-1 text-xs font-medium bg-white hover:bg-sky-50 hover:text-sky-700 hover:border-sky-300 text-slate-700 rounded-lg border border-slate-200 shadow-2xs transition"
+                      >
+                        🇾🇪 Fares Al-Eryani
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => { e.stopPropagation(); handleSampleSelect('sample:saudi'); }}
+                        className="px-2.5 py-1 text-xs font-medium bg-white hover:bg-sky-50 hover:text-sky-700 hover:border-sky-300 text-slate-700 rounded-lg border border-slate-200 shadow-2xs transition"
+                      >
+                        🇸🇦 Bandar Al-Otaibi
+                      </button>
+                    </div>
                   </div>
                 </div>
               )}
@@ -594,9 +693,27 @@ MRZ: ${result.mrzLine1 || ''} / ${result.mrzLine2 || ''}`;
               <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
                 {/* Image Preview Column */}
                 <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 flex flex-col space-y-3">
-                  <div className="text-xs font-bold text-slate-700 flex items-center gap-1.5">
-                    <Eye className="w-3.5 h-3.5 text-sky-700" />
-                    <span>Passport Document Preview</span>
+                  <div className="text-xs font-bold text-slate-700 flex items-center justify-between">
+                    <span className="flex items-center gap-1.5">
+                      <Eye className="w-3.5 h-3.5 text-sky-700" />
+                      <span>Passport Document Preview</span>
+                    </span>
+                    {(originalImage || result.imagePreview || imagePreview) && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (!originalImage && (result.imagePreview || imagePreview)) {
+                            setOriginalImage(result.imagePreview || imagePreview || null);
+                          }
+                          setShowCropper(true);
+                          setResult(null);
+                        }}
+                        className="text-[11px] font-semibold text-sky-700 hover:text-sky-900 bg-sky-100 hover:bg-sky-200 px-2 py-0.5 rounded flex items-center gap-1 transition"
+                      >
+                        <Crop className="w-3 h-3" />
+                        <span>Re-Crop</span>
+                      </button>
+                    )}
                   </div>
                   <div className="flex-1 bg-slate-900 rounded-lg overflow-hidden border border-slate-300 aspect-[1.35/1] flex items-center justify-center">
                     {result.imagePreview || imagePreview ? (
@@ -611,6 +728,22 @@ MRZ: ${result.mrzLine1 || ''} / ${result.mrzLine2 || ''}`;
                       </div>
                     )}
                   </div>
+                  {(originalImage || result.imagePreview || imagePreview) && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (!originalImage && (result.imagePreview || imagePreview)) {
+                          setOriginalImage(result.imagePreview || imagePreview || null);
+                        }
+                        setShowCropper(true);
+                        setResult(null);
+                      }}
+                      className="w-full px-3 py-2 bg-white hover:bg-sky-50 text-sky-700 hover:text-sky-800 border border-sky-300 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition shadow-2xs"
+                    >
+                      <Crop className="w-3.5 h-3.5 text-sky-600" />
+                      <span>Adjust Crop &amp; Re-Scan MRZ</span>
+                    </button>
+                  )}
                   {result.notes && (
                     <div className="text-[11px] text-slate-600 bg-white p-2.5 rounded-lg border border-slate-200">
                       <span className="font-semibold text-slate-800">Status: </span>

@@ -540,6 +540,32 @@ const SAMPLE_PRESETS: Record<string, ScannedPassportResult> = {
       allValid: true,
     },
   },
+  'sample:osamah_alhalmany': {
+    fullName: 'Osamah Hussein Abdu Ahs Alhalmany',
+    givenNames: 'Osamah Hussein Abdu Ahs',
+    surname: 'Alhalmany',
+    passportNumber: '085341209',
+    country: 'Yemen',
+    countryCode: 'YEM',
+    dateOfBirth: '1993-04-15',
+    dateOfExpiry: '2031-04-14',
+    gender: 'Male',
+    nationality: 'Yemeni',
+    placeOfBirth: 'Aden',
+    mrzLine1: 'P<YEMALHALMANY<<OSAMAH<HUSSEIN<ABDU<AHS<<<<<<<<',
+    mrzLine2: '0853412096YEM9304158M3104149<<<<<<<<<<<<<<<2',
+    confidenceScore: 100,
+    notes: 'Yemen Passport identity page (Osamah Hussein Abdu Ahs Alhalmany). 100% ICAO Doc 9303 Checksums Mathematically Verified.',
+    ocrMethod: 'ICAO Doc 9303 MRZ Engine (100% Checksum Verified)',
+    checksumStatus: 'verified',
+    checkDigitsValid: {
+      documentNumber: true,
+      dateOfBirth: true,
+      dateOfExpiry: true,
+      composite: true,
+      allValid: true,
+    },
+  },
   // Saudi Arabia
   'sample:saudi': {
     fullName: 'Bandar Abdullah Al-Otaibi',
@@ -1272,13 +1298,13 @@ export function cleanMrzLine1(rawLine1: string): string {
     }
   }
 
-  // Fix OCR misreads of double chevrons '<<' as 'SS', 'LL', 'KL', 'LK', 'CC', 'XX', '11', 'II', '00', '<L', 'L<' between name words
-  // Note: Check if the names section (pos 5..30) contains '<<', ignoring trailing filler chevrons at end of line
+  // Fix OCR misreads of double chevrons '<<' as 'SS', 'LL', 'CC', 'KK' ONLY when no chevrons were detected in the name region
+  // Note: Never split genuine names containing 'SS' (e.g. HUSSEIN, HASSAN, YOUSSEF, NASSER) or 'LL' (ABDALLAH)
   const namesRegion = line.substring(5, Math.min(line.length, 30));
-  if (!namesRegion.includes('<<') && line.length > 8) {
+  if (!namesRegion.includes('<') && line.length > 8) {
     const prefix = line.substring(0, 5);
     let namePart = line.substring(5);
-    namePart = namePart.replace(/([A-Z]{2,}?)(<*SS<*|<*LL<*|<*KL<*|<*LK<*|<*CC<*|<*KK<*|<*XX<*|<*11<*|<*II<*|<*00<*|<L|L<|<S|S<)([A-Z]{2,})/gi, '$1<<$3');
+    namePart = namePart.replace(/(?<!HU|HA|YOU|NA|BA|JA|GA|I)(SS|LL|CC|KK)(?!EIN|AN|EF|ER|EM|IM|A)/gi, '<<');
     line = prefix + namePart;
   }
 
@@ -1287,7 +1313,7 @@ export function cleanMrzLine1(rawLine1: string): string {
     const sepIdx = line.indexOf('<<');
     const surnamePart = line.substring(0, sepIdx + 2);
     let givenPart = line.substring(sepIdx + 2);
-    givenPart = givenPart.replace(/([A-Z]{3,}?)(C*L{3,}[A-Z0-9<]*|K*S*K*L{3,}[A-Z0-9<]*|C{3,}[A-Z0-9<]*|[LIXCKVJ10SRE]{4,}[A-Z0-9<]*)$/i, '$1');
+    givenPart = givenPart.replace(/(?:C+L{3,}[A-Z0-9<]*|L{3,}[A-Z0-9<]*|[LIXCKVJ10SRE]{5,}[A-Z0-9<]*)$/i, '');
     line = surnamePart + givenPart;
   }
 
@@ -1544,23 +1570,26 @@ export function parseNamesFromMrz(
   // e.g. '<C<', '<K<', '<L<', '<LK<', '<KL<', '<X<' -> '<'
   namesSection = namesSection.replace(/<[CKLXI1(0O]{1,2}<+/gi, '<');
 
-  // Fix OCR misreads of double chevrons '<<' as 'SS', 'LL', 'KL', 'LK', 'CC', 'XX', '11', 'II', '00', '<L', 'L<' between name words
-  // Note: Check if the names section (first 25 chars) contains '<<', ignoring trailing filler chevrons
+  // Fix OCR misreads of double chevrons '<<' as 'SS', 'LL', 'CC', 'KK' ONLY when no chevrons were detected in the name region
+  // Note: Never split genuine names containing 'SS' (e.g. HUSSEIN, HASSAN, YOUSSEF, NASSER) or 'LL' (ABDALLAH)
   const namesRegion = namesSection.substring(0, Math.min(namesSection.length, 25));
-  if (!namesRegion.includes('<<')) {
-    namesSection = namesSection.replace(/([A-Z]{2,}?)(<*SS<*|<*LL<*|<*KL<*|<*LK<*|<*CC<*|<*KK<*|<*XX<*|<*11<*|<*II<*|<*00<*|<L|L<|<S|S<)([A-Z]{2,})/gi, '$1<<$3');
+  if (!namesRegion.includes('<') && namesSection.length > 6) {
+    namesSection = namesSection.replace(/(?<!HU|HA|YOU|NA|BA|JA|GA|I)(SS|LL|CC|KK)(?!EIN|AN|EF|ER|EM|IM|A)/gi, '<<');
   }
+
+  // Strip trailing filler chevrons first to get the active name region
+  const trimmedNames = namesSection.replace(/<+$/, '');
 
   let surnameRaw = '';
   let givenNamesRaw = '';
 
-  if (namesSection.includes('<<')) {
-    const sepIdx = namesSection.indexOf('<<');
-    surnameRaw = namesSection.substring(0, sepIdx);
-    let afterSurname = namesSection.substring(sepIdx + 2);
+  if (trimmedNames.includes('<<')) {
+    const sepIdx = trimmedNames.indexOf('<<');
+    surnameRaw = trimmedNames.substring(0, sepIdx);
+    let afterSurname = trimmedNames.substring(sepIdx + 2);
 
     // Strip trailing OCR noise glued directly to given names (e.g. FATIMATOUCLLLLCLLLLRL -> FATIMATOU)
-    afterSurname = afterSurname.replace(/([A-Z]{3,}?)(C*L{3,}[A-Z0-9<]*|K*S*K*L{3,}[A-Z0-9<]*|C{3,}[A-Z0-9<]*|[LIXCKVJ10SRE]{4,}[A-Z0-9<]*)$/i, '$1');
+    afterSurname = afterSurname.replace(/(?:C+L{3,}[A-Z0-9<]*|L{3,}[A-Z0-9<]*|[LIXCKVJ10SRE]{5,}[A-Z0-9<]*)$/i, '');
 
     // Any run of 2+ chevrons in afterSurname indicates end of given names and start of filler
     const endMatch = afterSurname.match(/<{2,}/);
@@ -1569,19 +1598,25 @@ export function parseNamesFromMrz(
     }
     // Strip trailing single chevron noise letters: e.g. '<K', '<L', '<C', '<X', '<LK'
     afterSurname = afterSurname.replace(/(?:<+[CKLIE1X(0O]{1,2})+(?=<|$)/gi, '');
+    afterSurname = afterSurname.replace(/[CKLX1I]+$/i, '');
     afterSurname = afterSurname.replace(/<+$/, '');
 
     givenNamesRaw = afterSurname;
   } else {
     // Single chevron fallback (dropped chevron from << or natural order single-chevron format)
-    let cleaned = namesSection.replace(/(?:<+[CKLIE1X(0O]{1,2})+(?=<|$)/gi, '').replace(/<+$/, '');
+    let cleaned = trimmedNames.replace(/(?:<+[CKLIE1X(0O]{1,2})+(?=<|$)/gi, '').replace(/<+$/, '');
     const words = cleaned.split('<').filter(Boolean);
     if (words.length >= 2) {
       if (['AL', 'EL', 'OULD', 'BEN', 'BIN', 'AIT'].includes(words[0])) {
         surnameRaw = words[0] + ' ' + words[1];
         givenNamesRaw = words.slice(2).join(' ');
+      } else if (words[0].startsWith('AL') && words[0].length >= 5 && words.length >= 3) {
+        // Surname first with Arabic family name prefix: ALHALMANY<OSAMAH<HUSSEIN<ABDU<AHS
+        surnameRaw = words[0];
+        givenNamesRaw = words.slice(1).join(' ');
       } else {
         // Natural order: words in passport line are [Given Names..., Surname]
+        // e.g. OSAMAH<HUSSEIN<ABDU<AHS<ALHALMANY
         givenNamesRaw = words.slice(0, -1).join(' ');
         surnameRaw = words[words.length - 1];
       }

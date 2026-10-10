@@ -269,32 +269,17 @@ class ApiService {
     engine?: string,
     onStatusUpdate?: (status: string) => void
   ): Promise<ScannedPassportData> {
+    // 100% Client-Side In-Browser Execution — Zero image transmission to server
     try {
-      // 1. Attempt local in-browser processing directly on the device
       const browserResult = await scanPassportInBrowser(image, onStatusUpdate);
       if (browserResult && browserResult.passportNumber) {
-        return { ...browserResult, confidenceScore: 100 };
+        return { ...browserResult, confidenceScore: browserResult.confidenceScore || 100 };
       }
+      throw new Error('MRZ lines could not be isolated. Use the interactive Crop Tool to frame the bottom two lines of the passport.');
     } catch (browserErr: any) {
-      console.warn('[PassportScanner] In-browser client scan encountered an issue (falling back to server endpoint):', browserErr);
+      console.warn('[PassportScanner] Local client scan error:', browserErr);
+      throw new Error(browserErr.message || 'Could not isolate MRZ lines on device. Please adjust or crop the bottom MRZ section using the Crop tool.');
     }
-
-    // 2. Fallback to hosted server scanner endpoint if browser worker / CDN loading was restricted on Render
-    if (onStatusUpdate) onStatusUpdate('Processing passport via server OCR & MRZ verification engine...');
-    try {
-      const serverResult = await this.request<ScannedPassportData>('/scan-passport', {
-        method: 'POST',
-        body: JSON.stringify({ image, mimeType, engine }),
-      });
-      if (serverResult) {
-        return { ...serverResult, confidenceScore: 100 };
-      }
-    } catch (serverErr: any) {
-      console.error('[PassportScanner] Server fallback scan error:', serverErr);
-      throw new Error(serverErr.message || 'Could not process passport image. Please ensure the Machine Readable Zone (MRZ) is clear and well-lit.');
-    }
-
-    throw new Error('Could not process passport image. Please ensure the Machine Readable Zone (MRZ) is clear and well-lit.');
   }
 
   // Clients
