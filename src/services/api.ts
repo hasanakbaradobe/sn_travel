@@ -404,6 +404,18 @@ class ApiService {
     });
   }
 
+  async batchUpdateApplicationStatus(
+    applicationIds: number[],
+    status: ApplicationStatus,
+    deliveryDate?: string | null,
+    notes?: string
+  ): Promise<{ message: string; count: number }> {
+    return this.request<{ message: string; count: number }>('/applications/batch-status', {
+      method: 'PATCH',
+      body: JSON.stringify({ applicationIds, status, deliveryDate, notes }),
+    });
+  }
+
   async updateApplication(id: number, data: Partial<VisaApplication>): Promise<VisaApplication> {
     return this.request<VisaApplication>(`/applications/${id}`, {
       method: 'PUT',

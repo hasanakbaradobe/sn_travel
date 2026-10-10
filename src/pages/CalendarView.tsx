@@ -504,17 +504,27 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
     return list;
   }, [localTasks, applications, clients, hotelBookings]);
 
+  // Helper: Sort events so uncompleted tasks go up (top) and completed tasks go down (bottom)
+  const sortEventsUncompletedFirst = (events: CalendarEvent[]): CalendarEvent[] => {
+    return [...events].sort((a, b) => {
+      const aComp = a.isCompleted ? 1 : 0;
+      const bComp = b.isCompleted ? 1 : 0;
+      if (aComp !== bComp) return aComp - bComp;
+      return 0;
+    });
+  };
+
   // Today's Operational Breakdown
   const todayEvents = useMemo(() => {
-    return allEvents.filter((e) => e.date === todayStr);
+    return sortEventsUncompletedFirst(allEvents.filter((e) => e.date === todayStr));
   }, [allEvents, todayStr]);
 
   const overdueEvents = useMemo(() => {
-    return allEvents.filter((e) => !e.isCompleted && e.date < todayStr);
+    return sortEventsUncompletedFirst(allEvents.filter((e) => !e.isCompleted && e.date < todayStr));
   }, [allEvents, todayStr]);
 
   const tomorrowEvents = useMemo(() => {
-    return allEvents.filter((e) => e.date === tomorrowStr);
+    return sortEventsUncompletedFirst(allEvents.filter((e) => e.date === tomorrowStr));
   }, [allEvents, tomorrowStr]);
 
   const todayDeliveries = useMemo(() => {
@@ -566,13 +576,19 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
     });
   }, [allEvents, searchQuery, typeFilter, statusFilter, userFilter, todayStr]);
 
-  // Group filtered events by date string
+  // Group filtered events by date string and sort uncompleted up / completed down for every date
   const eventsByDate = useMemo(() => {
     const map: Record<string, CalendarEvent[]> = {};
     filteredEvents.forEach((ev) => {
       if (!map[ev.date]) map[ev.date] = [];
       map[ev.date].push(ev);
     });
+
+    // Ensure uncompleted tasks go up and completed tasks go down for each date
+    Object.keys(map).forEach((dateKey) => {
+      map[dateKey] = sortEventsUncompletedFirst(map[dateKey]);
+    });
+
     return map;
   }, [filteredEvents]);
 
@@ -861,7 +877,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
         </div>
 
         {/* Task Cards Grid for Active Hub Tab */}
-        <div className="space-y-2.5 max-h-80 overflow-y-auto no-scrollbar pr-1">
+        <div className="space-y-2.5 max-h-80 overflow-y-auto pr-1">
           {activeDailyHubEvents.length === 0 ? (
             <div className="p-8 text-center bg-slate-900/60 rounded-xl border border-dashed border-slate-800 text-slate-400 text-xs">
               <CheckCircle2 className="w-6 h-6 text-emerald-500/80 mx-auto mb-2" />
@@ -1410,7 +1426,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                   </div>
 
                   {/* Event Pills */}
-                  <div className="space-y-1 overflow-y-auto max-h-24 no-scrollbar">
+                  <div className="space-y-1 overflow-y-auto max-h-24">
                     {cellEvents.slice(0, 3).map((ev) => {
                       const isCompleted = ev.isCompleted;
                       const isDelivery = ev.type === 'delivery';
@@ -1589,7 +1605,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                     </div>
                   )}
 
-                  <div className="space-y-2 flex-1 overflow-y-auto no-scrollbar">
+                  <div className="space-y-2 flex-1 overflow-y-auto">
                     {colEvents.length === 0 ? (
                       <div className="text-center py-8 text-[11px] text-slate-400">No events</div>
                     ) : (
@@ -1811,7 +1827,12 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
             </div>
           ) : (
             filteredEvents
-              .sort((a, b) => a.date.localeCompare(b.date))
+              .sort((a, b) => {
+                if (a.date !== b.date) return a.date.localeCompare(b.date);
+                const aComp = a.isCompleted ? 1 : 0;
+                const bComp = b.isCompleted ? 1 : 0;
+                return aComp - bComp;
+              })
               .map((ev) => {
                 const priorityBadge = ev.priority ? getPriorityBadge(ev.priority) : null;
                 const isOverdue = !ev.isCompleted && ev.date < todayStr;
@@ -1978,7 +1999,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
               </button>
             </div>
 
-            <div className="p-5 flex-1 overflow-y-auto no-scrollbar space-y-3">
+            <div className="p-5 flex-1 overflow-y-auto space-y-3">
               {selectedDayEvents.length === 0 ? (
                 <div className="p-8 text-center text-slate-400 text-xs">
                   No tasks or deliveries scheduled on {selectedDate}.

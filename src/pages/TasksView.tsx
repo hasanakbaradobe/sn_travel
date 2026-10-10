@@ -57,7 +57,12 @@ export const TasksView: React.FC<TasksViewProps> = ({
       );
     }
 
-    return list.sort((a, b) => new Date(a.due_date).getTime() - new Date(b.due_date).getTime());
+    return list.sort((a, b) => {
+      const aComp = a.status === 'Completed' ? 1 : 0;
+      const bComp = b.status === 'Completed' ? 1 : 0;
+      if (aComp !== bComp) return aComp - bComp;
+      return new Date(a.due_date).getTime() - new Date(b.due_date).getTime();
+    });
   }, [tasks, filterStatus, filterPriority, search]);
 
   const today = new Date().toISOString().split('T')[0];

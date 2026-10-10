@@ -13,10 +13,12 @@ import {
   CheckCircle2,
   Trash2,
   AlertTriangle,
+  Layers,
 } from 'lucide-react';
 import { VisaApplication, ALL_APPLICATION_STATUSES, VisaType } from '../types';
 import { STATUS_CONFIG } from '../utils/status';
 import { ClientAvatar } from '../components/ClientAvatar';
+import { BatchApplicationStatusModal } from '../components/BatchApplicationStatusModal';
 import { useDebounce } from '../hooks/useDebounce';
 import { api } from '../services/api';
 
@@ -45,6 +47,10 @@ export const ApplicationsView: React.FC<ApplicationsViewProps> = ({
   const debouncedSearch = useDebounce(localSearch, 300);
   const [selectedStatus, setSelectedStatus] = useState<string>('ACTIVE');
   const [selectedVisaType, setSelectedVisaType] = useState<string>('ALL');
+
+  // Batch selection state
+  const [selectedAppIds, setSelectedAppIds] = useState<number[]>([]);
+  const [batchModalOpen, setBatchModalOpen] = useState(false);
 
   // Pagination state
   const [currentPage, setCurrentPage] = useState<number>(1);
@@ -118,6 +124,29 @@ export const ApplicationsView: React.FC<ApplicationsViewProps> = ({
   const paginatedApps = useMemo(() => {
     return filteredApps.slice(startIndex, startIndex + itemsPerPage);
   }, [filteredApps, startIndex, itemsPerPage]);
+
+  const selectedApplications = useMemo(() => {
+    return applications.filter((a) => selectedAppIds.includes(a.id));
+  }, [applications, selectedAppIds]);
+
+  const isAllSelected = useMemo(() => {
+    return paginatedApps.length > 0 && paginatedApps.every((a) => selectedAppIds.includes(a.id));
+  }, [paginatedApps, selectedAppIds]);
+
+  const handleToggleSelectAll = () => {
+    if (isAllSelected) {
+      setSelectedAppIds((prev) => prev.filter((id) => !paginatedApps.some((a) => a.id === id)));
+    } else {
+      const pageIds = paginatedApps.map((a) => a.id);
+      setSelectedAppIds((prev) => Array.from(new Set([...prev, ...pageIds])));
+    }
+  };
+
+  const handleToggleSelectRow = (id: number) => {
+    setSelectedAppIds((prev) =>
+      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
+    );
+  };
 
   return (
     <div className="p-4 sm:p-6 lg:p-8 space-y-6 max-w-7xl mx-auto">
@@ -238,12 +267,53 @@ export const ApplicationsView: React.FC<ApplicationsViewProps> = ({
         </div>
       </div>
 
+      {/* Floating Batch Action Bar */}
+      {selectedAppIds.length > 0 && (
+        <div className="bg-slate-900 text-white p-3.5 rounded-xl border border-slate-800 shadow-xl flex items-center justify-between gap-4 animate-in slide-in-from-top-2 duration-200">
+          <div className="flex items-center gap-3">
+            <span className="bg-sky-500/20 text-sky-300 border border-sky-400/30 text-xs font-bold px-2.5 py-1 rounded-full flex items-center gap-1.5">
+              <Layers className="w-3.5 h-3.5 text-sky-400" />
+              <span>{selectedAppIds.length} Selected</span>
+            </span>
+            <span className="text-xs text-slate-300 hidden sm:inline">
+              Simultaneously update processing status for all selected applications.
+            </span>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setSelectedAppIds([])}
+              className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-lg text-xs font-semibold transition cursor-pointer"
+            >
+              Clear
+            </button>
+            <button
+              type="button"
+              onClick={() => setBatchModalOpen(true)}
+              className="px-4 py-1.5 bg-sky-600 hover:bg-sky-700 text-white rounded-lg text-xs font-bold shadow-xs flex items-center gap-1.5 transition cursor-pointer active:scale-95"
+            >
+              <Layers className="w-4 h-4" />
+              <span>Batch Update Status ({selectedAppIds.length})</span>
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Applications Table */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs">
             <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold uppercase tracking-wider">
               <tr>
+                <th className="py-3 px-3.5 w-10 text-center">
+                  <input
+                    type="checkbox"
+                    checked={isAllSelected}
+                    onChange={handleToggleSelectAll}
+                    className="w-4 h-4 text-sky-600 rounded border-slate-300 focus:ring-sky-500 cursor-pointer"
+                    title="Select / Deselect all on current page"
+                  />
+                </th>
                 <th className="py-3 px-4 whitespace-nowrap">App ID</th>
                 <th className="py-3 px-4">Client Name</th>
                 <th className="py-3 px-4 whitespace-nowrap">Passport Number</th>
@@ -257,13 +327,13 @@ export const ApplicationsView: React.FC<ApplicationsViewProps> = ({
             <tbody className="divide-y divide-slate-100">
               {loading && applications.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="py-12 text-center text-slate-400">
+                  <td colSpan={9} className="py-12 text-center text-slate-400">
                     Loading applications...
                   </td>
                 </tr>
               ) : filteredApps.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="py-12 text-center text-slate-400">
+                  <td colSpan={9} className="py-12 text-center text-slate-400">
                     {selectedStatus === 'ACTIVE'
                       ? 'No active visa applications in progress.'
                       : selectedStatus === 'Returned'
@@ -274,12 +344,24 @@ export const ApplicationsView: React.FC<ApplicationsViewProps> = ({
               ) : (
                 paginatedApps.map((app) => {
                   const statusConf = STATUS_CONFIG[app.status];
+                  const isSelected = selectedAppIds.includes(app.id);
 
                   return (
                     <tr
                       key={app.id}
-                      className="hover:bg-slate-50/90 transition group"
+                      className={`transition group ${
+                        isSelected ? 'bg-sky-50/60 hover:bg-sky-50' : 'hover:bg-slate-50/90'
+                      }`}
                     >
+                      {/* Selection Checkbox */}
+                      <td className="py-3.5 px-3.5 text-center">
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={() => handleToggleSelectRow(app.id)}
+                          className="w-4 h-4 text-sky-600 rounded border-slate-300 focus:ring-sky-500 cursor-pointer"
+                        />
+                      </td>
                       {/* App ID */}
                       <td className="py-3.5 px-4 font-mono font-bold text-slate-600 whitespace-nowrap">
                         {app.application_id}
@@ -489,6 +571,17 @@ export const ApplicationsView: React.FC<ApplicationsViewProps> = ({
           </div>
         </div>
       )}
+
+      {/* Batch Application Status Modal */}
+      <BatchApplicationStatusModal
+        isOpen={batchModalOpen}
+        onClose={() => setBatchModalOpen(false)}
+        selectedApplications={selectedApplications}
+        onSuccess={() => {
+          setSelectedAppIds([]);
+          if (onRefreshData) onRefreshData();
+        }}
+      />
     </div>
   );
 };

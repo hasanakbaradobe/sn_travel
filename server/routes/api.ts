@@ -516,6 +516,32 @@ apiRouter.patch('/applications/:id/status', async (req: Request, res: Response) 
   return res.json(updated);
 });
 
+apiRouter.patch('/applications/batch-status', async (req: Request, res: Response) => {
+  const currentUser = getCurrentUser(req);
+  const { applicationIds, status, deliveryDate, notes } = req.body;
+
+  if (!Array.isArray(applicationIds) || applicationIds.length === 0) {
+    return res.status(400).json({ error: 'Please select at least one application to update' });
+  }
+
+  if (!status) {
+    return res.status(400).json({ error: 'Target status is required' });
+  }
+
+  const result = await dbService.batchUpdateApplicationStatus(
+    applicationIds.map(id => Number(id)),
+    status,
+    deliveryDate,
+    notes,
+    currentUser?.id || 1
+  );
+
+  return res.json({
+    message: result.message,
+    count: result.updatedCount,
+  });
+});
+
 apiRouter.put('/applications/:id', async (req: Request, res: Response) => {
   const currentUser = getCurrentUser(req);
   const id = parseInt(req.params.id, 10);

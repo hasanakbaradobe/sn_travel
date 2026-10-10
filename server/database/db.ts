@@ -1691,6 +1691,42 @@ export const dbService = {
     return app;
   },
 
+  async batchUpdateApplicationStatus(
+    applicationIds: number[],
+    newStatus: string,
+    deliveryDate?: string | null,
+    notes?: string,
+    userId = 1
+  ) {
+    if (!Array.isArray(applicationIds) || applicationIds.length === 0) {
+      return { success: false, updatedCount: 0, message: 'No applications specified.' };
+    }
+
+    let updatedCount = 0;
+    for (const appId of applicationIds) {
+      const updated = await this.updateApplicationStatus(
+        appId,
+        newStatus,
+        deliveryDate,
+        notes ? `[Batch Update] ${notes}` : `Batch status update to ${newStatus}`,
+        userId
+      );
+      if (updated) {
+        updatedCount++;
+      }
+    }
+
+    this.logActivity(
+      userId,
+      'BATCH_UPDATE_STATUS',
+      'APPLICATION',
+      null,
+      `Batch updated ${updatedCount} applications to status "${newStatus}"`
+    );
+
+    return { success: true, updatedCount, message: `Successfully updated ${updatedCount} applications.` };
+  },
+
   async updateApplication(id: number, data: Partial<VisaApplication>, userId = 1) {
     const app = store.visa_applications.find(a => a.id === id);
     if (!app) return null;
