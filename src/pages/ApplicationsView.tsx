@@ -305,14 +305,6 @@ export const ApplicationsView: React.FC<ApplicationsViewProps> = ({
                             </button>
                             <div className="flex items-center gap-1.5 text-[11px] text-slate-500 mt-0.5 flex-wrap">
                               <span className="font-mono text-slate-400">{app.client_code}</span>
-                              {app.passport_number && (
-                                <>
-                                  <span>•</span>
-                                  <span className="font-mono font-semibold text-slate-800 bg-slate-100 px-1.5 py-0.2 rounded border border-slate-200">
-                                    Passport: {app.passport_number}
-                                  </span>
-                                </>
-                              )}
                               {app.country && (
                                 <>
                                   <span>•</span>
@@ -320,11 +312,6 @@ export const ApplicationsView: React.FC<ApplicationsViewProps> = ({
                                 </>
                               )}
                             </div>
-                            {app.client_photo_url ? (
-                              <div className="text-[10px] text-sky-700 font-semibold flex items-center gap-1 mt-0.5">
-                                <span>Click photo to enlarge</span>
-                              </div>
-                            ) : null}
                           </div>
                         </div>
                       </td>

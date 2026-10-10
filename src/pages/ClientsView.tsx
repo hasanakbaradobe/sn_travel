@@ -310,11 +310,7 @@ export const ClientsView: React.FC<ClientsViewProps> = ({
                                 {client.occupation}
                               </div>
                             )}
-                            {client.photo_url ? (
-                              <div className="text-[10px] text-sky-700 font-semibold flex items-center gap-1 mt-0.5">
-                                <span>Click photo to enlarge</span>
-                              </div>
-                            ) : null}
+
                           </div>
                         </div>
                       </td>
