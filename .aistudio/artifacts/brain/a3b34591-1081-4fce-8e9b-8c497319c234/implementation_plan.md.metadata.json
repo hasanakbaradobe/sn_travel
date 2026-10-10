@@ -1,6 +1,0 @@
-{
-  "summary":  "Revised implementation plan strictly removing all AI/LLM models and replacing them with a 100% deterministic, zero-AI computer vision and algorithmic OCR pipeline: OCR-B binarization, perspective MRZ isolation, and mathematical ICAO Doc 9303 Modulo-10 checksum error repair.",
-  "updatedAt":  "2026-10-10T10:01:02.970868475Z",
-  "requestFeedback":  true,
-  "userFacing":  true
-}
