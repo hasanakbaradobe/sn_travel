@@ -21,6 +21,16 @@ import path from 'path';
 
 export const apiRouter = Router();
 
+// Middleware: Auto-sync fresh records from MySQL database on API requests (uses 5s TTL cache)
+apiRouter.use(async (_req: Request, _res: Response, next: NextFunction) => {
+  try {
+    await dbService.syncFromMySQL(false);
+  } catch (err: any) {
+    // Non-blocking sync error catch
+  }
+  next();
+});
+
 // Health Check (Public)
 apiRouter.get('/health', (_req: Request, res: Response) => {
   return res.json({ status: 'ok', timestamp: new Date().toISOString() });

@@ -634,25 +634,33 @@ async function syncFromMySQL(force = false) {
     return; // Serve cached in-memory store immediately
   }
 
+  const safeQuery = async (sql: string) => {
+    try {
+      const [rows]: any = await pool!.query(sql);
+      return rows;
+    } catch (err: any) {
+      console.warn(`[MySQL Table Sync Warning] (${sql}):`, err?.message || err);
+      return null;
+    }
+  };
+
   try {
-    const [
-      [u], [c], [cl], [cf], [cfv], [vt], [va], [ash], [t], [cm], [al], [h], [hr], [hb], [s]
-    ]: any[] = await Promise.all([
-      pool.query('SELECT * FROM users'),
-      pool.query('SELECT * FROM countries ORDER BY display_order ASC, name ASC'),
-      pool.query('SELECT * FROM clients'),
-      pool.query('SELECT * FROM client_custom_fields ORDER BY display_order ASC'),
-      pool.query('SELECT * FROM client_custom_field_values'),
-      pool.query('SELECT * FROM visa_types'),
-      pool.query('SELECT * FROM visa_applications'),
-      pool.query('SELECT * FROM application_status_history'),
-      pool.query('SELECT * FROM tasks'),
-      pool.query('SELECT * FROM comments'),
-      pool.query('SELECT * FROM activity_logs'),
-      pool.query('SELECT * FROM hotels'),
-      pool.query('SELECT * FROM hotel_rooms'),
-      pool.query('SELECT * FROM hotel_bookings'),
-      pool.query('SELECT * FROM settings'),
+    const [u, c, cl, cf, cfv, vt, va, ash, t, cm, al, h, hr, hb, s] = await Promise.all([
+      safeQuery('SELECT * FROM users'),
+      safeQuery('SELECT * FROM countries ORDER BY display_order ASC, name ASC'),
+      safeQuery('SELECT * FROM clients'),
+      safeQuery('SELECT * FROM client_custom_fields ORDER BY display_order ASC'),
+      safeQuery('SELECT * FROM client_custom_field_values'),
+      safeQuery('SELECT * FROM visa_types'),
+      safeQuery('SELECT * FROM visa_applications'),
+      safeQuery('SELECT * FROM application_status_history'),
+      safeQuery('SELECT * FROM tasks'),
+      safeQuery('SELECT * FROM comments'),
+      safeQuery('SELECT * FROM activity_logs'),
+      safeQuery('SELECT * FROM hotels'),
+      safeQuery('SELECT * FROM hotel_rooms'),
+      safeQuery('SELECT * FROM hotel_bookings'),
+      safeQuery('SELECT * FROM settings'),
     ]);
 
     if (Array.isArray(u) && u.length > 0) store.users = u;
@@ -1588,8 +1596,19 @@ export const dbService = {
         );
         if (newStatus === 'Returned') {
           await pool.query(
-            'UPDATE tasks SET status = "Completed", completed_at = NOW(), updated_at = NOW() WHERE application_id = ? AND status = "Pending"',
-            [id]
+            `UPDATE tasks 
+             SET status = 'Completed', completed_at = NOW(), updated_at = NOW() 
+             WHERE (application_id = ? OR (client_id = ? AND (is_delivery_task = 1 OR title LIKE '%Delivery%' OR title LIKE '%Collection%' OR title LIKE '%Passport%'))) 
+               AND status != 'Completed'`,
+            [id, app.client_id]
+          );
+        } else if (oldStatus === 'Returned') {
+          await pool.query(
+            `UPDATE tasks 
+             SET status = 'Pending', completed_at = NULL, updated_at = NOW() 
+             WHERE (application_id = ? OR (client_id = ? AND (is_delivery_task = 1 OR title LIKE '%Delivery%' OR title LIKE '%Collection%' OR title LIKE '%Passport%'))) 
+               AND status = 'Completed'`,
+            [id, app.client_id]
           );
         }
       } catch (err: any) {
@@ -1614,12 +1633,26 @@ export const dbService = {
       await this.syncDeliveryTask(app, clientName, userId);
     }
 
-    // If status is Returned, complete any pending tasks linked to this application
+    // If status is Returned, complete any pending collection or delivery tasks linked to this application
     if (newStatus === 'Returned') {
       store.tasks.forEach(t => {
-        if (t.application_id === id && t.status === 'Pending') {
+        if (
+          (t.application_id === id || (t.client_id === app.client_id && (t.is_delivery_task === 1 || t.title.toLowerCase().includes('delivery') || t.title.toLowerCase().includes('collection') || t.title.toLowerCase().includes('passport')))) &&
+          t.status !== 'Completed'
+        ) {
           t.status = 'Completed';
           t.completed_at = new Date().toISOString();
+          t.updated_at = new Date().toISOString();
+        }
+      });
+    } else if (oldStatus === 'Returned') {
+      store.tasks.forEach(t => {
+        if (
+          (t.application_id === id || (t.client_id === app.client_id && (t.is_delivery_task === 1 || t.title.toLowerCase().includes('delivery') || t.title.toLowerCase().includes('collection') || t.title.toLowerCase().includes('passport')))) &&
+          t.status === 'Completed'
+        ) {
+          t.status = 'Pending';
+          t.completed_at = null;
           t.updated_at = new Date().toISOString();
         }
       });
@@ -1643,6 +1676,62 @@ export const dbService = {
     const client = store.clients.find(c => c.id === app.client_id);
     const clientName = client?.full_name || 'Client';
 
+    const oldStatus = app.status;
+    if (data.status !== undefined && data.status !== oldStatus) {
+      app.status = data.status;
+      if (data.status === 'Returned') {
+        if (isConnectedToMySQL && pool) {
+          try {
+            await pool.query(
+              `UPDATE tasks 
+               SET status = 'Completed', completed_at = NOW(), updated_at = NOW() 
+               WHERE (application_id = ? OR (client_id = ? AND (is_delivery_task = 1 OR title LIKE '%Delivery%' OR title LIKE '%Collection%' OR title LIKE '%Passport%'))) 
+                 AND status != 'Completed'`,
+              [id, app.client_id]
+            );
+          } catch (err: any) {
+            console.error('[MySQL] Error completing tasks on status Returned:', err.message);
+          }
+        }
+
+        store.tasks.forEach(t => {
+          if (
+            (t.application_id === id || (t.client_id === app.client_id && (t.is_delivery_task === 1 || t.title.toLowerCase().includes('delivery') || t.title.toLowerCase().includes('collection') || t.title.toLowerCase().includes('passport')))) &&
+            t.status !== 'Completed'
+          ) {
+            t.status = 'Completed';
+            t.completed_at = new Date().toISOString();
+            t.updated_at = new Date().toISOString();
+          }
+        });
+      } else if (oldStatus === 'Returned' && data.status !== 'Returned') {
+        if (isConnectedToMySQL && pool) {
+          try {
+            await pool.query(
+              `UPDATE tasks 
+               SET status = 'Pending', completed_at = NULL, updated_at = NOW() 
+               WHERE (application_id = ? OR (client_id = ? AND (is_delivery_task = 1 OR title LIKE '%Delivery%' OR title LIKE '%Collection%' OR title LIKE '%Passport%'))) 
+                 AND status = 'Completed'`,
+              [id, app.client_id]
+            );
+          } catch (err: any) {
+            console.error('[MySQL] Error uncompleting tasks on status change from Returned:', err.message);
+          }
+        }
+
+        store.tasks.forEach(t => {
+          if (
+            (t.application_id === id || (t.client_id === app.client_id && (t.is_delivery_task === 1 || t.title.toLowerCase().includes('delivery') || t.title.toLowerCase().includes('collection') || t.title.toLowerCase().includes('passport')))) &&
+            t.status === 'Completed'
+          ) {
+            t.status = 'Pending';
+            t.completed_at = null;
+            t.updated_at = new Date().toISOString();
+          }
+        });
+      }
+    }
+
     if (data.visa_type_id !== undefined) app.visa_type_id = data.visa_type_id;
     if (data.assigned_user_id !== undefined) app.assigned_user_id = data.assigned_user_id;
     if (data.notes !== undefined) app.notes = data.notes;
@@ -1660,8 +1749,8 @@ export const dbService = {
     if (isConnectedToMySQL && pool) {
       try {
         await pool.query(
-          `UPDATE visa_applications SET visa_type_id = ?, assigned_user_id = ?, notes = ?, delivery_date = ?, updated_at = NOW() WHERE id = ?`,
-          [app.visa_type_id, app.assigned_user_id || null, app.notes || null, app.delivery_date || null, id]
+          `UPDATE visa_applications SET status = ?, visa_type_id = ?, assigned_user_id = ?, notes = ?, delivery_date = ?, updated_at = NOW() WHERE id = ?`,
+          [app.status, app.visa_type_id, app.assigned_user_id || null, app.notes || null, app.delivery_date || null, id]
         );
       } catch (err: any) {
         console.error('[MySQL] Error updating application in MySQL:', err.message);
@@ -1686,6 +1775,10 @@ export const dbService = {
 
     if (existingTask) {
       existingTask.due_date = app.delivery_date;
+      if (app.status !== 'Returned' && existingTask.status === 'Completed') {
+        existingTask.status = 'Pending';
+        existingTask.completed_at = null;
+      }
       existingTask.updated_at = new Date().toISOString();
       if (validAssignedUserId) {
         existingTask.assigned_user_id = validAssignedUserId;
@@ -1693,8 +1786,8 @@ export const dbService = {
       if (isConnectedToMySQL && pool) {
         try {
           await pool.query(
-            'UPDATE tasks SET due_date = ?, assigned_user_id = COALESCE(?, assigned_user_id), updated_at = NOW() WHERE id = ?',
-            [app.delivery_date, validAssignedUserId, existingTask.id]
+            'UPDATE tasks SET due_date = ?, status = ?, completed_at = ?, assigned_user_id = COALESCE(?, assigned_user_id), updated_at = NOW() WHERE id = ?',
+            [app.delivery_date, existingTask.status, existingTask.completed_at ? new Date(existingTask.completed_at) : null, validAssignedUserId, existingTask.id]
           );
         } catch (err: any) {
           console.error('[MySQL] Error updating delivery task:', err.message);
@@ -1887,11 +1980,53 @@ export const dbService = {
     }
     if (data.due_date !== undefined) task.due_date = data.due_date;
     if (data.priority !== undefined) task.priority = data.priority;
+    const wasCompleted = task.status === 'Completed';
     if (data.status !== undefined) {
       task.status = data.status;
       task.completed_at = data.status === 'Completed' ? new Date().toISOString() : null;
     }
     task.updated_at = new Date().toISOString();
+
+    if (data.status === 'Completed' && !wasCompleted) {
+      // If completing a collection/delivery or application-linked task, mark application status as Returned
+      let appId = task.application_id;
+      if (!appId && task.client_id) {
+        const activeApp = store.visa_applications.find(a => Number(a.client_id) === Number(task.client_id) && a.status !== 'Returned');
+        if (activeApp) appId = activeApp.id;
+      }
+      if (appId) {
+        try {
+          await this.updateApplicationStatus(appId, 'Returned', undefined, 'Collection task completed.', userId);
+        } catch (err: any) {
+          console.error('[MySQL] Error auto-updating application to Returned on task complete:', err.message);
+        }
+      }
+    } else if (data.status === 'Pending' && wasCompleted) {
+      // If uncompleting a collection/delivery task, revert application status if currently Returned
+      let appId = task.application_id;
+      if (!appId && task.client_id) {
+        const returnedApp = store.visa_applications.find(a => Number(a.client_id) === Number(task.client_id) && a.status === 'Returned');
+        if (returnedApp) appId = returnedApp.id;
+      }
+      if (appId) {
+        const app = store.visa_applications.find(a => a.id === appId);
+        if (app && app.status === 'Returned') {
+          const history = (store.application_status_history || [])
+            .filter(h => h.application_id === appId)
+            .sort((a, b) => (b.id || 0) - (a.id || 0));
+          const returnedEntry = history.find(h => h.new_status === 'Returned');
+          const previousStatus = (returnedEntry && returnedEntry.old_status && returnedEntry.old_status !== 'Returned')
+            ? returnedEntry.old_status
+            : 'Pending Collection';
+
+          try {
+            await this.updateApplicationStatus(appId, previousStatus, undefined, 'Reverted status from Returned because collection task was marked uncompleted.', userId);
+          } catch (err: any) {
+            console.error('[MySQL] Error reverting application status on task uncomplete:', err.message);
+          }
+        }
+      }
+    }
 
     if (isConnectedToMySQL && pool) {
       try {
@@ -1932,12 +2067,35 @@ export const dbService = {
       store.tasks.splice(idx, 1);
     }
 
-    if (store.hotel_bookings) {
-      store.hotel_bookings.forEach(b => {
-        if (Number(b.checkout_task_id) === Number(id)) {
-          b.checkout_task_id = null;
+    if (task) {
+      // Clear delivery_date on linked application so it doesn't reappear on calendar
+      if (task.is_delivery_task === 1 || task.application_id) {
+        if (task.application_id) {
+          const app = store.visa_applications.find(a => a.id === task.application_id);
+          if (app) {
+            app.delivery_date = null;
+          }
+          if (isConnectedToMySQL && pool) {
+            await pool.query('UPDATE visa_applications SET delivery_date = NULL WHERE id = ?', [task.application_id]).catch(() => {});
+          }
+        } else if (task.client_id) {
+          const apps = store.visa_applications.filter(a => a.client_id === task.client_id && a.delivery_date);
+          apps.forEach(app => {
+            app.delivery_date = null;
+          });
+          if (isConnectedToMySQL && pool) {
+            await pool.query('UPDATE visa_applications SET delivery_date = NULL WHERE client_id = ?', [task.client_id]).catch(() => {});
+          }
         }
-      });
+      }
+
+      if (store.hotel_bookings) {
+        store.hotel_bookings.forEach(b => {
+          if (Number(b.checkout_task_id) === Number(id)) {
+            b.checkout_task_id = null;
+          }
+        });
+      }
     }
 
     saveStore(store);

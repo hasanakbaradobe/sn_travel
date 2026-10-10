@@ -24,10 +24,13 @@ import { NewTaskModal } from './components/NewTaskModal';
 import { DatabaseModal } from './components/DatabaseModal';
 import { PassportScannerModal } from './components/PassportScannerModal';
 import { ChangePasswordModal } from './components/ChangePasswordModal';
+import { ReturnStatusWarningModal } from './components/ReturnStatusWarningModal';
+import { AlertTriangle, X, RotateCcw } from 'lucide-react';
 import { api } from './services/api';
 import {
   Client,
   VisaApplication,
+  ApplicationStatus,
   Task,
   VisaType,
   User,
@@ -63,6 +66,35 @@ export default function App() {
   const [newTaskClientInfo, setNewTaskClientInfo] = useState<{ id?: number; name?: string; dueDate?: string }>({});
   const [dbModalOpen, setDbModalOpen] = useState(false);
   const [changePasswordModalOpen, setChangePasswordModalOpen] = useState(false);
+
+  // Return Status Warning Modal State & Toast Banner State
+  const [returnWarningState, setReturnWarningState] = useState<{
+    isOpen: boolean;
+    mode?: 'mark_returned' | 'revert_status';
+    taskId?: number;
+    appId?: number;
+    clientName?: string;
+    applicationCode?: string;
+    taskTitle?: string;
+    dueDate?: string;
+    previousStatus?: ApplicationStatus;
+  } | null>(null);
+  const [returnWarningLoading, setReturnWarningLoading] = useState(false);
+  const [returnStatusBanner, setReturnStatusBanner] = useState<{
+    clientName: string;
+    appCode: string;
+    mode?: 'returned' | 'revert';
+    targetStatus?: ApplicationStatus;
+  } | null>(null);
+
+  // Auto-hide return status toast banner after 7 seconds
+  useEffect(() => {
+    if (!returnStatusBanner) return;
+    const timer = setTimeout(() => {
+      setReturnStatusBanner(null);
+    }, 7000);
+    return () => clearTimeout(timer);
+  }, [returnStatusBanner]);
 
   // Authentication State
   const [currentUser, setCurrentUser] = useState<User | null>(api.getCurrentUser());
@@ -327,17 +359,91 @@ export default function App() {
     }
   };
 
-  // Toggle task with instant optimistic local update and silent background refresh
+  // Toggle task with instant optimistic local update & Return Status Warning Modal for collection tasks
   const handleToggleTask = async (taskId: number) => {
+    const task = tasks.find((t) => t.id === taskId);
+    if (!task) return;
+
+    const isCollectionOrAppTask =
+      task.is_delivery_task === 1 ||
+      !!task.application_id ||
+      /collection|delivery|passport/i.test(task.title || '') ||
+      /collection|delivery/i.test(task.description || '');
+
+    // If task is currently Pending and being marked as Completed
+    if (task.status !== 'Completed') {
+      const linkedApp = task.application_id
+        ? applications.find((a) => a.id === task.application_id)
+        : applications.find((a) => a.client_id === task.client_id && a.status !== 'Returned');
+
+      if (isCollectionOrAppTask || linkedApp) {
+        setReturnWarningState({
+          isOpen: true,
+          mode: 'mark_returned',
+          taskId: task.id,
+          appId: linkedApp?.id,
+          clientName: linkedApp?.client_name || task.client_name || 'Client',
+          applicationCode: linkedApp?.application_id || task.application_code || `APP-#${task.application_id || task.id}`,
+          taskTitle: task.title,
+          dueDate: task.due_date,
+        });
+        return;
+      }
+    } else {
+      // If task is currently Completed and being marked as Uncompleted (Pending)
+      const linkedApp = task.application_id
+        ? applications.find((a) => a.id === task.application_id)
+        : applications.find((a) => a.client_id === task.client_id && a.status === 'Returned');
+
+      if ((isCollectionOrAppTask || linkedApp) && linkedApp?.status === 'Returned') {
+        let prevStatus: ApplicationStatus = 'Pending Collection';
+        try {
+          const appDetail = await api.getApplicationById(linkedApp.id);
+          if (appDetail && appDetail.history) {
+            const returnedRecord = appDetail.history.find((h) => h.new_status === 'Returned');
+            if (returnedRecord && returnedRecord.old_status && returnedRecord.old_status !== 'Returned') {
+              prevStatus = returnedRecord.old_status as ApplicationStatus;
+            }
+          }
+        } catch {
+          // fallback
+        }
+
+        setReturnWarningState({
+          isOpen: true,
+          mode: 'revert_status',
+          taskId: task.id,
+          appId: linkedApp.id,
+          clientName: linkedApp.client_name || task.client_name || 'Client',
+          applicationCode: linkedApp.application_id || task.application_code || `APP-#${linkedApp.id}`,
+          taskTitle: task.title,
+          dueDate: task.due_date,
+          previousStatus: prevStatus,
+        });
+        return;
+      }
+    }
+
+    // Direct toggle for standard tasks
+    executeToggleTask(taskId);
+  };
+
+  const executeToggleTask = async (taskId: number, appIdToReturn?: number) => {
+    const targetTask = tasks.find((t) => t.id === taskId);
+    const newStatus = targetTask?.status === 'Completed' ? 'Pending' : 'Completed';
+
     setTasks((prev) =>
       prev.map((t) =>
         t.id === taskId
-          ? { ...t, status: t.status === 'Completed' ? 'Pending' : 'Completed' }
+          ? { ...t, status: newStatus, completed_at: newStatus === 'Completed' ? new Date().toISOString() : null }
           : t
       )
     );
     try {
-      await api.toggleTaskStatus(taskId);
+      if (appIdToReturn) {
+        await api.updateApplicationStatus(appIdToReturn, 'Returned', undefined, 'Collection date task completed');
+      }
+      await api.updateTask(taskId, { status: newStatus });
       refreshAllData(true);
     } catch (err) {
       console.error(err);
@@ -345,9 +451,190 @@ export default function App() {
     }
   };
 
+  const handleConfirmReturnWarning = async () => {
+    if (!returnWarningState) return;
+    setReturnWarningLoading(true);
+    const { mode, appId, taskId, clientName, applicationCode, previousStatus } = returnWarningState;
+    const isRevert = mode === 'revert_status';
+
+    if (isRevert) {
+      const targetStatus: ApplicationStatus = previousStatus || 'Pending Collection';
+
+      // Optimistically update local application and task states
+      if (appId) {
+        setApplications((prev) =>
+          prev.map((a) => (a.id === appId ? { ...a, status: targetStatus } : a))
+        );
+        const targetApp = applications.find((a) => a.id === appId);
+        setTasks((prev) =>
+          prev.map((t) => {
+            if (
+              t.application_id === appId ||
+              (targetApp &&
+                t.client_id === targetApp.client_id &&
+                (t.is_delivery_task === 1 || /delivery|collection|passport/i.test(t.title)))
+            ) {
+              return { ...t, status: 'Pending', completed_at: null };
+            }
+            return t;
+          })
+        );
+      }
+      if (taskId) {
+        setTasks((prev) =>
+          prev.map((t) =>
+            t.id === taskId
+              ? { ...t, status: 'Pending', completed_at: null }
+              : t
+          )
+        );
+      }
+
+      try {
+        if (appId) {
+          await api.updateApplicationStatus(
+            appId,
+            targetStatus,
+            undefined,
+            `Reverted application status from Returned to ${targetStatus} because collection task was marked uncompleted.`
+          );
+        }
+        if (taskId) {
+          await api.updateTask(taskId, { status: 'Pending' });
+        }
+        setReturnStatusBanner({
+          clientName: clientName || 'Client',
+          appCode: applicationCode || 'Application',
+          mode: 'revert',
+          targetStatus: targetStatus,
+        });
+        setReturnWarningState(null);
+        refreshAllData(true);
+      } catch (err) {
+        console.error('Failed to revert collection task & application status:', err);
+        refreshAllData(true);
+      } finally {
+        setReturnWarningLoading(false);
+      }
+    } else {
+      // Mark as Returned
+      if (appId) {
+        setApplications((prev) =>
+          prev.map((a) => (a.id === appId ? { ...a, status: 'Returned' } : a))
+        );
+        const targetApp = applications.find((a) => a.id === appId);
+        setTasks((prev) =>
+          prev.map((t) => {
+            if (
+              t.application_id === appId ||
+              (targetApp &&
+                t.client_id === targetApp.client_id &&
+                (t.is_delivery_task === 1 || /delivery|collection|passport/i.test(t.title)))
+            ) {
+              return { ...t, status: 'Completed', completed_at: new Date().toISOString() };
+            }
+            return t;
+          })
+        );
+      }
+      if (taskId) {
+        setTasks((prev) =>
+          prev.map((t) =>
+            t.id === taskId
+              ? { ...t, status: 'Completed', completed_at: new Date().toISOString() }
+              : t
+          )
+        );
+      }
+
+      try {
+        if (appId) {
+          await api.updateApplicationStatus(
+            appId,
+            'Returned',
+            undefined,
+            'Collection date task completed on calendar'
+          );
+        }
+        if (taskId) {
+          await api.updateTask(taskId, { status: 'Completed' });
+        }
+        setReturnStatusBanner({
+          clientName: clientName || 'Client',
+          appCode: applicationCode || 'Application',
+          mode: 'returned',
+        });
+        setReturnWarningState(null);
+        refreshAllData(true);
+      } catch (err) {
+        console.error('Failed to complete collection task & return application:', err);
+        refreshAllData(true);
+      } finally {
+        setReturnWarningLoading(false);
+      }
+    }
+  };
+
+  // Direct toggle for application collection date event on calendar
+  const handleToggleApplicationDelivery = async (app: VisaApplication) => {
+    if (app.status === 'Returned') {
+      let prevStatus: ApplicationStatus = 'Pending Collection';
+      try {
+        const appDetail = await api.getApplicationById(app.id);
+        if (appDetail && appDetail.history) {
+          const returnedRecord = appDetail.history.find((h) => h.new_status === 'Returned');
+          if (returnedRecord && returnedRecord.old_status && returnedRecord.old_status !== 'Returned') {
+            prevStatus = returnedRecord.old_status as ApplicationStatus;
+          }
+        }
+      } catch {
+        // fallback
+      }
+
+      setReturnWarningState({
+        isOpen: true,
+        mode: 'revert_status',
+        appId: app.id,
+        clientName: app.client_name || 'Client',
+        applicationCode: app.application_id || `APP-#${app.id}`,
+        taskTitle: `Collection Date: ${app.client_name || 'Client'} (${app.visa_type_name || 'Visa'})`,
+        dueDate: app.delivery_date || undefined,
+        previousStatus: prevStatus,
+      });
+    } else {
+      setReturnWarningState({
+        isOpen: true,
+        mode: 'mark_returned',
+        appId: app.id,
+        clientName: app.client_name || 'Client',
+        applicationCode: app.application_id || `APP-#${app.id}`,
+        taskTitle: `Collection Date: ${app.client_name || 'Client'} (${app.visa_type_name || 'Visa'})`,
+        dueDate: app.delivery_date || undefined,
+      });
+    }
+  };
+
   // Delete task with instant optimistic local update and silent background refresh
   const handleDeleteTask = async (taskId: number) => {
+    const taskToDelete = tasks.find((t) => t.id === taskId);
     setTasks((prev) => prev.filter((t) => t.id !== taskId));
+
+    if (taskToDelete) {
+      if (taskToDelete.application_id) {
+        setApplications((prev) =>
+          prev.map((a) =>
+            a.id === taskToDelete.application_id ? { ...a, delivery_date: null } : a
+          )
+        );
+      } else if (taskToDelete.client_id) {
+        setApplications((prev) =>
+          prev.map((a) =>
+            a.client_id === taskToDelete.client_id ? { ...a, delivery_date: null } : a
+          )
+        );
+      }
+    }
+
     try {
       await api.deleteTask(taskId);
       refreshAllData(true);
@@ -520,6 +807,7 @@ export default function App() {
                 hotelBookings={hotelBookings}
                 onOpenNewTask={(date?: string) => handleOpenNewTaskForClient(undefined, undefined, date)}
                 onToggleTask={handleToggleTask}
+                onToggleApplicationDelivery={handleToggleApplicationDelivery}
                 onDeleteTask={handleDeleteTask}
                 onOpenClient={handleOpenClient}
                 onOpenStatusModal={handleOpenStatusModal}
@@ -636,6 +924,77 @@ export default function App() {
           // Password updated
         }}
       />
+
+      {/* Return Status Warning Modal */}
+      <ReturnStatusWarningModal
+        isOpen={!!returnWarningState?.isOpen}
+        onClose={() => setReturnWarningState(null)}
+        onConfirm={handleConfirmReturnWarning}
+        mode={returnWarningState?.mode}
+        clientName={returnWarningState?.clientName}
+        applicationCode={returnWarningState?.applicationCode}
+        taskTitle={returnWarningState?.taskTitle}
+        dueDate={returnWarningState?.dueDate}
+        previousStatus={returnWarningState?.previousStatus}
+        loading={returnWarningLoading}
+      />
+
+      {/* Return Status Alert Toast */}
+      {returnStatusBanner && (
+        <div
+          className={`fixed bottom-5 right-5 z-50 rounded-2xl shadow-2xl p-4 max-w-md flex items-start gap-3 animate-in slide-in-from-bottom-5 duration-300 border ${
+            returnStatusBanner.mode === 'revert'
+              ? 'bg-slate-900 text-sky-50 border-sky-500/80'
+              : 'bg-amber-950 text-amber-50 border-amber-600/80'
+          }`}
+        >
+          {returnStatusBanner.mode === 'revert' ? (
+            <RotateCcw className="w-6 h-6 text-sky-400 shrink-0 mt-0.5" />
+          ) : (
+            <AlertTriangle className="w-6 h-6 text-amber-400 shrink-0 mt-0.5 animate-bounce" />
+          )}
+          <div className="flex-1 min-w-0 text-xs">
+            <h4
+              className={`font-bold text-sm mb-0.5 ${
+                returnStatusBanner.mode === 'revert' ? 'text-sky-300' : 'text-amber-200'
+              }`}
+            >
+              {returnStatusBanner.mode === 'revert'
+                ? 'Application Status Reverted'
+                : 'Return Status Applied'}
+            </h4>
+            <p>
+              Application <span className="font-mono font-bold text-white">{returnStatusBanner.appCode}</span> for{' '}
+              <span className="font-bold text-white">{returnStatusBanner.clientName}</span>{' '}
+              {returnStatusBanner.mode === 'revert' ? (
+                <>
+                  has been reverted back to{' '}
+                  <span className="font-extrabold text-sky-300 underline">
+                    {returnStatusBanner.targetStatus || 'Pending Collection'}
+                  </span>{' '}
+                  because the collection task was marked as uncompleted.
+                </>
+              ) : (
+                <>
+                  has been marked as{' '}
+                  <span className="font-extrabold text-amber-300 underline">Returned</span> because
+                  the collection task was completed.
+                </>
+              )}
+            </p>
+          </div>
+          <button
+            onClick={() => setReturnStatusBanner(null)}
+            className={`transition cursor-pointer p-1 ${
+              returnStatusBanner.mode === 'revert'
+                ? 'text-sky-400 hover:text-white'
+                : 'text-amber-400 hover:text-white'
+            }`}
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
     </div>
   );
 }

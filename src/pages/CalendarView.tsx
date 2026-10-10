@@ -23,6 +23,7 @@ import {
   RotateCcw,
   Loader2,
   GripVertical,
+  Trash2,
 } from 'lucide-react';
 import { Task, VisaApplication, Client, User as UserType, HotelBooking } from '../types';
 import { getPriorityBadge, STATUS_CONFIG } from '../utils/status';
@@ -65,6 +66,7 @@ interface CalendarViewProps {
   hotelBookings?: HotelBooking[];
   onOpenNewTask: (date?: string) => void;
   onToggleTask: (taskId: number) => void;
+  onToggleApplicationDelivery?: (app: VisaApplication) => void;
   onDeleteTask?: (taskId: number) => void;
   onOpenClient: (clientId: number) => void;
   onOpenStatusModal?: (applicationId: number) => void;
@@ -79,6 +81,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
   hotelBookings = [],
   onOpenNewTask,
   onToggleTask,
+  onToggleApplicationDelivery,
   onDeleteTask,
   onOpenClient,
   onOpenStatusModal,
@@ -936,6 +939,19 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                           <Square className="w-5 h-5 text-slate-500 hover:text-white" />
                         )}
                       </button>
+                    ) : ev.rawApp ? (
+                      <button
+                        type="button"
+                        onClick={() => ev.rawApp && onToggleApplicationDelivery && onToggleApplicationDelivery(ev.rawApp)}
+                        className="mt-0.5 text-slate-400 hover:text-amber-400 transition shrink-0 cursor-pointer"
+                        title={ev.isCompleted ? 'Mark as Pending' : 'Mark Collection Date as Completed (Return Application)'}
+                      >
+                        {ev.isCompleted ? (
+                          <CheckSquare className="w-5 h-5 text-amber-400" />
+                        ) : (
+                          <Square className="w-5 h-5 text-amber-500/80 hover:text-amber-300" />
+                        )}
+                      </button>
                     ) : (
                       <div className="w-5 h-5 rounded-md bg-slate-800 border border-slate-700 flex items-center justify-center shrink-0 mt-0.5">
                         {ev.type === 'delivery' ? (
@@ -1097,6 +1113,44 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                         className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-sky-300 rounded-lg text-xs font-semibold border border-slate-700 transition cursor-pointer"
                       >
                         Status
+                      </button>
+                    )}
+
+                    {ev.taskId && onDeleteTask && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (window.confirm(`Are you sure you want to delete task "${ev.title}"?`)) {
+                            setLocalTasks((prev) => prev.filter((t) => t.id !== ev.taskId));
+                            onDeleteTask(ev.taskId!);
+                          }
+                        }}
+                        className="px-2.5 py-1 bg-rose-950/80 hover:bg-rose-900 text-rose-300 hover:text-white rounded-lg text-xs font-semibold border border-rose-800/80 transition cursor-pointer flex items-center gap-1"
+                        title="Delete Task"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>Delete</span>
+                      </button>
+                    )}
+
+                    {!ev.taskId && ev.rawApp && (
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          if (window.confirm(`Clear collection date for ${ev.rawApp?.client_name || 'Client'}?`)) {
+                            try {
+                              await api.updateApplication(ev.rawApp!.id, { delivery_date: null });
+                              if (onRefreshData) onRefreshData(true);
+                            } catch (err) {
+                              console.error('Failed to clear collection date:', err);
+                            }
+                          }
+                        }}
+                        className="px-2.5 py-1 bg-rose-950/80 hover:bg-rose-900 text-rose-300 hover:text-white rounded-lg text-xs font-semibold border border-rose-800/80 transition cursor-pointer flex items-center gap-1"
+                        title="Clear Collection Date"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                        <span>Clear Date</span>
                       </button>
                     )}
                   </div>
@@ -1435,6 +1489,22 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                                 <Square className="w-3 h-3 text-teal-500 hover:text-teal-700" />
                               )}
                             </button>
+                          ) : ev.rawApp ? (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (ev.rawApp && onToggleApplicationDelivery) onToggleApplicationDelivery(ev.rawApp);
+                              }}
+                              className="mt-0.5 shrink-0 cursor-pointer text-amber-500 hover:text-amber-600"
+                              title={isCompleted ? 'Returned' : 'Mark as Returned'}
+                            >
+                              {isCompleted ? (
+                                <CheckSquare className="w-3 h-3 text-amber-500" />
+                              ) : (
+                                <Square className="w-3 h-3 text-slate-400 hover:text-amber-500" />
+                              )}
+                            </button>
                           ) : (
                             <span className="mt-0.5 text-xs">
                               {isDelivery ? '📦' : '🏨'}
@@ -1579,6 +1649,18 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                                     <Square className="w-3.5 h-3.5 text-teal-500 hover:text-teal-700" />
                                   )}
                                 </button>
+                              ) : ev.rawApp ? (
+                                <button
+                                  onClick={() => ev.rawApp && onToggleApplicationDelivery && onToggleApplicationDelivery(ev.rawApp)}
+                                  className="mt-0.5 shrink-0 cursor-pointer text-amber-500 hover:text-amber-600"
+                                  title={ev.isCompleted ? 'Returned' : 'Mark as Returned'}
+                                >
+                                  {ev.isCompleted ? (
+                                    <CheckSquare className="w-3.5 h-3.5 text-amber-500" />
+                                  ) : (
+                                    <Square className="w-3.5 h-3.5 text-slate-400 hover:text-amber-500" />
+                                  )}
+                                </button>
                               ) : null}
                               <div className="font-semibold text-xs leading-tight flex-1">{ev.title}</div>
                             </div>
@@ -1663,6 +1745,18 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                           <CheckSquare className="w-5 h-5 text-teal-600" />
                         ) : (
                           <Square className="w-5 h-5 text-teal-500 hover:text-teal-700" />
+                        )}
+                      </button>
+                    ) : ev.rawApp ? (
+                      <button
+                        onClick={() => ev.rawApp && onToggleApplicationDelivery && onToggleApplicationDelivery(ev.rawApp)}
+                        className="text-amber-500 hover:text-amber-600 transition cursor-pointer"
+                        title={ev.isCompleted ? 'Returned' : 'Mark as Returned'}
+                      >
+                        {ev.isCompleted ? (
+                          <CheckSquare className="w-5 h-5 text-amber-500" />
+                        ) : (
+                          <Square className="w-5 h-5 text-slate-400 hover:text-amber-500" />
                         )}
                       </button>
                     ) : null}
@@ -1752,6 +1846,18 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                             <CheckSquare className="w-5 h-5 text-teal-600" />
                           ) : (
                             <Square className="w-5 h-5 text-teal-500 hover:text-teal-700" />
+                          )}
+                        </button>
+                      ) : ev.rawApp ? (
+                        <button
+                          onClick={() => ev.rawApp && onToggleApplicationDelivery && onToggleApplicationDelivery(ev.rawApp)}
+                          className="mt-1 text-amber-500 hover:text-amber-600 transition shrink-0 cursor-pointer"
+                          title={ev.isCompleted ? 'Returned' : 'Mark as Returned'}
+                        >
+                          {ev.isCompleted ? (
+                            <CheckSquare className="w-5 h-5 text-amber-500" />
+                          ) : (
+                            <Square className="w-5 h-5 text-slate-400 hover:text-amber-500" />
                           )}
                         </button>
                       ) : null}
