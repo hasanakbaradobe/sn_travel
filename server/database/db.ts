@@ -16,11 +16,31 @@ const DB_USER = process.env.DB_USER;
 const DB_PASSWORD = process.env.DB_PASSWORD;
 const DB_NAME = process.env.DB_NAME || 'sn_travels_visa';
 
+const DB_SSL = process.env.DB_SSL === 'true' || process.env.MYSQL_SSL === 'true';
+
 let pool: mysql.Pool | null = null;
 let isConnectedToMySQL = false;
 let connectionError: string | null = null;
 
-// Try to initialize MySQL pool if host is configured
+async function probeMySQLConnection() {
+  if (!pool) return false;
+  try {
+    const conn = await pool.getConnection();
+    isConnectedToMySQL = true;
+    connectionError = null;
+    console.log(`[Database] Connected to MySQL database "${DB_NAME}" at ${DB_HOST}:${DB_PORT}`);
+    conn.release();
+    await syncFromMySQL(true);
+    return true;
+  } catch (err: any) {
+    isConnectedToMySQL = false;
+    connectionError = err?.message || String(err);
+    console.warn(`[Database] MySQL connection probe failed (${connectionError}). Using local store fallback.`);
+    return false;
+  }
+}
+
+// Initialize MySQL pool if host and user are configured
 if (DB_HOST && DB_USER) {
   try {
     pool = mysql.createPool({
@@ -35,6 +55,7 @@ if (DB_HOST && DB_USER) {
       enableKeepAlive: true,
       keepAliveInitialDelay: 0,
       dateStrings: true,
+      ssl: DB_SSL ? { rejectUnauthorized: false } : undefined,
     });
     
     (pool as any).on('error', (err: any) => {
@@ -45,20 +66,7 @@ if (DB_HOST && DB_USER) {
       }
     });
 
-    // Quick probe
-    pool.getConnection()
-      .then(conn => {
-        isConnectedToMySQL = true;
-        connectionError = null;
-        console.log(`[Database] Connected to MySQL database "${DB_NAME}" at ${DB_HOST}:${DB_PORT}`);
-        conn.release();
-        syncFromMySQL(true);
-      })
-      .catch(err => {
-        isConnectedToMySQL = false;
-        connectionError = err.message;
-        console.warn(`[Database] MySQL connection failed (${err.message}). Using local relational store fallback.`);
-      });
+    probeMySQLConnection();
   } catch (err: any) {
     isConnectedToMySQL = false;
     connectionError = err.message;
@@ -628,7 +636,11 @@ let lastSyncTime = 0;
 const SYNC_CACHE_TTL_MS = 5000; // 5 seconds cache to prevent hammering MySQL on every sub-second request
 
 async function syncFromMySQL(force = false) {
-  if (!pool || !isConnectedToMySQL) return;
+  if (!pool) return;
+  if (!isConnectedToMySQL) {
+    const connected = await probeMySQLConnection();
+    if (!connected) return;
+  }
   const now = Date.now();
   if (!force && (now - lastSyncTime < SYNC_CACHE_TTL_MS)) {
     return; // Serve cached in-memory store immediately
