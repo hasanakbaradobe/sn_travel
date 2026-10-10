@@ -96,7 +96,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
       </div>
 
       {/* KPI Cards */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3 sm:gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
         {/* Total Clients */}
         <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs flex flex-col justify-between">
           <div className="flex items-center justify-between text-slate-500 mb-2">
@@ -133,24 +133,8 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
           <div className="text-[11px] text-slate-400 mt-1">Due today</div>
         </div>
 
-        {/* Overdue Tasks */}
-        <div className={`p-4 rounded-xl border shadow-xs flex flex-col justify-between ${
-          metrics.overdue_tasks > 0 ? 'bg-red-50/50 border-red-200' : 'bg-white border-slate-200'
-        }`}>
-          <div className="flex items-center justify-between text-slate-500 mb-2">
-            <span className="text-xs font-medium text-red-800">Overdue Tasks</span>
-            <AlertTriangle className="w-4 h-4 text-red-600" />
-          </div>
-          <div className={`text-2xl sm:text-3xl font-bold tracking-tight ${
-            metrics.overdue_tasks > 0 ? 'text-red-700' : 'text-slate-900'
-          }`}>
-            {metrics.overdue_tasks}
-          </div>
-          <div className="text-[11px] text-red-600/80 mt-1">Requires immediate action</div>
-        </div>
-
         {/* Upcoming Tasks */}
-        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs flex flex-col justify-between col-span-2 sm:col-span-1">
+        <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-xs flex flex-col justify-between">
           <div className="flex items-center justify-between text-slate-500 mb-2">
             <span className="text-xs font-medium">Upcoming Tasks</span>
             <Clock className="w-4 h-4 text-slate-500" />
@@ -288,7 +272,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               <span className="text-[11px] text-slate-400">Live feed</span>
             </div>
 
-            <div className="p-4 divide-y divide-slate-100 max-h-[500px] overflow-y-auto no-scrollbar">
+            <div className="p-4 divide-y divide-slate-100 max-h-[500px] overflow-y-auto">
               {metrics.recent_activity.map((log) => (
                 <div key={log.id} className="py-2.5 first:pt-0 last:pb-0">
                   <div className="flex items-start justify-between gap-2">

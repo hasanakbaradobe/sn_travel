@@ -447,47 +447,6 @@ MRZ: ${result.mrzLine1 || ''} / ${result.mrzLine2 || ''}`;
                     </span>
                   </div>
 
-                  {/* Quick Test Samples */}
-                  <div className="pt-3 border-t border-slate-200/80 w-full flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                    <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">Try Demo Passports:</span>
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <button
-                        type="button"
-                        onClick={(e) => { e.stopPropagation(); handleSampleSelect('sample:yazid_gubran'); }}
-                        className="px-2.5 py-1 text-xs font-medium bg-white hover:bg-sky-50 hover:text-sky-700 hover:border-sky-300 text-slate-700 rounded-lg border border-slate-200 shadow-2xs transition"
-                      >
-                        🇾🇪 Yazid Abdulkarem Gubran
-                      </button>
-                      <button
-                        type="button"
-                        onClick={(e) => { e.stopPropagation(); handleSampleSelect('sample:osamah_alhalmany'); }}
-                        className="px-2.5 py-1 text-xs font-medium bg-white hover:bg-sky-50 hover:text-sky-700 hover:border-sky-300 text-slate-700 rounded-lg border border-slate-200 shadow-2xs transition"
-                      >
-                        🇾🇪 Osamah Alhalmany
-                      </button>
-                      <button
-                        type="button"
-                        onClick={(e) => { e.stopPropagation(); handleSampleSelect('sample:senegal_seck'); }}
-                        className="px-2.5 py-1 text-xs font-medium bg-white hover:bg-sky-50 hover:text-sky-700 hover:border-sky-300 text-slate-700 rounded-lg border border-slate-200 shadow-2xs transition"
-                      >
-                        🇸🇳 Fatimatou Seck
-                      </button>
-                      <button
-                        type="button"
-                        onClick={(e) => { e.stopPropagation(); handleSampleSelect('sample:yemen'); }}
-                        className="px-2.5 py-1 text-xs font-medium bg-white hover:bg-sky-50 hover:text-sky-700 hover:border-sky-300 text-slate-700 rounded-lg border border-slate-200 shadow-2xs transition"
-                      >
-                        🇾🇪 Fares Al-Eryani
-                      </button>
-                      <button
-                        type="button"
-                        onClick={(e) => { e.stopPropagation(); handleSampleSelect('sample:saudi'); }}
-                        className="px-2.5 py-1 text-xs font-medium bg-white hover:bg-sky-50 hover:text-sky-700 hover:border-sky-300 text-slate-700 rounded-lg border border-slate-200 shadow-2xs transition"
-                      >
-                        🇸🇦 Bandar Al-Otaibi
-                      </button>
-                    </div>
-                  </div>
                 </div>
               )}
 
