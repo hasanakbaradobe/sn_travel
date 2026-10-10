@@ -21,10 +21,15 @@ import path from 'path';
 
 export const apiRouter = Router();
 
-// Middleware: Auto-sync fresh records from MySQL database on API requests (uses 5s TTL cache)
-apiRouter.use(async (_req: Request, _res: Response, next: NextFunction) => {
+// Middleware: Disable client/proxy HTTP caching and force real-time MySQL database synchronization on every request
+apiRouter.use(async (_req: Request, res: Response, next: NextFunction) => {
+  res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+  res.setHeader('Pragma', 'no-cache');
+  res.setHeader('Expires', '0');
+  res.setHeader('Surrogate-Control', 'no-store');
+
   try {
-    await dbService.syncFromMySQL(false);
+    await dbService.syncFromMySQL(true);
   } catch (err: any) {
     // Non-blocking sync error catch
   }

@@ -247,6 +247,17 @@ export default function App() {
     return () => unsub();
   }, []);
 
+  // Periodic background real-time polling every 8 seconds for live database synchronization
+  useEffect(() => {
+    if (!currentUser) return;
+
+    const interval = setInterval(() => {
+      refreshAllData(true);
+    }, 8000);
+
+    return () => clearInterval(interval);
+  }, [currentUser]);
+
   // Helper to parse browser pathname to active NavTab & Client ID
   const parsePathToTab = (pathname: string): { tab: NavTab; clientId?: number } => {
     const clean = pathname.replace(/^\/+|\/+$/g, '').toLowerCase();

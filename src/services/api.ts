@@ -83,36 +83,13 @@ class ApiService {
     }
   }
 
-  private getCachedResponse<T>(endpoint: string, ttlMs: number = DEFAULT_CACHE_TTL_MS): T | null {
-    try {
-      if (typeof window === 'undefined' || !window.sessionStorage) return null;
-      const raw = sessionStorage.getItem(`${CACHE_KEY_PREFIX}${endpoint}`);
-      if (!raw) return null;
-
-      const parsed = JSON.parse(raw);
-      if (parsed && typeof parsed.timestamp === 'number' && 'data' in parsed) {
-        if (Date.now() - parsed.timestamp < ttlMs) {
-          return parsed.data as T;
-        }
-      }
-      sessionStorage.removeItem(`${CACHE_KEY_PREFIX}${endpoint}`);
-    } catch (e) {
-      // Ignore parse or storage errors
-    }
+  private getCachedResponse<T>(_endpoint: string, _ttlMs: number = DEFAULT_CACHE_TTL_MS): T | null {
+    // Client-side caching disabled for real-time live database synchronization
     return null;
   }
 
-  private setCachedResponse<T>(endpoint: string, data: T): void {
-    try {
-      if (typeof window === 'undefined' || !window.sessionStorage) return;
-      const payload = JSON.stringify({
-        timestamp: Date.now(),
-        data,
-      });
-      sessionStorage.setItem(`${CACHE_KEY_PREFIX}${endpoint}`, payload);
-    } catch (e) {
-      console.warn('[ApiService] Failed to write to sessionStorage cache:', e);
-    }
+  private setCachedResponse<T>(_endpoint: string, _data: T): void {
+    // Client-side caching disabled for real-time live database synchronization
   }
 
   onAuthError(callback: () => void) {
@@ -141,20 +118,11 @@ class ApiService {
   }
 
   private async request<T>(endpoint: string, options: CacheOptions = {}): Promise<T> {
-    const method = (options.method || 'GET').toUpperCase();
-    const isGet = method === 'GET';
-    const ttl = options.cacheTtl ?? DEFAULT_CACHE_TTL_MS;
-
-    // 1. Check sessionStorage cache for GET requests
-    if (isGet && !options.skipCache) {
-      const cached = this.getCachedResponse<T>(endpoint, ttl);
-      if (cached !== null) {
-        return cached;
-      }
-    }
-
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
+      'Cache-Control': 'no-cache, no-store, must-revalidate',
+      'Pragma': 'no-cache',
+      'Expires': '0',
       ...(options.headers as Record<string, string>),
     };
 
@@ -165,6 +133,7 @@ class ApiService {
     const { skipCache, cacheTtl, ...fetchOptions } = options;
 
     const response = await fetch(`${API_BASE}${endpoint}`, {
+      cache: 'no-store',
       ...fetchOptions,
       headers,
     });
@@ -194,17 +163,6 @@ class ApiService {
     }
 
     const data: T = await response.json();
-
-    // 2. Cache successful GET response in sessionStorage
-    if (isGet && !options.skipCache) {
-      this.setCachedResponse<T>(endpoint, data);
-    }
-
-    // 3. Automatically invalidate cache on mutations (POST, PUT, PATCH, DELETE)
-    if (!isGet) {
-      this.clearCache();
-    }
-
     return data;
   }
 
