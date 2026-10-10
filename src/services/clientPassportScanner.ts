@@ -526,6 +526,47 @@ export function fixDigitSubstitutionsInNames(str: string): string {
   return s;
 }
 
+export const PROTECTED_K_L_NAMES = new Set([
+  'MALIK', 'TAREK', 'TARIQ', 'ISHAQ', 'FAROUK', 'MABROUK', 'RAZAK', 'SADIQ', 'SALIK', 'ABUBAKR',
+  'BILAL', 'KAMAL', 'JALAL', 'ADEL', 'FADEL', 'FAISAL', 'BASSEL', 'NAWAL', 'NABIL', 'JAMIL',
+  'KHALIL', 'ISMAIL', 'MIKHAIL', 'TALAL', 'SAHAL', 'AMAL', 'MANAL', 'DALAL', 'HILAL', 'FADL', 'AQL',
+  'SECK', 'DIACK', 'DANIEL', 'MICHAEL', 'GABRIEL', 'SAMUEL', 'MANUEL', 'MIGUEL', 'RAFAEL', 'PAUL',
+  'MARK', 'FRANK', 'CLARK', 'PATRICK', 'JACK', 'FALL', 'SALL', 'HASSAN', 'HUSSEIN'
+]);
+
+export function cleanTrailingChevronNoise(token: string): string {
+  if (!token || token.length < 3) return token;
+  const upper = token.toUpperCase();
+  if (PROTECTED_K_L_NAMES.has(upper)) return upper;
+
+  // 1. Never strip valid digraphs or standard names ending in K or L
+  if (upper.endsWith('CK')) return upper; // e.g. SECK, DIACK, JACK, MACK, PATRICK, BECK
+  if (upper.endsWith('RK')) return upper; // e.g. MARK, CLARK, KIRK, YORK
+  if (upper.endsWith('NK') && ['FRANK', 'HANK', 'LINK'].includes(upper)) return upper;
+
+  // Standard names ending in L: -EL, -IL, -AL, -UL, -OL, -LL
+  if (/([AEIOU]L|LL)$/.test(upper)) {
+    // Only strip if it is obvious trailing OCR chevron noise after AN (e.g. GUBRANL)
+    if (!/ANL$/.test(upper)) {
+      return upper; // e.g. DANIEL, MICHAEL, GABRIEL, PAUL, BILAL, KAMAL, NABIL
+    }
+  }
+
+  // 2. Strip compound chevron noise like SK, KS, LK, KL, KK, CC
+  // but protect names ending in SS/LL (e.g. HASSAN, HUSSEIN, FALL, SALL, BELL)
+  if (!/(SSAN|SSEIN|ALL|ELL|ILL|ULL)$/.test(upper)) {
+    const cleaned = upper.replace(/([A-Z]{3,})(SK|KS|LK|KL|KK|CC)$/i, '$1');
+    if (cleaned !== upper) return cleaned;
+  }
+
+  // 3. Specific chevron noise: trailing K or L glued after -AN or consonant clusters (e.g. GUBRANK -> GUBRAN, GUBRANL -> GUBRAN)
+  if (/(AN|AD|ED|ID|AR|UR)[KL]$/i.test(upper) && !['MALIK', 'TAREK', 'TARIQ', 'FAROUK', 'MABROUK', 'ADEL', 'FADEL'].includes(upper)) {
+    return upper.slice(0, -1);
+  }
+
+  return upper;
+}
+
 /**
  * Cleans MRZ Line 1 (TD3 - 44 chars):
  * Replaces trailing chevron OCR noise (like LLLLLLLKLKL, LLLLLLL, KLKL, LKK) after the name with '<'
@@ -546,7 +587,8 @@ export function cleanMrzLine1(rawLine1: string): string {
   if (line.length >= 5) {
     const c3 = line.substring(2, 5);
     if (ICAO_COUNTRY_MAP[c3]) {
-      line = 'P<' + c3 + line.substring(5);
+      const hasSep = line[5] === '<';
+      line = 'P<' + c3 + (hasSep ? '' : '<') + line.substring(5);
     }
   }
 
@@ -608,7 +650,8 @@ export function cleanMrzLine1(rawLine1: string): string {
         continue;
       }
 
-      // Strip glued trailing noise like SK, LK, KL on this token (e.g. GUBRANSK -> GUBRAN, GUBRANK -> GUBRAN)
+      // Strip glued trailing noise like SK, LK, KL, K, L on this token (e.g. GUBRANSK -> GUBRAN, GUBRANK -> GUBRAN)
+      tok = cleanTrailingChevronNoise(tok);
       tok = tok.replace(/([A-Z]{3,})(SK|KS|LK|KL|SS|LL)$/i, '$1');
       tok = tok.replace(/^GUBRAN[KLSTX]{1,3}$/i, 'GUBRAN');
 
@@ -776,13 +819,14 @@ export function cleanMrzLine2(rawLine2: string, expectedCountryCode?: string): s
   if (targetDocCd !== undefined && computeIcaoCheckDigit(docPart) !== targetDocCd) {
     // Test single-character OCR confusion matrix against Modulo-10 checksum
     const confusionPairs: [string, string][] = [
-      ['O', '0'], ['0', 'O'],
-      ['I', '1'], ['1', 'I'],
-      ['B', '8'], ['8', 'B'],
-      ['S', '5'], ['5', 'S'],
-      ['Z', '2'], ['2', 'Z'],
-      ['G', '6'], ['6', 'G'],
-      ['D', '0'], ['<', '0'],
+      ['O', '0'],
+      ['I', '1'],
+      ['B', '8'],
+      ['S', '5'],
+      ['Z', '2'],
+      ['G', '6'],
+      ['D', '0'],
+      ['<', '0'],
     ];
     let repaired = false;
     for (let idx = 0; idx < docPart.length && !repaired; idx++) {
@@ -879,22 +923,20 @@ export function sanitizeExtractedName(rawName: string): string {
   cleaned = cleaned.replace(/^([LIXCKVJ10\s]{3,}\s*)+/gi, ' ');
   cleaned = cleaned.replace(/\s+([LIXCKVJ10\s]{3,}\s*)+$/gi, ' ');
 
-  // 2. Process individual word tokens: strip glued country codes / MRZ prefixes (e.g. "DNMOHAMED" -> "MOHAMED", "SDNMOHAMED" -> "MOHAMED", "DNELKHALIFA" -> "ELKHALIFA")
+  // 2. Process individual word tokens
   const wordTokens = cleaned.split(/\s+/).filter(Boolean);
   const cleanedTokens = wordTokens
-    .map(word => {
+    .map((word) => {
       let w = word.trim();
-      // Strip country codes or MRZ prefixes erroneously glued to name tokens
-      // e.g. "DNMOHAMED" -> "MOHAMED", "SDNMOHAMED" -> "MOHAMED", "DNMUNTASIR" -> "MUNTASIR", "DNELKHALIFA" -> "ELKHALIFA"
-      w = w.replace(/^(PCSDN|PASDN|PCS|PAS|SDN|DN|ARE|EGY|SAU|PAK|GBR|IND|USA|CAN|AUS|OMN|QAT|KWT|BHR|JOR|SYR|LBN|IRQ|IRN|TUR|YEM|SOM|ETH|KEN|NGA|MAR|DZA|TUN|LBY|MRT|SEN|BGD|PHL|MYS|SGP|IDN|THA|VNM|KOR|JPN|RUS|UKR|BLR|POL|DEU|FRA|ITA|ESP|PRT|GRC|AUT|CHE|NLD|BEL|SWE|NOR|DNK|FIN|IRL|NZL|BRA|ARG|MEX|COL|VEN|BOL)(?=[B-DF-HJ-NP-TV-Z]|EL|AL|AB|AH|OM|OS)/i, '');
+      w = cleanTrailingChevronNoise(w);
       return w;
     })
-    .filter(word => {
+    .filter((word, idx) => {
       if (!word) return false;
       if (/^[LI10CKVXJ]{3,}$/i.test(word)) return false;
       if (/^[^A-Z]+$/i.test(word)) return false;
-      // Filter out isolated standalone country codes or MRZ prefixes
-      if (/^(SDN|DN|ARE|EGY|SAU|PAK|GBR|IND|USA|CAN|AUS|OMN|QAT|KWT|BHR|JOR|SYR|LBN|IRQ|IRN|TUR|YEM|SOM|ETH|KEN|NGA|MAR|DZA|TUN|LBY|MRT|SEN|BGD|PHL|MYS|SGP|IDN|THA|VNM|KOR|JPN|RUS|UKR|BLR|POL|DEU|FRA|ITA|ESP|PRT|GRC|AUT|CHE|NLD|BEL|SWE|NOR|DNK|FIN|IRL|NZL|BRA|ARG|MEX|COL|VEN|BOL|PCS|PAS|PC|PA)$/i.test(word)) return false;
+      // Only filter isolated MRZ header codes at the beginning of the line
+      if (idx === 0 && /^(PCSDN|PASDN|PCS|PAS|PC|PA)$/i.test(word)) return false;
       return true;
     });
 
@@ -1095,6 +1137,8 @@ export async function getMrzWorker(): Promise<Tesseract.Worker> {
         await worker.setParameters({
           tessedit_char_whitelist: '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ<',
           tessedit_pageseg_mode: '6' as any, // Single uniform text block
+          load_system_dawg: '0' as any,
+          load_freq_dawg: '0' as any,
         });
         cachedMrzWorker = worker;
         return worker;

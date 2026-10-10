@@ -19,6 +19,7 @@ import { CustomField, Client, Country, ScannedPassportData } from '../types';
 import { CountrySelectSearch } from './CountrySelectSearch';
 import { ClientAvatar } from './ClientAvatar';
 import { getGoogleDriveDirectImageUrl, isGoogleDriveLink } from '../utils/image';
+import { cleanTrailingChevronNoise } from '../services/clientPassportScanner';
 
 interface CreateClientModalProps {
   isOpen: boolean;
@@ -139,21 +140,18 @@ export const CreateClientModal: React.FC<CreateClientModalProps> = ({
     let cleaned = raw
       .split(/\s+/)
       .map((w) => {
-        let s = w.trim();
-        // Strip country codes or MRZ prefixes erroneously glued to name tokens
-        // e.g. "DNMOHAMED" -> "MOHAMED", "SDNMOHAMED" -> "MOHAMED", "DNMUNTASIR" -> "MUNTASIR", "DNELKHALIFA" -> "ELKHALIFA"
-        s = s.replace(/^(PCSDN|PASDN|PCS|PAS|SDN|DN|ARE|EGY|SAU|PAK|GBR|IND|USA|CAN|AUS|OMN|QAT|KWT|BHR|JOR|SYR|LBN|IRQ|IRN|TUR|YEM|SOM|ETH|KEN|NGA|MAR|DZA|TUN|LBY|MRT|SEN|BGD|PHL|MYS|SGP|IDN|THA|VNM|KOR|JPN|RUS|UKR|BLR|POL|DEU|FRA|ITA|ESP|PRT|GRC|AUT|CHE|NLD|BEL|SWE|NOR|DNK|FIN|IRL|NZL|BRA|ARG|MEX|COL|VEN|BOL)(?=[B-DF-HJ-NP-TV-Z]|EL|AL|AB|AH|OM|OS)/i, '');
+        let s = cleanTrailingChevronNoise(w.trim());
         return s;
       })
-      .filter((s) => {
+      .filter((s, idx) => {
         if (!s) return false;
         // Remove isolated chevron noise tokens (Lk, Kl, Kk, Ll, Lc, Cl, Ck, Kc, Cc, K, L, C, X, 1, I)
         if (/^[LKCX1I]{1,2}$/i.test(s)) return false;
         // Remove OCR noise artifacts (length >= 3 with no vowels, or 3+ repeated characters)
         if (s.length >= 3 && !/[aeiouy]/i.test(s)) return false;
         if (/(.)\1{2,}/i.test(s)) return false;
-        // Filter out isolated standalone country codes or MRZ prefixes
-        if (/^(SDN|DN|ARE|EGY|SAU|PAK|GBR|IND|USA|CAN|AUS|OMN|QAT|KWT|BHR|JOR|SYR|LBN|IRQ|IRN|TUR|YEM|SOM|ETH|KEN|NGA|MAR|DZA|TUN|LBY|MRT|SEN|BGD|PHL|MYS|SGP|IDN|THA|VNM|KOR|JPN|RUS|UKR|BLR|POL|DEU|FRA|ITA|ESP|PRT|GRC|AUT|CHE|NLD|BEL|SWE|NOR|DNK|FIN|IRL|NZL|BRA|ARG|MEX|COL|VEN|BOL|PCS|PAS|PC|PA)$/i.test(s)) return false;
+        // Only filter isolated MRZ header codes at the beginning of the line
+        if (idx === 0 && /^(PCSDN|PASDN|PCS|PAS|PC|PA)$/i.test(s)) return false;
         return true;
       })
       .join(' ');
@@ -169,6 +167,10 @@ export const CreateClientModal: React.FC<CreateClientModalProps> = ({
     cleaned = cleaned.replace(/\b(Musta)\s+(Fa)\b/gi, 'Mustafa');
     cleaned = cleaned.replace(/\b(Hudai|Hodai)\s+(Fa)\b/gi, 'Hudaifa');
     cleaned = cleaned.replace(/\b(Morta)\s+(Da)\b/gi, 'Mortada');
+    cleaned = cleaned.replace(/\b(GUBRAN)[KLSTX]{1,3}\b/gi, 'Gubran');
+    cleaned = cleaned.replace(/\bGUBRANSK\b/gi, 'Gubran');
+    cleaned = cleaned.replace(/\bGUBRANK\b/gi, 'Gubran');
+    cleaned = cleaned.replace(/\bGUBRANLK\b/gi, 'Gubran');
     return cleaned;
   };
 
@@ -292,7 +294,7 @@ export const CreateClientModal: React.FC<CreateClientModalProps> = ({
     const file = e.target.files?.[0];
     if (!file) return;
     if (file.size > 8 * 1024 * 1024) {
-      alert('Photo file is too large. Please select an image under 8MB.');
+      setError('Photo file is too large. Please select an image under 8MB.');
       return;
     }
     const reader = new FileReader();

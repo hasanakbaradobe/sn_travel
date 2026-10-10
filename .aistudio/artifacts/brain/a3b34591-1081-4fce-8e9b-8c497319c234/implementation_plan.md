@@ -1,119 +1,116 @@
-# Implementation Plan: 100% In-Browser Passport & MRZ Scanner with Interactive Cropping
+# Pure Algorithmic Embassy-Grade Passport Scanner (100% Deterministic — Zero AI)
 
-## Problem Statement & Objectives
-The user needs a modernized, high-accuracy passport scanner that operates **100% locally in the device browser** with **zero server picture transmission**, featuring:
-1. **Interactive In-Browser Image Cropper**: Crop, rotate, zoom, and adjust passport images or camera captures directly on an HTML5 canvas before scanning, including a 1-click "Isolate MRZ Zone" helper.
-2. **100% Accuracy Local MRZ Extraction Engine**: Multi-threshold canvas image pre-processing (Otsu & Sauvola binarization, contrast stretching, sharpening for OCR-B font), horizontal projection band extraction, and constrained character whitelisting in Tesseract.js.
-3. **ICAO Doc 9303 Mathematical Auto-Repair**: Modulo-10 (7-3-1 weighting) validation on document number, date of birth, expiry date, and composite checksums with single-character mathematical correction.
-4. **Universal Name Parser**: Complete support for standard double-chevron (`SURNAME<<GIVEN<NAMES`), natural single-chevron order (`GIVEN NAMES SURNAME`), Arabic family prefixes (`AL-`, `EL-`), and compound multi-word names without character corruption.
+Upgrade the passport scanner into an ultra-reliable, pure algorithmic document reader with **zero AI / LLM dependencies**. All image processing, OCR recognition, character error-correction, and data parsing run on deterministic computer vision and official ICAO Doc 9303 mathematical checksum algorithms.
+
+> [!IMPORTANT]
+> **Key Architecture Decisions for Review**
+> - **Zero AI / No LLM**: Entirely eliminates any Gemini or external AI models. All operations run locally and deterministically using computer vision image processing, strict OCR-B character whitelisting, and mathematical algorithms.
+> - **OCR-B Zone Binarization & Deskew**: Specifically targets the bottom 25% Machine Readable Zone (MRZ), applying adaptive binarization, contrast normalization, and aspect ratio calibration tuned exclusively for the standard ICAO OCR-B typeface.
+> - **Deterministic ICAO Doc 9303 Modulo-10 Auto-Repair**: Utilizes the official 7-3-1 weighting modulo-10 algorithm to mathematically detect and auto-correct OCR character confusions (e.g. `0` vs `O`, `1` vs `I`, `8` vs `B`, and chevron `<` misread as `K` or `L`).
+> - **Strict Token Delimiter Parsing**: Accurately parses compound surnames and given names (e.g. Yemeni, Arabic, Asian naming conventions) by resolving chevron boundary bleed (e.g. fixing `GUBRANK` -> `GUBRAN` while safely preserving names with legitimate K/L letters like `MALIK` or `KHALED`).
 
 ---
 
-## Architecture & Data Flow
+## 1. Overview & Core Concept
+
+### What It Does
+An instant, zero-cost, privacy-first passport scanning engine designed specifically for TD3 machine-readable travel documents. It takes raw passport images from uploads or webcams, applies deterministic image filters to extract the 2-line 44-character MRZ, runs high-contrast OCR constrained strictly to valid ICAO characters (`A-Z`, `0-9`, `<`), verifies every checksum field (Document Number, Date of Birth, Expiry Date, Composite), and auto-corrects optical ambiguities with mathematical certainty.
+
+### Target Audience & Persona
+- **Travel Agency Visa Specialists & Admins**: Processing international passports who require fast, private, and deterministic extraction with zero cloud AI latency, zero API costs, and 100% compliance with ICAO Doc 9303 standards.
+
+### Key Value
+- **Zero AI Dependency**: Fast, predictable, completely offline-capable, and private.
+- **Mathematical Accuracy**: ICAO 7-3-1 check digit formulas guarantee error-free dates and document numbers.
+- **Instant Processing**: Real-time extraction in under 1 second without external network round-trips.
+
+---
+
+## 2. User Experience & Visual Design
+
+### Key User Flows
 
 ```
-[Camera or File Upload]
-        │
-        ▼ (Local Browser Memory Only - No Network Upload)
-[Interactive Canvas Cropper & Transformer]
-  ├── Interactive Bounding Box & Corner Drag Handles
-  ├── 90° Incremental Rotation & Fine-Tuning Angle Slider
-  ├── Preset Aspect Ratios (Standard Passport Page, Bottom MRZ Zone, Freeform)
-  └── High-Resolution Canvas Export
-        │
-        ▼
-[Multi-Pass Local Pre-Processing Pipeline]
-  ├── Pass A: Grayscale + Contrast Stretch + Sharpening (Preserves subtle characters)
-  ├── Pass B: Otsu Adaptive Binarization (Optimal separation for standard lighting)
-  ├── Pass C: Sauvola Local Window Thresholding (Corrects glare and shadow gradients)
-  └── MRZ Band Isolation (Detects bottom 2 lines of text)
-        │
-        ▼
-[In-Browser Tesseract.js OCR Engine]
-  ├── Restricted Character Whitelist: [A-Z 0-9 <]
-  ├── Page Segmentation Mode (PSM 6: Uniform text block)
-  └── Raw MRZ Lines Output (Line 1: 44 chars, Line 2: 44 chars)
-        │
-        ▼
-[Deterministic ICAO Doc 9303 Verification & Repair]
-  ├── Document Number Checksum (Pos 0-9, weight 7-3-1)
-  ├── Date of Birth Checksum (Pos 13-19, weight 7-3-1)
-  ├── Expiration Date Checksum (Pos 21-27, weight 7-3-1)
-  ├── Composite Checksum (Full string verification)
-  ├── Single-Character Mathematical Substitution (0/O, 1/I, 5/S, 8/B, </A)
-  └── Robust Name Extraction (Double chevron, single chevron, Arabic patronymics)
-        │
-        ▼
-[Interactive Review UI & Client Form Population]
-  ├── Visual MRZ Strip with Color-Coded Checksum Badges
-  ├── 1-Click Name Inversion & Field Editing
-  └── Seamless Client Creation in Database
+┌────────────────────────┐      ┌──────────────────────────┐      ┌─────────────────────────┐
+│ 1. Upload or Webcam    │ ───► │ 2. Assisted MRZ Overlay   │ ───► │ 3. Deterministic CV     │
+│ High-res passport photo│      │ Visual viewfinder guide   │      │ Crop, Grayscale & Otsu  │
+└────────────────────────┘      └──────────────────────────┘      └───────────┬─────────────┘
+                                                                              │
+                                                                              ▼
+┌────────────────────────┐      ┌──────────────────────────┐      ┌─────────────────────────┐
+│ 6. Form Auto-Fill      │ ◄─── │ 5. Verified Data Review  │ ◄─── │ 4. ICAO Modulo-10 Engine│
+│ Populate client record │      │ Badges: Document, DOB,   │      │ 7-3-1 Checksum repair & │
+│ or new visa application│      │ Expiry, Composite Check  │      │ Chevron delimiter parser│
+└────────────────────────┘      └──────────────────────────┘      └─────────────────────────┘
 ```
 
----
+1. **Upload or Capture**: The user drops a passport photo or positions their document inside the webcam viewfinder.
+2. **Assisted MRZ Overlay**: A clear guideline box highlights where the two MRZ lines should sit, ensuring optimal alignment and lighting.
+3. **Computer Vision Preprocessing**: The system isolates the lower document zone, applies grayscale conversion, contrast stretching, and Otsu binarization to produce high-contrast black-on-white text.
+4. **Modulo-10 Checksum Auto-Repair**: Runs OCR with an OCR-B character whitelist (`A-Z0-9<`). If a check digit fails, the engine tests common optical substitution candidates (`0`/`O`, `1`/`I`, `8`/`B`, `5`/`S`, `2`/`Z`, `<`/`K`/`L`) against the ICAO 7-3-1 formula to mathematically repair the erroneous character.
+5. **Verified Inspection Review**: A clean, high-density modal presents the extracted fields with green verification checkmarks (`✓ Document No Checksum`, `✓ DOB Checksum`, `✓ Expiry Checksum`, `✓ Composite Checksum`).
+6. **One-Click Auto-Fill**: Allows the user to verify the client profile, check for duplicates in the agency database, or create a visa application.
 
-## Detailed Implementation Tasks
-
-### 1. Interactive Client-Side Canvas Cropper Component
-- **File**: `src/components/PassportImageCropper.tsx` (New Component)
-- **Features**:
-  - HTML5 Canvas overlay with smooth touch & mouse drag handles (corners and edges).
-  - Rotation tools: 90° clockwise/counter-clockwise buttons plus a fine-tuning level slider (-15° to +15°) to rectify skewed mobile camera captures.
-  - Quick Aspect Ratio buttons:
-    - **Full ID Page (3:2 / 4:3)**: Automatically encompasses the full identity page.
-    - **MRZ Zone Focus (Bottom 25%)**: Instantly crops only the bottom Machine Readable Zone for maximum OCR clarity.
-    - **Freeform**: Allows arbitrary bounding box selection.
-  - Real-time zoom and pan controls for high-resolution images.
-  - "Apply & Scan" button exporting cropped and deskewed pixels directly into the local OCR engine.
-
-### 2. Advanced Local Pre-Processing & Filter Engine
-- **File**: `src/services/clientPassportScanner.ts` (Enhancement)
-- **Features**:
-  - **Otsu Global Binarization**: Computes optimal bimodal threshold to separate OCR-B characters from background security guilloche patterns.
-  - **Sauvola Adaptive Local Binarization**: Handles smartphone camera flash glare, shadow gradients, and paper folds.
-  - **Horizontal Projection Profile**: Analyzes row pixel densities to isolate the two dense lines of text corresponding to MRZ Line 1 and Line 2, cropping out distracting passport photo borders or coats of arms.
-  - Multi-pass execution: If Pass 1 fails ICAO checksums, automatically retry on Pass 2 (adaptive binarization) or Pass 3 (contrast-stretched grayscale) entirely inside browser web workers.
-
-### 3. Strict 100% Local Browser Policy & Privacy Guarantee
-- **Files**: `src/services/api.ts`, `src/components/PassportScannerModal.tsx`, `src/components/CreateClientModal.tsx`
-- **Features**:
-  - Remove all server fallback HTTP calls for passport images; image processing will be strictly client-side to satisfy the zero-server-transmission requirement.
-  - Display clear privacy indicators: *"Processed 100% locally in your browser. Document image never leaves your device."*
-
-### 4. Mathematical Modulo-10 Checksum Repair & Enhanced Name Parsing
-- **File**: `src/services/clientPassportScanner.ts`
-- **Features**:
-  - Full implementation of ICAO Doc 9303 Modulo-10 7-3-1 check digit validation on document number, birth date, expiration date, and overall composite checksum.
-  - Single-digit auto-repair: If a checksum fails by a known OCR ambiguity (e.g., OCR read `O` instead of `0`, `<` instead of `A`, `S` instead of `5`, `B` instead of `8`), systematically test candidate substitutions and accept the valid checksum match.
-  - Clean name parsing:
-    - Protect genuine names containing `SS` (`Hussein`, `Hassan`, `Youssef`, `Nasser`), `LL` (`Abdallah`), and tokens ending in `S` (`Ahs`, `Fares`, `Anas`).
-    - Parse Arabic tribal prefixes (`Alhalmany`, `Al-Eryani`, `Al-Otaibi`).
-    - Support natural order single-chevron lines (`GIVEN NAMES SURNAME`) and double-chevron standard lines.
-
-### 5. UI Integration & Review Workflow
-- **File**: `src/components/PassportScannerModal.tsx`
-- **Features**:
-  - Seamless toggle between:
-    - **Upload / Camera View**: Capture or upload source image.
-    - **Crop & Adjust View**: Interactive cropping workspace with preview.
-    - **Scan & Review View**: Displays extracted identity data, raw MRZ lines, checksum status badges, and field inputs for final confirmation before saving.
-  - Fast-action "Re-crop" button if the user wants to adjust the area.
+### Visual Identity & Theme
+- **Theme**: High-density enterprise dashboard (`slate-900`, `blue-600`, `emerald-600`).
+- **Zero-Pill Restraint**: Checksum indicators and passport metadata display in clean tabular monospace (`font-mono tabular-nums`).
+- **Deterministic Status**: Clear status indicators ("MRZ Isolated", "Binarized", "Checksum 100% Passed") giving full transparency into the algorithmic pipeline.
 
 ---
 
-## Verification & Testing Plan
-1. **Interactive Cropper Testing**:
-   - Test mouse and touch drag on desktop and mobile viewports.
-   - Test 90° rotation and fine angle rotation slider to ensure clean deskewing.
-   - Test "MRZ Zone" 1-click crop preset.
-2. **OCR & Checksum Accuracy Testing**:
-   - Verify previously reported real passport examples:
-     - `P<YEMALHALMANY<<OSAMAH<HUSSEIN<ABDU<AHS<<<<<<<<` -> Full name: `Osamah Hussein Abdu Ahs Alhalmany`.
-     - `P<SENSECKSSFATIMATOUCLLLLCLLLLRL<<<<<<<<<<<<` -> Full name: `Fatimatou Seck`.
-     - `PCSDNABDELFATAH<ALTAHIR<KHALID<<MOHAMED<<<<<` -> Full name: `Mohamed Abdelfatah Altahir Khalid`.
-     - `P<MRTDADALLGUEWAD<<<<<<<<<<<<<<<<<<<<<<<<<<<` -> Full name: `Dadallguewad`.
-   - Verify Modulo-10 7-3-1 mathematical check digits on document numbers, birth dates, and expiration dates.
-3. **Privacy Audit**:
-   - Verify Network tab in browser tools: Confirm 0 bytes of image data are sent to `/api/scan-passport` or any external server.
-4. **Build & Lint Verification**:
-   - Run `compile_applet` and `lint_applet` to ensure zero compilation and TypeScript errors.
+## 3. Key Product Decisions & Trade-Offs
+
+### Decision 1: Pure Computer Vision & Local OCR Instead of AI
+- **Chosen Approach**: Process images using HTML5 Canvas / Sharp image processing with custom binarization, paired with Tesseract OCR-B configuration (PSM 6, whitelist `ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<`).
+- **Why**: The user explicitly requested **no AI**. Deterministic computer vision combined with ICAO mathematical checksums provides higher predictability, zero API token cost, zero quota limits, and instant sub-second response times.
+- **Alternatives Considered**: AI vision models (Gemini Flash) were completely eliminated per user direction.
+
+### Decision 2: Mathematical 7-3-1 Candidate Substitution Engine
+- **Chosen Approach**: For any field where the read checksum digit does not match the computed weighted sum:
+  $$\sum (c_i \times w_i) \pmod{10}$$
+  the engine tests substitution candidates on each position. Because each position's weight is 7, 3, or 1, and the valid character domain is constrained, single-character misreads have exactly one valid mathematical candidate.
+- **Why**: Eliminates human typing errors and OCR font confusions automatically without guessing or using machine learning.
+
+### Decision 3: Precision Chevron Tokenizer for Surnames & Given Names
+- **Chosen Approach**:
+  - Line 1 format: `P<ISS<<SURNAME<<GIVEN<NAMES<<<<<<<<<<<<<<<<<<`
+  - In OCR outputs, `<` often gets misread as `K` or `L` (e.g. `GUBRAN<<` -> `GUBRANK<` or `GUBRANLK`).
+  - The tokenizer cleans trailing noise letters immediately adjacent to `<` sequences while strictly maintaining legitimate names that contain `K` or `L` (such as `MALIK`, `KHALED`, `TARIQ`, `BILAL`).
+
+---
+
+## 4. Technical Architecture & File Plan
+
+### Algorithmic Pipeline Flow
+```
+Raw Image (Upload/Webcam)
+   │
+   ├──► 1. Preprocessor (Crop lower 25% MRZ, Grayscale, Contrast Boost, Otsu Binarization)
+   │
+   ├──► 2. Whitelisted OCR (Engine configured for single uniform text block & OCR-B charset)
+   │
+   ├──► 3. Line Extractor (Extract exactly two 44-character strings: Line 1 & Line 2)
+   │
+   ├──► 4. ICAO Doc 9303 Checksum Validator & Repair Loop:
+   │       • Doc Number (Positions 1-9) + Check Digit (Pos 10)
+   │       • Date of Birth (Positions 14-19) + Check Digit (Pos 20)
+   │       • Expiry Date (Positions 22-27) + Check Digit (Pos 28)
+   │       • Composite Checksum (Positions 1-10, 14-20, 22-43) + Check Digit (Pos 44)
+   │
+   ├──► 5. Name & Nationality Tokenizer (Parse Issuing State, Surname, Given Names, Gender)
+   │
+   └──► 6. Result Delivery (Validated PassportData object with checksum badges)
+```
+
+### Components to Update
+1. **`src/services/clientPassportScanner.ts`**:
+   - Enhance the image binarization pipeline with high-contrast thresholding for MRZ lines.
+   - Implement the full ICAO Doc 9303 Modulo-10 checksum calculator and automated single-character substitution repair.
+   - Upgrade the regex tokenizer to correctly clean trailing chevron noise while preserving legitimate names with `K` or `L`.
+2. **`server/services/passportScanner.ts`**:
+   - Replace any lingering AI / Gemini calls with the pure deterministic Sharp image processor and ICAO Doc 9303 parser.
+3. **`src/services/api.ts`**:
+   - Ensure seamless local deterministic scanning without requiring any external AI API keys or endpoints.
+4. **`src/components/PassportScannerModal.tsx`**:
+   - Present a clean visual interface showing real-time checksum validation statuses (Doc Number Checksum, DOB Checksum, Expiry Checksum, Composite Checksum).
+   - Display raw MRZ lines side-by-side with extracted fields so visa officers can visually verify every character instantly.

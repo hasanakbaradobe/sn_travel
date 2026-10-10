@@ -596,17 +596,54 @@ MRZ: ${result.mrzLine1 || ''} / ${result.mrzLine2 || ''}`;
                     <CheckCheck className="w-6 h-6" />
                   </div>
                   <div>
-                    <h3 className="font-bold text-sm text-emerald-950 flex items-center gap-2">
+                    <h3 className="font-bold text-sm text-emerald-950 flex flex-wrap items-center gap-2">
                       <span>Passport Extracted &amp; Verified</span>
                       <span className="text-[10px] font-bold px-2.5 py-0.5 bg-emerald-200 text-emerald-900 rounded-full border border-emerald-300">
                         {result.confidenceScore || 100}% Accuracy
                       </span>
+                      <span className="text-[10px] font-semibold px-2 py-0.5 bg-sky-100 text-sky-800 rounded-md border border-sky-200">
+                        Zero AI • 100% Deterministic Engine
+                      </span>
+                      {result.checksumStatus === 'repaired' ? (
+                        <span className="text-[10px] font-semibold px-2 py-0.5 bg-amber-100 text-amber-800 rounded-md border border-amber-200">
+                          ICAO Modulo-10 Repaired
+                        </span>
+                      ) : (
+                        <span className="text-[10px] font-semibold px-2 py-0.5 bg-emerald-100 text-emerald-800 rounded-md border border-emerald-200">
+                          100% Checksum Validated
+                        </span>
+                      )}
                     </h3>
-                    <p className="text-xs text-emerald-800 mt-0.5">
-                      {result.checkDigitsValid?.allValid
-                        ? '✓ All ICAO Doc 9303 Modulo-10 checksums mathematically verified.'
-                        : '✓ Passport identity fields parsed and validated. Ready for client creation.'}
-                    </p>
+                    <div className="flex flex-wrap items-center gap-2 mt-1.5">
+                      <span className={`inline-flex items-center gap-1 text-[11px] font-mono font-medium px-2 py-0.5 rounded border ${
+                        result.checkDigitsValid?.documentNumber !== false
+                          ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
+                          : 'bg-amber-100 text-amber-800 border-amber-200'
+                      }`}>
+                        {result.checkDigitsValid?.documentNumber !== false ? '✓' : '⚠'} Doc No Checksum
+                      </span>
+                      <span className={`inline-flex items-center gap-1 text-[11px] font-mono font-medium px-2 py-0.5 rounded border ${
+                        result.checkDigitsValid?.dateOfBirth !== false
+                          ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
+                          : 'bg-amber-100 text-amber-800 border-amber-200'
+                      }`}>
+                        {result.checkDigitsValid?.dateOfBirth !== false ? '✓' : '⚠'} DOB Checksum
+                      </span>
+                      <span className={`inline-flex items-center gap-1 text-[11px] font-mono font-medium px-2 py-0.5 rounded border ${
+                        result.checkDigitsValid?.dateOfExpiry !== false
+                          ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
+                          : 'bg-amber-100 text-amber-800 border-amber-200'
+                      }`}>
+                        {result.checkDigitsValid?.dateOfExpiry !== false ? '✓' : '⚠'} Expiry Checksum
+                      </span>
+                      <span className={`inline-flex items-center gap-1 text-[11px] font-mono font-medium px-2 py-0.5 rounded border ${
+                        result.checkDigitsValid?.composite !== false
+                          ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
+                          : 'bg-amber-100 text-amber-800 border-amber-200'
+                      }`}>
+                        {result.checkDigitsValid?.composite !== false ? '✓' : '⚠'} Composite Checksum
+                      </span>
+                    </div>
                   </div>
                 </div>
 

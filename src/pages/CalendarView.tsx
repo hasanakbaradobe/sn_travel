@@ -123,6 +123,16 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
     return () => clearTimeout(timer);
   }, [rescheduleFeedback]);
 
+  const [calendarError, setCalendarError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!calendarError) return;
+    const timer = setTimeout(() => {
+      setCalendarError(null);
+    }, 6000);
+    return () => clearTimeout(timer);
+  }, [calendarError]);
+
   // Global escape listener for modals/drawers
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -220,7 +230,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
         prev.map((t) => (t.id === taskId ? { ...t, due_date: previousDate } : t))
       );
       console.error('Failed to move task:', err);
-      alert('Could not move task: ' + (err.message || 'Unknown error'));
+      setCalendarError('Could not move task: ' + (err.message || 'Unknown error'));
     } finally {
       setIsUpdatingDate(null);
     }
@@ -246,7 +256,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
       setLocalTasks((prev) =>
         prev.map((t) => (t.id === taskId ? { ...t, due_date: toDay } : t))
       );
-      alert('Could not undo reschedule: ' + (err.message || 'Unknown error'));
+      setCalendarError('Could not undo reschedule: ' + (err.message || 'Unknown error'));
     } finally {
       setIsUpdatingDate(null);
     }
@@ -265,7 +275,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
       await handleRescheduleTask(taskId, newDueDate, task.title);
       setPostponeMenuTaskId(null);
     } catch (err: any) {
-      alert('Failed to reschedule task: ' + (err.message || 'Unknown error'));
+      setCalendarError('Failed to reschedule task: ' + (err.message || 'Unknown error'));
     } finally {
       setPostponing(false);
     }
@@ -1823,6 +1833,28 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
               type="button"
               onClick={() => setRescheduleFeedback(null)}
               className="p-1 text-slate-400 hover:text-white rounded-lg transition cursor-pointer shrink-0"
+              title="Dismiss"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+      )}
+      {/* Floating Error Toast Notification */}
+      {calendarError && (
+        <div className="fixed bottom-6 right-6 z-50 animate-in slide-in-from-bottom-5 fade-in duration-200">
+          <div className="bg-rose-950 text-white px-4 py-3 rounded-2xl shadow-2xl border border-rose-800 flex items-center gap-3 text-xs max-w-md">
+            <div className="w-8 h-8 rounded-xl bg-rose-500/20 text-rose-300 flex items-center justify-center shrink-0 border border-rose-500/30">
+              <AlertTriangle className="w-4 h-4" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="font-semibold text-white">Calendar Action Notice</div>
+              <div className="text-[11px] text-rose-200">{calendarError}</div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setCalendarError(null)}
+              className="p-1 text-rose-300 hover:text-white rounded-lg transition cursor-pointer shrink-0"
               title="Dismiss"
             >
               <X className="w-3.5 h-3.5" />

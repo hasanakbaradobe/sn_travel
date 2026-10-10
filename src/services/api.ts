@@ -180,7 +180,7 @@ class ApiService {
       }
 
       // If unauthorized on any protected endpoint, clear session and inform listeners
-      if (response.status === 401 && endpoint !== '/auth/login') {
+      if (response.status === 401 && endpoint !== '/auth/login' && endpoint !== '/scan-passport') {
         this.setCurrentUser(null);
         this.authErrorListeners.forEach(cb => {
           try { cb(); } catch {}
@@ -262,24 +262,46 @@ class ApiService {
     this.setCurrentUser(null);
   }
 
-  // Passport Scanner (In-Browser Client Scan + Hosted Server Fallback)
+  // Passport Scanner (In-Browser Client Scan + Deterministic Backend Fallback - Zero AI)
   async scanPassport(
     image: string,
     mimeType?: string,
     engine?: string,
     onStatusUpdate?: (status: string) => void
   ): Promise<ScannedPassportData> {
-    // 100% Client-Side In-Browser Execution — Zero image transmission to server
+    // Stage 1: 100% Client-Side In-Browser Execution (0% Server Load)
     try {
       const browserResult = await scanPassportInBrowser(image, onStatusUpdate);
       if (browserResult && browserResult.passportNumber) {
         return { ...browserResult, confidenceScore: browserResult.confidenceScore || 100 };
       }
-      throw new Error('MRZ lines could not be isolated. Use the interactive Crop Tool to frame the bottom two lines of the passport.');
     } catch (browserErr: any) {
-      console.warn('[PassportScanner] Local client scan error:', browserErr);
-      throw new Error(browserErr.message || 'Could not isolate MRZ lines on device. Please adjust or crop the bottom MRZ section using the Crop tool.');
+      console.warn('[PassportScanner] In-browser pass failed, trying deterministic backend CV pass:', browserErr);
     }
+
+    // Stage 2: Deterministic Backend CV Pass (OpenCV Rectification + Sharp Binarization + Local Tesseract, Zero AI)
+    try {
+      if (onStatusUpdate) onStatusUpdate('Applying OpenCV perspective rectification & high-contrast binarization...');
+      const serverResult = await this.request<ScannedPassportData>('/scan-passport', {
+        method: 'POST',
+        body: JSON.stringify({
+          image,
+          mimeType: mimeType || 'image/jpeg',
+          engine: 'deterministic',
+        }),
+      });
+      if (serverResult && serverResult.passportNumber) {
+        return {
+          ...serverResult,
+          confidenceScore: serverResult.confidenceScore || 100,
+          ocrMethod: serverResult.ocrMethod || 'Deterministic CV + ICAO Doc 9303 Checksum Engine (Zero AI)',
+        };
+      }
+    } catch (serverErr: any) {
+      console.warn('[PassportScanner] Deterministic backend CV error:', serverErr);
+    }
+
+    throw new Error('MRZ lines could not be isolated. Use the interactive Crop Tool to frame the bottom two lines of the passport.');
   }
 
   // Clients

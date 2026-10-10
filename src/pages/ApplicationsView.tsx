@@ -52,17 +52,19 @@ export const ApplicationsView: React.FC<ApplicationsViewProps> = ({
 
   const [appToDelete, setAppToDelete] = useState<VisaApplication | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const handleDeleteApplication = async () => {
     if (!appToDelete) return;
     setIsDeleting(true);
+    setActionError(null);
     try {
       await api.deleteApplication(appToDelete.id);
       setAppToDelete(null);
       if (onRefreshData) onRefreshData();
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to delete application', err);
-      alert('Failed to delete application.');
+      setActionError(err.message || 'Failed to delete application.');
     } finally {
       setIsDeleting(false);
     }
@@ -88,7 +90,7 @@ export const ApplicationsView: React.FC<ApplicationsViewProps> = ({
     if (q) {
       list = list.filter(
         (a) =>
-          a.application_id.toLowerCase().includes(q) ||
+          (a.application_id && a.application_id.toLowerCase().includes(q)) ||
           (a.client_name && a.client_name.toLowerCase().includes(q)) ||
           (a.passport_number && a.passport_number.toLowerCase().includes(q)) ||
           (a.visa_type_name && a.visa_type_name.toLowerCase().includes(q))
@@ -141,6 +143,13 @@ export const ApplicationsView: React.FC<ApplicationsViewProps> = ({
           <span>New Application</span>
         </button>
       </div>
+
+      {actionError && (
+        <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 flex items-center justify-between">
+          <span>{actionError}</span>
+          <button onClick={() => setActionError(null)} className="font-bold underline ml-2">Dismiss</button>
+        </div>
+      )}
 
       {/* Filter / Search Bar */}
       <div className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-xs flex flex-col md:flex-row gap-3 items-center justify-between">

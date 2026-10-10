@@ -72,7 +72,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <button
               onClick={onOpenPassportScanner}
               className="px-3.5 py-2 bg-gradient-to-r from-slate-900 to-sky-950 hover:from-slate-800 hover:to-sky-900 text-sky-300 border border-sky-800/40 rounded-lg text-xs font-semibold shadow-xs flex items-center gap-1.5 transition active:scale-95"
-              title="Scan passport identity page with AI OCR"
+              title="Scan passport identity page with ICAO Doc 9303 MRZ Engine"
             >
               <Sparkles className="w-3.5 h-3.5 text-sky-400" />
               <span>Scan Passport</span>

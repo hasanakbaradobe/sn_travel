@@ -80,6 +80,7 @@ export const ClientProfileView: React.FC<ClientProfileViewProps> = ({
   const [deletingApp, setDeletingApp] = useState(false);
   const [profileScanLoading, setProfileScanLoading] = useState(false);
   const [profileScanMsg, setProfileScanMsg] = useState<string | null>(null);
+  const [profileError, setProfileError] = useState<string | null>(null);
   const profilePassportInputRef = useRef<HTMLInputElement | null>(null);
 
   // Serial Number / Client ID editing state
@@ -90,13 +91,14 @@ export const ClientProfileView: React.FC<ClientProfileViewProps> = ({
   const handleSaveClientId = async () => {
     if (!client || !tempClientId.trim()) return;
     setSavingClientId(true);
+    setProfileError(null);
     try {
       await api.updateClient(client.id, { client_id: tempClientId.trim() });
       setIsEditingClientId(false);
       fetchClientData(true);
       if (onRefreshData) onRefreshData();
     } catch (err: any) {
-      alert('Failed to update serial number: ' + (err.message || 'Unknown error'));
+      setProfileError('Failed to update serial number: ' + (err.message || 'Unknown error'));
     } finally {
       setSavingClientId(false);
     }
@@ -107,6 +109,7 @@ export const ClientProfileView: React.FC<ClientProfileViewProps> = ({
     if (!file) return;
     setProfileScanLoading(true);
     setProfileScanMsg('Scanning passport on local device browser...');
+    setProfileError(null);
     try {
       const reader = new FileReader();
       reader.onload = async (evt) => {
@@ -126,7 +129,7 @@ export const ClientProfileView: React.FC<ClientProfileViewProps> = ({
           setProfileScanMsg(`Updated from passport: ${scanned.fullName} (${scanned.passportNumber})`);
           setTimeout(() => setProfileScanMsg(null), 5000);
         } catch (err: any) {
-          alert('Passport scan failed: ' + err.message);
+          setProfileScanMsg('Passport scan failed: ' + err.message);
         } finally {
           setProfileScanLoading(false);
         }
@@ -214,7 +217,7 @@ export const ClientProfileView: React.FC<ClientProfileViewProps> = ({
     const file = e.target.files?.[0];
     if (!file) return;
     if (file.size > 8 * 1024 * 1024) {
-      alert('Photo file is too large. Please select an image under 8MB.');
+      setProfileError('Photo file is too large. Please select an image under 8MB.');
       return;
     }
     const reader = new FileReader();
@@ -230,13 +233,15 @@ export const ClientProfileView: React.FC<ClientProfileViewProps> = ({
     e.preventDefault();
     if (!client) return;
     setSavingEdit(true);
+    setProfileError(null);
     try {
       await api.updateClient(client.id, editFormData);
       setEditingClient(false);
       fetchClientData(true);
       if (onRefreshData) onRefreshData();
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to save client update', err);
+      setProfileError('Failed to save client update: ' + (err.message || 'Unknown error'));
     } finally {
       setSavingEdit(false);
     }
@@ -245,13 +250,14 @@ export const ClientProfileView: React.FC<ClientProfileViewProps> = ({
   const handleDeleteClient = async () => {
     if (!client) return;
     setDeletingClient(true);
+    setProfileError(null);
     try {
       await api.deleteClient(client.id);
       setDeleteConfirmOpen(false);
       onClientDeleted();
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to delete client', err);
-      alert('Failed to delete client record');
+      setProfileError(err.message || 'Failed to delete client record');
     } finally {
       setDeletingClient(false);
     }
@@ -260,14 +266,15 @@ export const ClientProfileView: React.FC<ClientProfileViewProps> = ({
   const handleDeleteApplication = async () => {
     if (!appToDelete) return;
     setDeletingApp(true);
+    setProfileError(null);
     try {
       await api.deleteApplication(appToDelete.id);
       setAppToDelete(null);
       fetchClientData(true);
       if (onRefreshData) onRefreshData();
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to delete application', err);
-      alert('Failed to delete application');
+      setProfileError(err.message || 'Failed to delete application');
     } finally {
       setDeletingApp(false);
     }
@@ -318,6 +325,13 @@ export const ClientProfileView: React.FC<ClientProfileViewProps> = ({
         <ArrowLeft className="w-4 h-4" />
         <span>Back to Clients Directory</span>
       </button>
+
+      {profileError && (
+        <div className="p-3.5 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 flex items-center justify-between">
+          <span>{profileError}</span>
+          <button onClick={() => setProfileError(null)} className="font-bold underline ml-2">Dismiss</button>
+        </div>
+      )}
 
       {/* Main Header Card */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-xs p-6 space-y-4">

@@ -99,24 +99,26 @@ export const ClientsView: React.FC<ClientsViewProps> = ({
     if (query) {
       result = result.filter(
         (c) =>
-          c.full_name.toLowerCase().includes(query) ||
-          c.passport_number.toLowerCase().includes(query) ||
-          c.client_id.toLowerCase().includes(query) ||
-          c.country.toLowerCase().includes(query) ||
-          (c.phone && c.phone.includes(query)) ||
-          (c.email && c.email.toLowerCase().includes(query))
+          Boolean(
+            (c.full_name && c.full_name.toLowerCase().includes(query)) ||
+            (c.passport_number && c.passport_number.toLowerCase().includes(query)) ||
+            (c.client_id && c.client_id.toLowerCase().includes(query)) ||
+            (c.country && c.country.toLowerCase().includes(query)) ||
+            (c.phone && c.phone.includes(query)) ||
+            (c.email && c.email.toLowerCase().includes(query))
+          )
       );
     }
 
     if (selectedCountry !== 'ALL') {
-      result = result.filter((c) => c.country.toLowerCase() === selectedCountry.toLowerCase());
+      result = result.filter((c) => c.country && c.country.toLowerCase() === selectedCountry.toLowerCase());
     }
 
     result.sort((a, b) => {
       let cmp = 0;
-      if (sortField === 'name') cmp = a.full_name.localeCompare(b.full_name);
-      else if (sortField === 'id') cmp = a.client_id.localeCompare(b.client_id);
-      else if (sortField === 'country') cmp = a.country.localeCompare(b.country);
+      if (sortField === 'name') cmp = (a.full_name || '').localeCompare(b.full_name || '');
+      else if (sortField === 'id') cmp = (a.client_id || '').localeCompare(b.client_id || '');
+      else if (sortField === 'country') cmp = (a.country || '').localeCompare(b.country || '');
       else if (sortField === 'created') cmp = new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
       return sortAsc ? cmp : -cmp;
     });
