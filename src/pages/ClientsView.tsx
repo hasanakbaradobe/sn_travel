@@ -48,6 +48,9 @@ export const ClientsView: React.FC<ClientsViewProps> = ({
   const [sortAsc, setSortAsc] = useState<boolean>(false);
   const [clientToDelete, setClientToDelete] = useState<Client | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [driveModalClient, setDriveModalClient] = useState<Client | null>(null);
+  const [driveUrlInput, setDriveUrlInput] = useState('');
+  const [savingDrive, setSavingDrive] = useState(false);
 
   // Server & Client Pagination state
   const [currentPage, setCurrentPage] = useState<number>(1);
@@ -387,6 +390,24 @@ export const ClientsView: React.FC<ClientsViewProps> = ({
                             </a>
                           ) : null}
                           <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              e.preventDefault();
+                              setDriveModalClient(client);
+                              setDriveUrlInput(client.google_drive_url || '');
+                            }}
+                            className={`p-1.5 rounded-lg transition ${
+                              client.google_drive_url
+                                ? 'text-slate-500 hover:text-amber-800 hover:bg-amber-50'
+                                : 'text-amber-600 hover:text-amber-800 hover:bg-amber-50 font-bold px-2 text-[11px] flex items-center gap-1'
+                            }`}
+                            title={client.google_drive_url ? 'Edit Google Drive Link' : 'Add Google Drive Link'}
+                          >
+                            <FolderOpen className="w-3.5 h-3.5" />
+                            <span>{client.google_drive_url ? 'Edit Drive' : '+ Drive'}</span>
+                          </button>
+                          <button
                             onClick={() => onOpenClient(client.id)}
                             className="p-1.5 text-slate-400 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition"
                             title="Open Client Profile"
@@ -475,6 +496,97 @@ export const ClientsView: React.FC<ClientsViewProps> = ({
         onConfirm={handleDeleteClient}
         onClose={() => setClientToDelete(null)}
       />
+
+      {/* Quick Google Drive Link Add/Edit Modal */}
+      {driveModalClient && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-xs animate-in fade-in duration-150 cursor-pointer"
+          onClick={() => setDriveModalClient(null)}
+        >
+          <div
+            className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-md w-full p-6 space-y-4 animate-in zoom-in-95 duration-150 cursor-default"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-2.5">
+                <div className="w-9 h-9 rounded-xl bg-amber-50 text-amber-700 flex items-center justify-center shrink-0 border border-amber-200">
+                  <FolderOpen className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="font-bold text-slate-900 text-base">Google Drive Folder Link</h3>
+                  <p className="text-xs text-slate-500">
+                    {driveModalClient.full_name} ({driveModalClient.client_id})
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => setDriveModalClient(null)}
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg transition"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Google Drive / Folder URL
+                </label>
+                <input
+                  type="url"
+                  value={driveUrlInput}
+                  onChange={(e) => setDriveUrlInput(e.target.value)}
+                  placeholder="https://drive.google.com/drive/folders/..."
+                  className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-600 font-mono"
+                />
+                <p className="text-[11px] text-slate-400 mt-1">
+                  Paste the shared Google Drive folder link containing client passports and documents.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+              <button
+                type="button"
+                disabled={savingDrive}
+                onClick={() => setDriveModalClient(null)}
+                className="px-4 py-2 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 rounded-xl text-xs font-semibold transition"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={savingDrive}
+                onClick={async () => {
+                  setSavingDrive(true);
+                  try {
+                    await api.updateClient(driveModalClient.id, {
+                      google_drive_url: driveUrlInput.trim() || null,
+                    });
+                    setDriveModalClient(null);
+                    if (onRefreshData) onRefreshData();
+                  } catch (err: any) {
+                    console.error('Failed to update drive URL:', err);
+                    alert('Could not update Google Drive link: ' + (err.message || 'Unknown error'));
+                  } finally {
+                    setSavingDrive(false);
+                  }
+                }}
+                className="px-4 py-2 bg-sky-700 hover:bg-sky-800 disabled:opacity-50 text-white rounded-xl text-xs font-bold shadow-xs transition flex items-center gap-1.5"
+              >
+                {savingDrive ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    <span>Saving...</span>
+                  </>
+                ) : (
+                  <span>Save Drive Link</span>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
