@@ -55,12 +55,12 @@ export const ApplicationStatusModal: React.FC<ApplicationStatusModalProps> = ({
 
   if (!isOpen || !application) return null;
 
-  const isOnlineReviewCompleted = currentStatus === 'Online Review Completed';
+  const isDateRequiredStatus = currentStatus === 'Online Review Completed' || currentStatus === 'Pending Collection';
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (isOnlineReviewCompleted && !deliveryDate) {
-      setError('Please select a Delivery Date when status is Online Review Completed');
+    if (isDateRequiredStatus && !deliveryDate) {
+      setError(`Please select a Collection / Delivery Date when status is ${currentStatus}`);
       return;
     }
 
@@ -78,7 +78,7 @@ export const ApplicationStatusModal: React.FC<ApplicationStatusModalProps> = ({
       await api.updateApplicationStatus(
         application.id,
         currentStatus,
-        isOnlineReviewCompleted ? deliveryDate : (deliveryDate || null),
+        deliveryDate || null,
         notes || undefined
       );
 
@@ -163,20 +163,20 @@ export const ApplicationStatusModal: React.FC<ApplicationStatusModalProps> = ({
             </div>
           )}
 
-          {/* Special Delivery Date Logic Container */}
-          {isOnlineReviewCompleted ? (
+          {/* Special Delivery / Collection Date Container */}
+          {isDateRequiredStatus ? (
             <div className="p-4 bg-emerald-50 border border-emerald-300 rounded-xl space-y-2 animate-in fade-in duration-150">
               <div className="flex items-center justify-between">
                 <label className="text-xs font-bold text-emerald-950 flex items-center gap-1.5">
                   <Calendar className="w-4 h-4 text-emerald-700" />
-                  Scheduled Delivery Date <span className="text-red-500">*</span>
+                  {currentStatus === 'Pending Collection' ? 'Collection Date / Scheduled Delivery' : 'Scheduled Delivery Date'} <span className="text-red-500">*</span>
                 </label>
                 <span className="text-[10px] bg-emerald-200 text-emerald-900 font-semibold px-2 py-0.5 rounded-full flex items-center gap-1">
                   <Sparkles className="w-2.5 h-2.5" /> Auto-creates Task
                 </span>
               </div>
               <p className="text-[11px] text-emerald-800">
-                Online review is complete. Saving a delivery date will automatically create/update task:{' '}
+                Status is <strong className="font-bold">{currentStatus}</strong>. Saving a date will automatically create/update task:{' '}
                 <strong className="font-semibold">Delivery - {application.client_name || 'Client'}</strong> in the Calendar.
               </p>
               <input

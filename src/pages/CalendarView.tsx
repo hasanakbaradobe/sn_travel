@@ -27,6 +27,7 @@ import {
 import { Task, VisaApplication, Client, User as UserType, HotelBooking } from '../types';
 import { getPriorityBadge, STATUS_CONFIG } from '../utils/status';
 import { ClientAvatar } from '../components/ClientAvatar';
+import { HotelBookingDetailModal } from '../components/HotelBookingDetailModal';
 import { api } from '../services/api';
 
 export interface CalendarEvent {
@@ -124,6 +125,19 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
   }, [rescheduleFeedback]);
 
   const [calendarError, setCalendarError] = useState<string | null>(null);
+  const [selectedHotelBooking, setSelectedHotelBooking] = useState<HotelBooking | null>(null);
+
+  // Toggle hotel booking status (e.g. Confirmed <-> Checked Out)
+  const handleToggleHotelBooking = async (booking: HotelBooking) => {
+    try {
+      const newStatus = booking.status === 'Checked Out' ? 'Confirmed' : 'Checked Out';
+      await api.updateHotelBooking(booking.id, { status: newStatus });
+      if (onRefreshData) onRefreshData(true);
+    } catch (err: any) {
+      console.error('Failed to update hotel booking status:', err);
+      setCalendarError('Could not update hotel check-out status: ' + (err.message || 'Unknown error'));
+    }
+  };
 
   useEffect(() => {
     if (!calendarError) return;
@@ -211,7 +225,24 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
 
     try {
       setIsUpdatingDate(taskId);
-      await api.updateTask(taskId, { due_date: newDueDate });
+      let taskUpdated = false;
+      try {
+        await api.updateTask(taskId, { due_date: newDueDate });
+        taskUpdated = true;
+      } catch (err: any) {
+        // If updating task directly fails (e.g. task not in DB) and is tied to an application, update application delivery date
+        if (task.application_id) {
+          await api.updateApplication(task.application_id, { delivery_date: newDueDate });
+          taskUpdated = true;
+        } else {
+          throw err;
+        }
+      }
+
+      // Also sync application delivery date if linked
+      if (taskUpdated && task.application_id) {
+        await api.updateApplication(task.application_id, { delivery_date: newDueDate }).catch(() => {});
+      }
 
       setRescheduleFeedback({
         taskId,
@@ -231,6 +262,19 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
       );
       console.error('Failed to move task:', err);
       setCalendarError('Could not move task: ' + (err.message || 'Unknown error'));
+    } finally {
+      setIsUpdatingDate(null);
+    }
+  };
+
+  const handleRescheduleApplication = async (appId: number, targetDate: string) => {
+    try {
+      setIsUpdatingDate(appId);
+      await api.updateApplication(appId, { delivery_date: targetDate });
+      if (onRefreshData) onRefreshData(true);
+    } catch (err: any) {
+      console.error('Failed to move application delivery date:', err);
+      setCalendarError('Could not reschedule collection/delivery date: ' + (err.message || 'Unknown error'));
     } finally {
       setIsUpdatingDate(null);
     }
@@ -283,12 +327,14 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
 
   // Drag & Drop event handlers for tasks and calendar cells
   const handleDragStart = (e: React.DragEvent, ev: CalendarEvent) => {
-    if (!ev.taskId) return;
-    setDraggingTaskId(ev.taskId);
-    setDraggingTaskTitle(ev.title);
+    if (!ev.taskId && !ev.applicationId) return;
+    if (ev.taskId) {
+      setDraggingTaskId(ev.taskId);
+      setDraggingTaskTitle(ev.title);
+    }
     e.dataTransfer.setData(
       'text/plain',
-      JSON.stringify({ taskId: ev.taskId, originalDate: ev.date, title: ev.title })
+      JSON.stringify({ taskId: ev.taskId, applicationId: ev.applicationId, originalDate: ev.date, title: ev.title })
     );
     e.dataTransfer.effectAllowed = 'move';
   };
@@ -320,15 +366,15 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
     setDragOverDate(null);
     let taskId = draggingTaskId;
     let taskTitle = draggingTaskTitle || undefined;
+    let appId: number | undefined;
 
     try {
       const dataStr = e.dataTransfer.getData('text/plain');
       if (dataStr) {
         const parsed = JSON.parse(dataStr);
-        if (parsed.taskId) {
-          taskId = parsed.taskId;
-          taskTitle = parsed.title;
-        }
+        if (parsed.taskId) taskId = parsed.taskId;
+        if (parsed.title) taskTitle = parsed.title;
+        if (parsed.applicationId) appId = parsed.applicationId;
       }
     } catch (_) {
       // Use fallback from state
@@ -336,6 +382,8 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
 
     if (taskId) {
       handleRescheduleTask(taskId, targetDate, taskTitle);
+    } else if (appId) {
+      handleRescheduleApplication(appId, targetDate);
     }
     handleDragEnd();
   };
@@ -405,12 +453,12 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
         list.push({
           id: `app-delivery-${app.id}`,
           type: 'delivery',
-          title: `📦 Delivery: ${app.client_name || 'Client'} (${app.visa_type_name || 'Visa'})`,
+          title: `${app.status === 'Pending Collection' ? '📌 Collection' : '📦 Delivery'}: ${app.client_name || 'Client'} (${app.visa_type_name || 'Visa'})`,
           subtitle: `Passport: ${app.passport_number || ''} • Status: ${app.status}`,
           date: cleanDate(app.delivery_date),
           priority: 'High',
           status: app.status,
-          isCompleted: app.status === 'Pending Collection' || app.status === 'Returned',
+          isCompleted: app.status === 'Returned',
           clientId: app.client_id,
           clientName: app.client_name,
           clientCode: app.client_code,
@@ -822,8 +870,8 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
             activeDailyHubEvents.map((ev) => {
               const priorityBadge = ev.priority ? getPriorityBadge(ev.priority) : null;
               const isOverdue = !ev.isCompleted && ev.date < todayStr;
-              const isDraggable = !!(ev.taskId && !ev.isCompleted);
-              const isBeingDragged = draggingTaskId === ev.taskId;
+              const isDraggable = !!((ev.taskId || ev.applicationId) && !ev.isCompleted);
+              const isBeingDragged = !!(ev.taskId && draggingTaskId === ev.taskId);
 
               return (
                 <div
@@ -871,6 +919,19 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                       >
                         {ev.isCompleted ? (
                           <CheckSquare className="w-5 h-5 text-emerald-400" />
+                        ) : (
+                          <Square className="w-5 h-5 text-slate-500 hover:text-white" />
+                        )}
+                      </button>
+                    ) : ev.rawBooking ? (
+                      <button
+                        type="button"
+                        onClick={() => ev.rawBooking && handleToggleHotelBooking(ev.rawBooking)}
+                        className="mt-0.5 text-slate-400 hover:text-teal-400 transition shrink-0 cursor-pointer"
+                        title={ev.isCompleted ? 'Mark as Confirmed' : 'Mark as Checked Out (Completed)'}
+                      >
+                        {ev.isCompleted ? (
+                          <CheckSquare className="w-5 h-5 text-teal-400" />
                         ) : (
                           <Square className="w-5 h-5 text-slate-500 hover:text-white" />
                         )}
@@ -1016,6 +1077,16 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                         className="px-2.5 py-1 bg-sky-600/80 hover:bg-sky-600 text-white rounded-lg text-xs font-semibold transition cursor-pointer"
                       >
                         Client
+                      </button>
+                    )}
+
+                    {ev.rawBooking && (
+                      <button
+                        type="button"
+                        onClick={() => ev.rawBooking && setSelectedHotelBooking(ev.rawBooking)}
+                        className="px-2.5 py-1 bg-teal-800/90 hover:bg-teal-700 text-teal-200 hover:text-white rounded-lg text-xs font-semibold border border-teal-700 transition cursor-pointer"
+                      >
+                        Hotel
                       </button>
                     )}
 
@@ -1243,7 +1314,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
 
               return (
                 <div
-                  key={idx}
+                  key={cell.dateStr}
                   onClick={() => setSelectedDate(cell.dateStr)}
                   onDragOver={(e) => handleCellDragOver(e, cell.dateStr)}
                   onDragLeave={(e) => handleCellDragLeave(e, cell.dateStr)}
@@ -1290,8 +1361,8 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                       const isCompleted = ev.isCompleted;
                       const isDelivery = ev.type === 'delivery';
                       const isHotel = ev.type === 'hotel_checkout';
-                      const isDraggable = !!(ev.taskId && !isCompleted);
-                      const isBeingDragged = draggingTaskId === ev.taskId;
+                      const isDraggable = !!((ev.taskId || ev.applicationId) && !isCompleted);
+                      const isBeingDragged = !!(ev.taskId && draggingTaskId === ev.taskId);
 
                       return (
                         <div
@@ -1299,10 +1370,18 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                           draggable={isDraggable}
                           onDragStart={(e) => isDraggable && handleDragStart(e, ev)}
                           onDragEnd={handleDragEnd}
-                          title={isDraggable ? 'Drag onto any day to reschedule' : undefined}
+                          onClick={(e) => {
+                            if (ev.rawBooking) {
+                              e.stopPropagation();
+                              setSelectedHotelBooking(ev.rawBooking);
+                            }
+                          }}
+                          title={ev.rawBooking ? 'Click to view hotel booking details' : isDraggable ? 'Drag onto any day to reschedule' : undefined}
                           className={`text-[11px] p-1.5 rounded-lg border text-left transition flex items-start gap-1 shadow-2xs group/pill select-none ${
                             isBeingDragged
                               ? 'opacity-25 scale-95 border-dashed border-sky-500 bg-sky-100'
+                              : ev.rawBooking
+                              ? 'cursor-pointer hover:border-teal-400 hover:shadow-xs'
                               : isDraggable
                               ? 'cursor-grab active:cursor-grabbing hover:border-sky-400 hover:shadow-xs'
                               : ''
@@ -1332,11 +1411,28 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                                 if (ev.taskId) onToggleTask(ev.taskId);
                               }}
                               className="mt-0.5 shrink-0 cursor-pointer"
+                              title={isCompleted ? 'Mark as Pending' : 'Mark as Completed'}
                             >
                               {isCompleted ? (
                                 <CheckSquare className="w-3 h-3 text-emerald-600" />
                               ) : (
                                 <Square className="w-3 h-3 text-slate-400 hover:text-sky-600" />
+                              )}
+                            </button>
+                          ) : ev.rawBooking ? (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (ev.rawBooking) handleToggleHotelBooking(ev.rawBooking);
+                              }}
+                              className="mt-0.5 shrink-0 cursor-pointer"
+                              title={isCompleted ? 'Mark as Confirmed' : 'Mark as Checked Out (Completed)'}
+                            >
+                              {isCompleted ? (
+                                <CheckSquare className="w-3 h-3 text-teal-600" />
+                              ) : (
+                                <Square className="w-3 h-3 text-teal-500 hover:text-teal-700" />
                               )}
                             </button>
                           ) : (
@@ -1391,7 +1487,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
 
               return (
                 <div
-                  key={idx}
+                  key={col.dateStr}
                   onDragOver={(e) => handleCellDragOver(e, col.dateStr)}
                   onDragLeave={(e) => handleCellDragLeave(e, col.dateStr)}
                   onDrop={(e) => handleCellDrop(e, col.dateStr)}
@@ -1428,8 +1524,8 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                       <div className="text-center py-8 text-[11px] text-slate-400">No events</div>
                     ) : (
                       colEvents.map((ev) => {
-                        const isDraggable = !!(ev.taskId && !ev.isCompleted);
-                        const isBeingDragged = draggingTaskId === ev.taskId;
+                        const isDraggable = !!((ev.taskId || ev.applicationId) && !ev.isCompleted);
+                        const isBeingDragged = !!(ev.taskId && draggingTaskId === ev.taskId);
 
                         return (
                           <div
@@ -1459,10 +1555,11 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                                 <GripVertical className="w-3.5 h-3.5 text-slate-400 group-hover/weekpill:text-sky-600 mt-0.5 shrink-0 opacity-40 group-hover/weekpill:opacity-100 transition" />
                               )}
 
-                              {ev.taskId && (
+                              {ev.taskId ? (
                                 <button
                                   onClick={() => ev.taskId && onToggleTask(ev.taskId)}
                                   className="mt-0.5 shrink-0 cursor-pointer"
+                                  title={ev.isCompleted ? 'Mark as Pending' : 'Mark as Completed'}
                                 >
                                   {ev.isCompleted ? (
                                     <CheckSquare className="w-3.5 h-3.5 text-emerald-600" />
@@ -1470,7 +1567,19 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                                     <Square className="w-3.5 h-3.5 text-slate-400 hover:text-sky-600" />
                                   )}
                                 </button>
-                              )}
+                              ) : ev.rawBooking ? (
+                                <button
+                                  onClick={() => ev.rawBooking && handleToggleHotelBooking(ev.rawBooking)}
+                                  className="mt-0.5 shrink-0 cursor-pointer"
+                                  title={ev.isCompleted ? 'Mark as Confirmed' : 'Mark as Checked Out (Completed)'}
+                                >
+                                  {ev.isCompleted ? (
+                                    <CheckSquare className="w-3.5 h-3.5 text-teal-600" />
+                                  ) : (
+                                    <Square className="w-3.5 h-3.5 text-teal-500 hover:text-teal-700" />
+                                  )}
+                                </button>
+                              ) : null}
                               <div className="font-semibold text-xs leading-tight flex-1">{ev.title}</div>
                             </div>
 
@@ -1532,10 +1641,11 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                   className="p-4 bg-slate-50 border border-slate-200 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-white hover:border-sky-300 transition shadow-2xs"
                 >
                   <div className="flex items-center gap-3">
-                    {ev.taskId && (
+                    {ev.taskId ? (
                       <button
                         onClick={() => ev.taskId && onToggleTask(ev.taskId)}
                         className="text-slate-400 hover:text-emerald-600 transition cursor-pointer"
+                        title={ev.isCompleted ? 'Mark as Pending' : 'Mark as Completed'}
                       >
                         {ev.isCompleted ? (
                           <CheckSquare className="w-5 h-5 text-emerald-600" />
@@ -1543,7 +1653,19 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                           <Square className="w-5 h-5" />
                         )}
                       </button>
-                    )}
+                    ) : ev.rawBooking ? (
+                      <button
+                        onClick={() => ev.rawBooking && handleToggleHotelBooking(ev.rawBooking)}
+                        className="text-teal-500 hover:text-teal-700 transition cursor-pointer"
+                        title={ev.isCompleted ? 'Mark as Confirmed' : 'Mark as Checked Out (Completed)'}
+                      >
+                        {ev.isCompleted ? (
+                          <CheckSquare className="w-5 h-5 text-teal-600" />
+                        ) : (
+                          <Square className="w-5 h-5 text-teal-500 hover:text-teal-700" />
+                        )}
+                      </button>
+                    ) : null}
                     {ev.clientName && (
                       <ClientAvatar
                         fullName={ev.clientName}
@@ -1562,6 +1684,14 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                   </div>
 
                   <div className="flex items-center gap-2">
+                    {ev.rawBooking && (
+                      <button
+                        onClick={() => ev.rawBooking && setSelectedHotelBooking(ev.rawBooking)}
+                        className="px-3 py-1.5 bg-teal-50 border border-teal-200 text-teal-800 hover:bg-teal-100 rounded-xl text-xs font-semibold cursor-pointer"
+                      >
+                        Hotel Details
+                      </button>
+                    )}
                     {ev.clientId && (
                       <button
                         onClick={() => ev.clientId && onOpenClient(ev.clientId)}
@@ -1600,10 +1730,11 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                     }`}
                   >
                     <div className="flex items-start gap-3">
-                      {ev.taskId && (
+                      {ev.taskId ? (
                         <button
                           onClick={() => ev.taskId && onToggleTask(ev.taskId)}
                           className="mt-1 text-slate-400 hover:text-emerald-600 transition shrink-0 cursor-pointer"
+                          title={ev.isCompleted ? 'Mark as Pending' : 'Mark as Completed'}
                         >
                           {ev.isCompleted ? (
                             <CheckSquare className="w-5 h-5 text-emerald-600" />
@@ -1611,7 +1742,19 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                             <Square className="w-5 h-5" />
                           )}
                         </button>
-                      )}
+                      ) : ev.rawBooking ? (
+                        <button
+                          onClick={() => ev.rawBooking && handleToggleHotelBooking(ev.rawBooking)}
+                          className="mt-1 text-teal-500 hover:text-teal-700 transition shrink-0 cursor-pointer"
+                          title={ev.isCompleted ? 'Mark as Confirmed' : 'Mark as Checked Out (Completed)'}
+                        >
+                          {ev.isCompleted ? (
+                            <CheckSquare className="w-5 h-5 text-teal-600" />
+                          ) : (
+                            <Square className="w-5 h-5 text-teal-500 hover:text-teal-700" />
+                          )}
+                        </button>
+                      ) : null}
 
                       {ev.clientName && (
                         <ClientAvatar
@@ -1674,6 +1817,15 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                         </span>
                       )}
 
+                      {ev.rawBooking && (
+                        <button
+                          onClick={() => ev.rawBooking && setSelectedHotelBooking(ev.rawBooking)}
+                          className="px-2.5 py-1 text-xs font-semibold text-teal-800 bg-teal-50 hover:bg-teal-100 border border-teal-200 rounded-lg transition cursor-pointer"
+                        >
+                          Hotel Details
+                        </button>
+                      )}
+
                       {ev.clientId && (
                         <button
                           onClick={() => ev.clientId && onOpenClient(ev.clientId)}
@@ -1732,10 +1884,11 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                     className="p-3 bg-slate-50 border border-slate-200 rounded-xl flex items-start justify-between gap-3"
                   >
                     <div className="flex items-start gap-2.5">
-                      {ev.taskId && (
+                      {ev.taskId ? (
                         <button
                           onClick={() => ev.taskId && onToggleTask(ev.taskId)}
                           className="mt-1 shrink-0 cursor-pointer"
+                          title={ev.isCompleted ? 'Mark as Pending' : 'Mark as Completed'}
                         >
                           {ev.isCompleted ? (
                             <CheckSquare className="w-4 h-4 text-emerald-600" />
@@ -1743,7 +1896,19 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                             <Square className="w-4 h-4 text-slate-400 hover:text-sky-600" />
                           )}
                         </button>
-                      )}
+                      ) : ev.rawBooking ? (
+                        <button
+                          onClick={() => ev.rawBooking && handleToggleHotelBooking(ev.rawBooking)}
+                          className="mt-1 shrink-0 cursor-pointer"
+                          title={ev.isCompleted ? 'Mark as Confirmed' : 'Mark as Checked Out (Completed)'}
+                        >
+                          {ev.isCompleted ? (
+                            <CheckSquare className="w-4 h-4 text-teal-600" />
+                          ) : (
+                            <Square className="w-4 h-4 text-teal-500 hover:text-teal-700" />
+                          )}
+                        </button>
+                      ) : null}
                       {ev.clientName && (
                         <ClientAvatar
                           fullName={ev.clientName}
@@ -1767,6 +1932,17 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                     </div>
 
                     <div className="flex items-center gap-1.5 shrink-0">
+                      {ev.rawBooking && (
+                        <button
+                          onClick={() => {
+                            setSelectedDate(null);
+                            if (ev.rawBooking) setSelectedHotelBooking(ev.rawBooking);
+                          }}
+                          className="px-2 py-1 bg-white border border-teal-200 text-teal-800 hover:bg-teal-50 rounded-lg text-[10px] font-bold cursor-pointer"
+                        >
+                          Hotel
+                        </button>
+                      )}
                       {ev.clientId && (
                         <button
                           onClick={() => {
@@ -1869,6 +2045,19 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
           <Loader2 className="w-3.5 h-3.5 animate-spin text-sky-400" />
           <span>Rescheduling task...</span>
         </div>
+      )}
+      {/* Hotel Booking Detail Modal */}
+      {selectedHotelBooking && (
+        <HotelBookingDetailModal
+          isOpen={!!selectedHotelBooking}
+          onClose={() => setSelectedHotelBooking(null)}
+          booking={selectedHotelBooking}
+          onUpdated={() => {
+            setSelectedHotelBooking(null);
+            if (onRefreshData) onRefreshData(true);
+          }}
+          onOpenClient={onOpenClient}
+        />
       )}
     </div>
   );

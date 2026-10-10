@@ -1484,14 +1484,17 @@ export const dbService = {
     let appId = `APP-${String(id).padStart(6, '0')}`;
     const now = new Date().toISOString();
     const status = data.status || 'Upcoming';
-    const deliveryDate = status === 'Online Review Completed' && data.delivery_date ? data.delivery_date : null;
+    const deliveryDate = (status === 'Online Review Completed' || status === 'Pending Collection') && data.delivery_date ? data.delivery_date : null;
+
+    const validAssignedUserId = data.assigned_user_id && store.users.some(u => u.id === data.assigned_user_id) ? data.assigned_user_id : null;
+    const validUserId = userId && store.users.some(u => u.id === userId) ? userId : 1;
 
     if (isConnectedToMySQL && pool) {
       try {
         const [res]: any = await pool.query(
           `INSERT INTO visa_applications (application_id, client_id, visa_type_id, status, delivery_date, notes, assigned_user_id, created_at, updated_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
-          [appId, data.client_id, data.visa_type_id, status, deliveryDate, data.notes?.trim() || null, data.assigned_user_id || null]
+          [appId, data.client_id, data.visa_type_id, status, deliveryDate, data.notes?.trim() || null, validAssignedUserId]
         );
         if (res && res.insertId) {
           id = res.insertId;
@@ -1501,7 +1504,7 @@ export const dbService = {
         await pool.query(
           `INSERT INTO application_status_history (application_id, old_status, new_status, delivery_date, changed_by_user_id, notes, created_at)
            VALUES (?, NULL, ?, ?, ?, 'Visa application created', NOW())`,
-          [id, status, deliveryDate, userId]
+          [id, status, deliveryDate, validUserId]
         );
       } catch (err: any) {
         console.error('[MySQL] Error creating application in MySQL:', err.message);
@@ -1516,7 +1519,7 @@ export const dbService = {
       status,
       delivery_date: deliveryDate,
       notes: data.notes?.trim() || null,
-      assigned_user_id: data.assigned_user_id || null,
+      assigned_user_id: validAssignedUserId,
       created_at: now,
       updated_at: now,
     };
@@ -1530,7 +1533,7 @@ export const dbService = {
       old_status: null,
       new_status: status,
       delivery_date: app.delivery_date,
-      changed_by_user_id: userId,
+      changed_by_user_id: validUserId,
       notes: 'Visa application created',
       created_at: now,
     });
@@ -1538,14 +1541,14 @@ export const dbService = {
     const client = store.clients.find(c => c.id === data.client_id);
     const clientName = client?.full_name || 'Client';
 
-    // If initial status was Online Review Completed with delivery date, create delivery task
-    if (status === 'Online Review Completed' && app.delivery_date) {
-      await this.syncDeliveryTask(app, clientName, userId);
+    // If initial status requires a delivery date, create delivery task
+    if ((status === 'Online Review Completed' || status === 'Pending Collection') && app.delivery_date) {
+      await this.syncDeliveryTask(app, clientName, validUserId);
     }
 
     saveStore(store);
-    this.logActivity(userId, 'CREATE_APPLICATION', 'APPLICATION', id, `Created visa application ${app.application_id} for ${clientName}`);
-    return app;
+    this.logActivity(validUserId, 'CREATE_APPLICATION', 'APPLICATION', id, `Created visa application ${app.application_id} for ${clientName}`);
+    return this.getApplicationById(id) || app;
   },
 
   async updateApplicationStatus(
@@ -1566,7 +1569,7 @@ export const dbService = {
     const clientName = client?.full_name || 'Client';
 
     // Delivery date business logic
-    if (newStatus === 'Online Review Completed') {
+    if (newStatus === 'Online Review Completed' || newStatus === 'Pending Collection') {
       if (deliveryDate) {
         app.delivery_date = deliveryDate;
       }
@@ -1606,8 +1609,8 @@ export const dbService = {
       created_at: new Date().toISOString(),
     });
 
-    // If status is Online Review Completed and we have a delivery date, create/update delivery task
-    if (newStatus === 'Online Review Completed' && app.delivery_date) {
+    // If status has a collection/delivery date, create/update delivery task
+    if ((newStatus === 'Online Review Completed' || newStatus === 'Pending Collection') && app.delivery_date) {
       await this.syncDeliveryTask(app, clientName, userId);
     }
 
@@ -1677,17 +1680,21 @@ export const dbService = {
       t => t.application_id === app.id && t.is_delivery_task === 1
     );
 
+    const validAssignedUserId = app.assigned_user_id && store.users.some(u => u.id === app.assigned_user_id)
+      ? app.assigned_user_id
+      : (userId && store.users.some(u => u.id === userId) ? userId : (store.users[0]?.id || null));
+
     if (existingTask) {
       existingTask.due_date = app.delivery_date;
       existingTask.updated_at = new Date().toISOString();
-      if (app.assigned_user_id) {
-        existingTask.assigned_user_id = app.assigned_user_id;
+      if (validAssignedUserId) {
+        existingTask.assigned_user_id = validAssignedUserId;
       }
       if (isConnectedToMySQL && pool) {
         try {
           await pool.query(
             'UPDATE tasks SET due_date = ?, assigned_user_id = COALESCE(?, assigned_user_id), updated_at = NOW() WHERE id = ?',
-            [app.delivery_date, app.assigned_user_id || null, existingTask.id]
+            [app.delivery_date, validAssignedUserId, existingTask.id]
           );
         } catch (err: any) {
           console.error('[MySQL] Error updating delivery task:', err.message);
@@ -1703,14 +1710,17 @@ export const dbService = {
              VALUES (?, ?, ?, ?, ?, ?, 'High', 'Pending', 1, NOW(), NOW())`,
             [
               taskTitle,
-              `Scheduled passport/visa delivery for ${clientName} (${app.application_id}). Status: Online Review Completed.`,
+              `Scheduled passport/visa collection/delivery for ${clientName} (${app.application_id}). Status: ${app.status}.`,
               app.client_id,
               app.id,
-              app.assigned_user_id || 2,
+              validAssignedUserId,
               app.delivery_date,
             ]
           );
-          if (res && res.insertId) taskId = res.insertId;
+          if (res && res.insertId) {
+            taskId = res.insertId;
+            store.nextIds.tasks = Math.max(store.nextIds.tasks, taskId + 1);
+          }
         } catch (err: any) {
           console.error('[MySQL] Error creating delivery task:', err.message);
         }
@@ -1718,10 +1728,10 @@ export const dbService = {
       const newTask: Task = {
         id: taskId,
         title: taskTitle,
-        description: `Scheduled passport/visa delivery for ${clientName} (${app.application_id}). Status: Online Review Completed.`,
+        description: `Scheduled passport/visa collection/delivery for ${clientName} (${app.application_id}). Status: ${app.status}.`,
         client_id: app.client_id,
         application_id: app.id,
-        assigned_user_id: app.assigned_user_id || 2,
+        assigned_user_id: validAssignedUserId,
         due_date: app.delivery_date,
         priority: 'High',
         status: 'Pending',
@@ -1815,6 +1825,7 @@ export const dbService = {
   }, userId = 1) {
     let id = store.nextIds.tasks++;
     const now = new Date().toISOString();
+    const validAssignedUserId = data.assigned_user_id && store.users.some(u => u.id === data.assigned_user_id) ? data.assigned_user_id : null;
 
     if (isConnectedToMySQL && pool) {
       try {
@@ -1826,7 +1837,7 @@ export const dbService = {
             data.description?.trim() || null,
             data.client_id || null,
             data.application_id || null,
-            data.assigned_user_id || null,
+            validAssignedUserId,
             data.due_date,
             data.priority || 'Normal',
           ]
@@ -1846,7 +1857,7 @@ export const dbService = {
       description: data.description?.trim() || null,
       client_id: data.client_id || null,
       application_id: data.application_id || null,
-      assigned_user_id: data.assigned_user_id || null,
+      assigned_user_id: validAssignedUserId,
       due_date: data.due_date,
       priority: data.priority || 'Normal',
       status: 'Pending',
@@ -1869,7 +1880,11 @@ export const dbService = {
     if (data.description !== undefined) task.description = data.description?.trim() || null;
     if (data.client_id !== undefined) task.client_id = data.client_id;
     if (data.application_id !== undefined) task.application_id = data.application_id;
-    if (data.assigned_user_id !== undefined) task.assigned_user_id = data.assigned_user_id;
+    if (data.assigned_user_id !== undefined) {
+      task.assigned_user_id = data.assigned_user_id && store.users.some(u => u.id === data.assigned_user_id)
+        ? data.assigned_user_id
+        : null;
+    }
     if (data.due_date !== undefined) task.due_date = data.due_date;
     if (data.priority !== undefined) task.priority = data.priority;
     if (data.status !== undefined) {
@@ -2818,7 +2833,7 @@ export const dbService = {
 
     const totalClients = store.clients.length;
     const activeApplications = store.visa_applications.filter(
-      a => a.status !== 'Rejected' && a.status !== 'Pending Collection' && a.status !== 'Returned'
+      a => a.status !== 'Rejected' && a.status !== 'Returned'
     ).length;
 
     const cleanDue = (d?: string | null) => (d ? String(d).slice(0, 10) : '');

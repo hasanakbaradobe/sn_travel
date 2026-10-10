@@ -38,13 +38,11 @@ export const HotelBookingDetailModal: React.FC<HotelBookingDetailModalProps> = (
   onUpdated,
   onOpenClient,
 }) => {
-  if (!isOpen || !booking) return null;
-
   const [isEditing, setIsEditing] = useState(false);
-  const [status, setStatus] = useState<HotelBookingStatus>(booking.status);
-  const [comment, setComment] = useState(booking.comment || '');
-  const [checkInDate, setCheckInDate] = useState(booking.check_in_date ? String(booking.check_in_date).slice(0, 10) : '');
-  const [checkOutDate, setCheckOutDate] = useState(booking.check_out_date ? String(booking.check_out_date).slice(0, 10) : '');
+  const [status, setStatus] = useState<HotelBookingStatus>(booking?.status || 'Confirmed');
+  const [comment, setComment] = useState(booking?.comment || '');
+  const [checkInDate, setCheckInDate] = useState(booking?.check_in_date ? String(booking.check_in_date).slice(0, 10) : '');
+  const [checkOutDate, setCheckOutDate] = useState(booking?.check_out_date ? String(booking.check_out_date).slice(0, 10) : '');
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
@@ -78,6 +76,8 @@ export const HotelBookingDetailModal: React.FC<HotelBookingDetailModalProps> = (
     const days = Math.round(diff / (1000 * 60 * 60 * 24));
     return days >= 0 ? days : 0;
   }, [checkInDate, checkOutDate]);
+
+  if (!isOpen || !booking) return null;
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();

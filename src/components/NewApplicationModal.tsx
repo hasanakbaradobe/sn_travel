@@ -50,10 +50,12 @@ export const NewApplicationModal: React.FC<NewApplicationModalProps> = ({
       setError(null);
       api.getVisaTypes(true).then((vts) => {
         setVisaTypes(vts);
-        if (vts.length > 0 && !selectedVisaTypeId) {
+        if (vts.length > 0) {
           setSelectedVisaTypeId(vts[0].id);
+        } else {
+          setSelectedVisaTypeId('');
         }
-      });
+      }).catch((err) => console.error('Failed to load visa types:', err));
     }
   }, [isOpen, clientId]);
 
@@ -67,6 +69,11 @@ export const NewApplicationModal: React.FC<NewApplicationModalProps> = ({
       setError('Please select a visa type');
       return;
     }
+    const requiresDeliveryDate = status === 'Online Review Completed' || status === 'Pending Collection';
+    if (requiresDeliveryDate && !deliveryDate) {
+      setError(`Please specify a collection / delivery date for ${status} status`);
+      return;
+    }
 
     setSubmitting(true);
     try {
@@ -74,7 +81,7 @@ export const NewApplicationModal: React.FC<NewApplicationModalProps> = ({
         client_id: Number(selectedClientId),
         visa_type_id: Number(selectedVisaTypeId),
         status,
-        delivery_date: status === 'Online Review Completed' && deliveryDate ? deliveryDate : undefined,
+        delivery_date: deliveryDate ? deliveryDate : undefined,
         notes: notes || undefined,
         assigned_user_id: assignedUserId ? Number(assignedUserId) : undefined,
       });
@@ -149,9 +156,10 @@ export const NewApplicationModal: React.FC<NewApplicationModalProps> = ({
             <select
               required
               value={selectedVisaTypeId}
-              onChange={(e) => setSelectedVisaTypeId(Number(e.target.value))}
+              onChange={(e) => setSelectedVisaTypeId(e.target.value ? Number(e.target.value) : '')}
               className="w-full px-3 py-2 bg-white border border-slate-300 rounded-lg text-sm text-slate-800"
             >
+              {visaTypes.length === 0 && <option value="">Loading Visa Types...</option>}
               {visaTypes.map((vt) => (
                 <option key={vt.id} value={vt.id}>
                   {vt.name}
@@ -176,15 +184,15 @@ export const NewApplicationModal: React.FC<NewApplicationModalProps> = ({
             </select>
           </div>
 
-          {/* Conditional Delivery Date */}
-          {status === 'Online Review Completed' && (
+          {/* Conditional Delivery / Collection Date */}
+          {(status === 'Online Review Completed' || status === 'Pending Collection') && (
             <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-xl space-y-2 animate-in fade-in">
               <label className="block text-xs font-bold text-emerald-900 flex items-center gap-1.5">
                 <Calendar className="w-4 h-4 text-emerald-600" />
-                Delivery Date (Online Review Completed)
+                {status === 'Pending Collection' ? 'Collection Date / Scheduled Delivery' : 'Scheduled Delivery Date'}
               </label>
               <p className="text-[11px] text-emerald-800">
-                Saving this will automatically create a linked delivery task in the internal calendar!
+                Saving this date will automatically create a linked delivery task in the internal calendar!
               </p>
               <input
                 type="date"
