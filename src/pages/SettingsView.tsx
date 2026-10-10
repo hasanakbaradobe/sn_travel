@@ -1427,7 +1427,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               <span className="font-semibold">Configured Countries ({countries.length})</span>
               <span className="text-[11px] text-slate-400">Controls the searchable dropdown in client creation</span>
             </div>
-            <div className="divide-y divide-slate-100 max-h-[500px] overflow-y-auto">
+            <div className="divide-y divide-slate-100 max-h-[500px] overflow-y-auto no-scrollbar">
               {countries.map((c) => (
                 <div key={c.id} className="p-3.5 hover:bg-slate-50 transition flex items-center justify-between gap-3">
                   <div className="flex items-center gap-2.5">

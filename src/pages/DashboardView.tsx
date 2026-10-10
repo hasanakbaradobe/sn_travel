@@ -288,7 +288,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
               <span className="text-[11px] text-slate-400">Live feed</span>
             </div>
 
-            <div className="p-4 divide-y divide-slate-100 max-h-[500px] overflow-y-auto">
+            <div className="p-4 divide-y divide-slate-100 max-h-[500px] overflow-y-auto no-scrollbar">
               {metrics.recent_activity.map((log) => (
                 <div key={log.id} className="py-2.5 first:pt-0 last:pb-0">
                   <div className="flex items-start justify-between gap-2">

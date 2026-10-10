@@ -21,7 +21,40 @@ import path from 'path';
 
 export const apiRouter = Router();
 
-// Middleware: Disable client/proxy HTTP caching and force real-time MySQL database synchronization on every request
+// --------------------------------------------------------------------------
+// Server-Sent Events (SSE) Real-Time Broadcast Infrastructure
+// --------------------------------------------------------------------------
+const sseClients = new Set<Response>();
+
+export function broadcastDataChange(eventType: string = 'data_changed', data?: any) {
+  const payload = `data: ${JSON.stringify({ type: eventType, timestamp: Date.now(), ...(data || {}) })}\n\n`;
+  sseClients.forEach((clientRes) => {
+    try {
+      clientRes.write(payload);
+    } catch {
+      sseClients.delete(clientRes);
+    }
+  });
+}
+
+apiRouter.get('/events', (_req: Request, res: Response) => {
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  if (typeof (res as any).flushHeaders === 'function') {
+    (res as any).flushHeaders();
+  }
+
+  res.write(`data: ${JSON.stringify({ type: 'connected', timestamp: Date.now() })}\n\n`);
+  sseClients.add(res);
+
+  _req.on('close', () => {
+    sseClients.delete(res);
+  });
+});
+
+// Middleware: Disable client/proxy HTTP caching and perform smart non-blocking MySQL sync
 apiRouter.use(async (_req: Request, res: Response, next: NextFunction) => {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   res.setHeader('Pragma', 'no-cache');
@@ -29,16 +62,31 @@ apiRouter.use(async (_req: Request, res: Response, next: NextFunction) => {
   res.setHeader('Surrogate-Control', 'no-store');
 
   try {
-    await dbService.syncFromMySQL(true);
+    await dbService.syncFromMySQL(false);
   } catch (err: any) {
     // Non-blocking sync error catch
   }
   next();
 });
 
+// Middleware: Auto-broadcast SSE event on successful write mutations (POST, PUT, PATCH, DELETE)
+apiRouter.use((req: Request, res: Response, next: NextFunction) => {
+  const method = req.method.toUpperCase();
+  if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
+    const originalJson = res.json;
+    res.json = function (body: any) {
+      if (res.statusCode < 400 && req.path !== '/auth/login' && req.path !== '/auth/me') {
+        broadcastDataChange('data_changed', { endpoint: req.path });
+      }
+      return originalJson.call(this, body);
+    };
+  }
+  next();
+});
+
 // Health Check (Public)
 apiRouter.get('/health', (_req: Request, res: Response) => {
-  return res.json({ status: 'ok', timestamp: new Date().toISOString() });
+  return res.json({ status: 'ok', timestamp: new Date().toISOString(), sse_clients: sseClients.size });
 });
 
 // --------------------------------------------------------------------------

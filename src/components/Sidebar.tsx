@@ -109,7 +109,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       </div>
 
       {/* Navigation Links */}
-      <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
+      <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto no-scrollbar">
         <div className="px-3 pb-2 text-[11px] font-semibold tracking-wider uppercase text-slate-400">
           Navigation
         </div>

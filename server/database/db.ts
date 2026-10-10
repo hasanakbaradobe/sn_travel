@@ -29,6 +29,16 @@ async function probeMySQLConnection() {
     isConnectedToMySQL = true;
     connectionError = null;
     console.log(`[Database] Connected to MySQL database "${DB_NAME}" at ${DB_HOST}:${DB_PORT}`);
+    
+    // Ensure high-performance indexes exist in MySQL
+    try { await conn.query('CREATE INDEX idx_tasks_app_id ON tasks(application_id)'); } catch {}
+    try { await conn.query('CREATE INDEX idx_tasks_client_id ON tasks(client_id)'); } catch {}
+    try { await conn.query('CREATE INDEX idx_tasks_status ON tasks(status)'); } catch {}
+    try { await conn.query('CREATE INDEX idx_apps_client_id ON visa_applications(client_id)'); } catch {}
+    try { await conn.query('CREATE INDEX idx_apps_status ON visa_applications(status)'); } catch {}
+    try { await conn.query('CREATE INDEX idx_app_hist_app_id ON application_status_history(application_id)'); } catch {}
+    try { await conn.query('CREATE INDEX idx_hb_client_id ON hotel_bookings(client_id)'); } catch {}
+
     conn.release();
     await syncFromMySQL(true);
     return true;

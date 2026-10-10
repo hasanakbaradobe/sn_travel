@@ -247,15 +247,38 @@ export default function App() {
     return () => unsub();
   }, []);
 
-  // Periodic background real-time polling every 8 seconds for live database synchronization
+  // Real-Time Server-Sent Events (SSE) Stream & Smart Visibility-Aware Polling
   useEffect(() => {
     if (!currentUser) return;
 
-    const interval = setInterval(() => {
-      refreshAllData(true);
-    }, 8000);
+    let eventSource: EventSource | null = null;
+    try {
+      eventSource = new EventSource('/api/events');
+      eventSource.onmessage = (event) => {
+        try {
+          const parsed = JSON.parse(event.data);
+          if (parsed && parsed.type === 'data_changed') {
+            refreshAllData(true);
+          }
+        } catch {}
+      };
+    } catch (e) {
+      console.warn('[SSE] EventSource connection failed, falling back to polling:', e);
+    }
 
-    return () => clearInterval(interval);
+    // Smart background fallback poll (only runs when tab is active & visible to save CPU/DB bandwidth)
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'visible') {
+        refreshAllData(true);
+      }
+    }, 15000);
+
+    return () => {
+      if (eventSource) {
+        eventSource.close();
+      }
+      clearInterval(interval);
+    };
   }, [currentUser]);
 
   // Helper to parse browser pathname to active NavTab & Client ID
