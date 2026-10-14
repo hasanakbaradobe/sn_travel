@@ -22,6 +22,7 @@ import {
   Hotel,
   HotelRoom,
   HotelBooking,
+  FollowUp,
   PurgeTargets,
   PurgePreviewResult,
   PurgeExecuteResult,
@@ -729,6 +730,72 @@ class ApiService {
 
   async deleteHotelBooking(id: number): Promise<{ success: boolean }> {
     return this.request<{ success: boolean }>(`/hotel-bookings/${id}`, {
+      method: 'DELETE',
+    });
+  }
+
+  // --------------------------------------------------------------------------
+  // Recurring Visa Follow-up System
+  // --------------------------------------------------------------------------
+  async getFollowUps(params?: {
+    client_id?: number;
+    status?: string;
+    cadence?: string;
+    search?: string;
+  }): Promise<FollowUp[]> {
+    const q = new URLSearchParams();
+    if (params?.client_id) q.append('client_id', String(params.client_id));
+    if (params?.status) q.append('status', params.status);
+    if (params?.cadence) q.append('cadence', params.cadence);
+    if (params?.search) q.append('search', params.search);
+
+    const queryString = q.toString() ? `?${q.toString()}` : '';
+    return this.request<FollowUp[]>(`/follow-ups${queryString}`);
+  }
+
+  async getFollowUp(id: number): Promise<FollowUp> {
+    return this.request<FollowUp>(`/follow-ups/${id}`);
+  }
+
+  async createFollowUp(data: {
+    client_id: number;
+    title?: string;
+    reason: string;
+    channel?: string;
+    cadence?: string;
+    due_date: string;
+    notes?: string | null;
+    message_template?: string | null;
+    priority?: string;
+    assigned_user_id?: number | null;
+  }): Promise<FollowUp> {
+    return this.request<FollowUp>('/follow-ups', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateFollowUp(id: number, data: Partial<FollowUp>): Promise<FollowUp> {
+    return this.request<FollowUp>(`/follow-ups/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async completeFollowUp(id: number, data?: {
+    completed_notes?: string;
+    schedule_next?: boolean;
+    next_cadence?: string;
+    next_due_date?: string;
+  }): Promise<{ completed_follow_up: FollowUp; next_follow_up?: FollowUp | null }> {
+    return this.request<{ completed_follow_up: FollowUp; next_follow_up?: FollowUp | null }>(`/follow-ups/${id}/complete`, {
+      method: 'POST',
+      body: JSON.stringify(data || {}),
+    });
+  }
+
+  async deleteFollowUp(id: number): Promise<{ success: boolean }> {
+    return this.request<{ success: boolean }>(`/follow-ups/${id}`, {
       method: 'DELETE',
     });
   }

@@ -206,6 +206,41 @@ CREATE TABLE `tasks` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- --------------------------------------------------------
+-- Table: follow_ups
+-- --------------------------------------------------------
+DROP TABLE IF EXISTS `follow_ups`;
+CREATE TABLE `follow_ups` (
+  `id` INT AUTO_INCREMENT PRIMARY KEY,
+  `client_id` INT NOT NULL,
+  `title` VARCHAR(255) NOT NULL,
+  `reason` VARCHAR(150) NOT NULL,
+  `channel` ENUM('WhatsApp', 'Phone Call', 'WeChat', 'Email', 'SMS') NOT NULL DEFAULT 'WhatsApp',
+  `cadence` ENUM('1 Month', '2 Months', '3 Months', '6 Months', 'One-time') NOT NULL DEFAULT '1 Month',
+  `due_date` DATE NOT NULL,
+  `notes` TEXT DEFAULT NULL,
+  `message_template` TEXT DEFAULT NULL,
+  `status` ENUM('Pending', 'Completed', 'Cancelled') NOT NULL DEFAULT 'Pending',
+  `priority` ENUM('Low', 'Normal', 'High', 'Urgent') NOT NULL DEFAULT 'Normal',
+  `task_id` INT DEFAULT NULL,
+  `assigned_user_id` INT DEFAULT NULL,
+  `completed_at` DATETIME DEFAULT NULL,
+  `completed_notes` TEXT DEFAULT NULL,
+  `created_by_user_id` INT DEFAULT NULL,
+  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  INDEX `idx_followups_client` (`client_id`),
+  INDEX `idx_followups_due` (`due_date`),
+  INDEX `idx_followups_status` (`status`),
+  INDEX `idx_followups_cadence` (`cadence`),
+  INDEX `idx_followups_due_status` (`due_date`, `status`),
+  INDEX `idx_followups_task` (`task_id`),
+  FOREIGN KEY (`client_id`) REFERENCES `clients` (`id`) ON DELETE CASCADE,
+  FOREIGN KEY (`task_id`) REFERENCES `tasks` (`id`) ON DELETE SET NULL,
+  FOREIGN KEY (`assigned_user_id`) REFERENCES `users` (`id`) ON DELETE SET NULL,
+  FOREIGN KEY (`created_by_user_id`) REFERENCES `users` (`id`) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
 -- Table: comments
 -- --------------------------------------------------------
 DROP TABLE IF EXISTS `comments`;

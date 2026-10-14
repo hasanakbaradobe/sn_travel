@@ -25,6 +25,7 @@ import {
   Upload,
   Building2,
   BedDouble,
+  MessageSquarePlus,
   X,
 } from 'lucide-react';
 import { api } from '../services/api';
@@ -36,6 +37,7 @@ import { ConfirmDeleteModal } from '../components/ConfirmDeleteModal';
 import { getGoogleDriveDirectImageUrl, isGoogleDriveLink } from '../utils/image';
 import { NewHotelBookingModal } from '../components/NewHotelBookingModal';
 import { HotelBookingDetailModal } from '../components/HotelBookingDetailModal';
+import { CreateFollowUpModal } from '../components/CreateFollowUpModal';
 import { Hotel } from '../types';
 
 interface ClientProfileViewProps {
@@ -74,6 +76,7 @@ export const ClientProfileView: React.FC<ClientProfileViewProps> = ({
   const [bookingModalOpen, setBookingModalOpen] = useState(false);
   const [selectedBookingForDetail, setSelectedBookingForDetail] = useState<HotelBooking | null>(null);
   const [bookingDetailModalOpen, setBookingDetailModalOpen] = useState(false);
+  const [followUpModalOpen, setFollowUpModalOpen] = useState(false);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [deletingClient, setDeletingClient] = useState(false);
   const [appToDelete, setAppToDelete] = useState<{ id: number; application_id: string } | null>(null);
@@ -1246,13 +1249,23 @@ export const ClientProfileView: React.FC<ClientProfileViewProps> = ({
             <h2 className="font-bold text-sm text-slate-900">
               Tasks Linked to {client.full_name} ({client.tasks.length})
             </h2>
-            <button
-              onClick={() => onOpenNewTask(client.id, client.full_name)}
-              className="px-3 py-1.5 bg-sky-700 hover:bg-sky-800 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 shadow-xs"
-            >
-              <Plus className="w-3.5 h-3.5" />
-              <span>Add Task</span>
-            </button>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setFollowUpModalOpen(true)}
+                className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 shadow-xs transition-colors"
+                title="Schedule a 1-month or 2-month recurring visa follow-up reminder"
+              >
+                <MessageSquarePlus className="w-3.5 h-3.5" />
+                <span>+ Follow-up</span>
+              </button>
+              <button
+                onClick={() => onOpenNewTask(client.id, client.full_name)}
+                className="px-3 py-1.5 bg-sky-700 hover:bg-sky-800 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 shadow-xs transition-colors"
+              >
+                <Plus className="w-3.5 h-3.5" />
+                <span>Add Task</span>
+              </button>
+            </div>
           </div>
 
           <div className="bg-white rounded-xl border border-slate-200 shadow-xs divide-y divide-slate-100">
@@ -1438,6 +1451,20 @@ export const ClientProfileView: React.FC<ClientProfileViewProps> = ({
           if (onRefreshData) onRefreshData();
         }}
       />
+
+      {client && (
+        <CreateFollowUpModal
+          isOpen={followUpModalOpen}
+          onClose={() => setFollowUpModalOpen(false)}
+          clients={[client]}
+          users={[]}
+          preSelectedClientId={client.id}
+          onSuccess={() => {
+            fetchClientData(true);
+            if (onRefreshData) onRefreshData();
+          }}
+        />
+      )}
     </div>
   );
 };

@@ -178,6 +178,13 @@ INSERT INTO `hotel_bookings` (`id`, `booking_reference`, `client_id`, `hotel_id`
 (1, 'HB-000001', 1, 1, 1, 'Grand King Room', CURRENT_DATE, DATE_ADD(CURRENT_DATE, INTERVAL 3 DAY), 1, 1, 'Confirmed', 'Client requested high floor quiet room. Airport transfer arranged by SN Travels.', 'High floor, non-smoking, late check-in ~21:00', 660.00, 'USD', NULL, 1, NOW());
 
 -- --------------------------------------------------------
+-- Seed Follow-ups (Recurring 1-2 month visa clients)
+-- --------------------------------------------------------
+TRUNCATE TABLE `follow_ups`;
+INSERT INTO `follow_ups` (`id`, `client_id`, `title`, `reason`, `channel`, `cadence`, `due_date`, `notes`, `message_template`, `status`, `priority`, `task_id`, `assigned_user_id`, `created_by_user_id`, `created_at`) VALUES
+(1, 1, 'WhatsApp: 1-Month Visa Renewal Check', '1-Month China Visa Renewal Check', 'WhatsApp', '1 Month', DATE_ADD(CURRENT_DATE, INTERVAL 30 DAY), 'Frequent trader who visits Guangzhou wholesale markets monthly.', 'Hello, greetings from SN Travels Agency! Your China visa is due for renewal soon for your regular travel schedule. Would you like our visa desk to prepare your next visa application and schedule document pickup? Please let us know your planned travel dates.', 'Pending', 'Normal', NULL, 2, 1, NOW());
+
+-- --------------------------------------------------------
 -- Seed Settings
 -- --------------------------------------------------------
 TRUNCATE TABLE `settings`;

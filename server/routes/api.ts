@@ -1389,6 +1389,144 @@ apiRouter.delete('/hotel-bookings/:id', async (req: Request, res: Response) => {
 });
 
 // --------------------------------------------------------------------------
+// Recurring Visa Follow-up System Endpoints
+// --------------------------------------------------------------------------
+apiRouter.get('/follow-ups', (req: Request, res: Response) => {
+  const { client_id, status, cadence, search } = req.query;
+  const followUps = dbService.getFollowUps({
+    clientId: client_id ? parseInt(client_id as string, 10) : undefined,
+    status: typeof status === 'string' ? status : undefined,
+    cadence: typeof cadence === 'string' ? cadence : undefined,
+    search: typeof search === 'string' ? search : undefined,
+  });
+  return res.json(followUps);
+});
+
+apiRouter.get('/follow-ups/:id', (req: Request, res: Response) => {
+  const id = parseInt(req.params.id, 10);
+  const followUp = dbService.getFollowUpById(id);
+  if (!followUp) {
+    return res.status(404).json({ error: 'Follow-up not found' });
+  }
+  return res.json(followUp);
+});
+
+apiRouter.post('/follow-ups', async (req: Request, res: Response) => {
+  const currentUser = getCurrentUser(req);
+  const {
+    client_id,
+    title,
+    reason,
+    channel,
+    cadence,
+    due_date,
+    notes,
+    message_template,
+    priority,
+    assigned_user_id,
+  } = req.body;
+
+  if (!client_id) {
+    return res.status(400).json({ error: 'Client is required' });
+  }
+  if (!due_date) {
+    return res.status(400).json({ error: 'Follow-up due date is required' });
+  }
+
+  try {
+    const followUp = await dbService.createFollowUp({
+      client_id: parseInt(client_id, 10),
+      title: title ? String(title).trim() : undefined,
+      reason: reason ? String(reason).trim() : 'Recurring Visa Renewal Check',
+      channel: channel || 'WhatsApp',
+      cadence: cadence || '1 Month',
+      due_date: String(due_date).slice(0, 10),
+      notes: notes ? String(notes).trim() : null,
+      message_template: message_template ? String(message_template).trim() : null,
+      priority: priority || 'Normal',
+      assigned_user_id: assigned_user_id ? parseInt(assigned_user_id, 10) : undefined,
+    }, currentUser?.id || 1);
+
+    return res.status(201).json(followUp);
+  } catch (err: any) {
+    return res.status(400).json({ error: err.message || 'Failed to create follow-up' });
+  }
+});
+
+apiRouter.put('/follow-ups/:id', async (req: Request, res: Response) => {
+  const currentUser = getCurrentUser(req);
+  const id = parseInt(req.params.id, 10);
+  const {
+    title,
+    reason,
+    channel,
+    cadence,
+    due_date,
+    notes,
+    message_template,
+    priority,
+    status,
+    completed_notes,
+    assigned_user_id,
+  } = req.body;
+
+  try {
+    const updated = await dbService.updateFollowUp(id, {
+      title,
+      reason,
+      channel,
+      cadence,
+      due_date: due_date ? String(due_date).slice(0, 10) : undefined,
+      notes,
+      message_template,
+      priority,
+      status,
+      completed_notes,
+      assigned_user_id: assigned_user_id !== undefined ? (assigned_user_id ? parseInt(assigned_user_id, 10) : null) : undefined,
+    }, currentUser?.id || 1);
+
+    if (!updated) {
+      return res.status(404).json({ error: 'Follow-up not found' });
+    }
+    return res.json(updated);
+  } catch (err: any) {
+    return res.status(400).json({ error: err.message || 'Failed to update follow-up' });
+  }
+});
+
+apiRouter.post('/follow-ups/:id/complete', async (req: Request, res: Response) => {
+  const currentUser = getCurrentUser(req);
+  const id = parseInt(req.params.id, 10);
+  const { completed_notes, schedule_next, next_cadence, next_due_date } = req.body;
+
+  try {
+    const result = await dbService.completeFollowUp(id, {
+      completed_notes,
+      schedule_next: Boolean(schedule_next),
+      next_cadence,
+      next_due_date,
+    }, currentUser?.id || 1);
+
+    if (!result) {
+      return res.status(404).json({ error: 'Follow-up not found' });
+    }
+    return res.json(result);
+  } catch (err: any) {
+    return res.status(400).json({ error: err.message || 'Failed to complete follow-up' });
+  }
+});
+
+apiRouter.delete('/follow-ups/:id', async (req: Request, res: Response) => {
+  const currentUser = getCurrentUser(req);
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id)) {
+    return res.status(400).json({ error: 'Invalid follow-up ID' });
+  }
+  await dbService.deleteFollowUp(id, currentUser?.id || 1);
+  return res.json({ success: true, message: 'Follow-up deleted successfully' });
+});
+
+// --------------------------------------------------------------------------
 // Image Proxy Endpoint for Google Drive & External Images
 // --------------------------------------------------------------------------
 apiRouter.get('/proxy-image', async (req: Request, res: Response) => {

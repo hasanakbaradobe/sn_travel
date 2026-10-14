@@ -297,6 +297,39 @@ export interface HotelBooking {
   created_by_user_name?: string | null;
 }
 
+export type FollowUpChannel = 'WhatsApp' | 'Phone Call' | 'WeChat' | 'Email' | 'SMS';
+export type FollowUpCadence = '1 Month' | '2 Months' | '3 Months' | '6 Months' | 'One-time';
+export type FollowUpStatus = 'Pending' | 'Completed' | 'Cancelled';
+
+export interface FollowUp {
+  id: number;
+  client_id: number;
+  title: string;
+  reason: string;
+  channel: FollowUpChannel;
+  cadence: FollowUpCadence;
+  due_date: string; // YYYY-MM-DD
+  notes?: string | null;
+  message_template?: string | null;
+  status: FollowUpStatus;
+  priority: TaskPriority;
+  task_id?: number | null;
+  assigned_user_id?: number | null;
+  completed_at?: string | null;
+  completed_notes?: string | null;
+  created_by_user_id?: number | null;
+  created_at: string;
+  updated_at: string;
+  client_name?: string;
+  client_code?: string;
+  passport_number?: string;
+  client_phone?: string | null;
+  client_whatsapp?: string | null;
+  client_photo_url?: string | null;
+  assigned_user_name?: string | null;
+  created_by_user_name?: string | null;
+}
+
 export interface ScannedPassportData {
   fullName: string;
   givenNames?: string;

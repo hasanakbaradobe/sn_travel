@@ -12,10 +12,11 @@ import {
   X,
   Plane,
   Building2,
+  MessageSquarePlus,
 } from 'lucide-react';
 import { UserRole } from '../types';
 
-export type NavTab = 'dashboard' | 'clients' | 'applications' | 'hotels' | 'calendar' | 'tasks' | 'settings' | '404';
+export type NavTab = 'dashboard' | 'clients' | 'applications' | 'hotels' | 'followups' | 'calendar' | 'tasks' | 'settings' | '404';
 
 interface SidebarProps {
   currentTab: NavTab;
@@ -26,6 +27,7 @@ interface SidebarProps {
   todayTasksCount?: number;
   attentionAppsCount?: number;
   activeHotelsCount?: number;
+  dueFollowUpsCount?: number;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -37,6 +39,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   todayTasksCount = 0,
   attentionAppsCount = 0,
   activeHotelsCount = 0,
+  dueFollowUpsCount = 0,
 }) => {
   const navItems: Array<{ id: NavTab; label: string; icon: React.ReactNode; badge?: number; badgeColor?: string }> = [
     {
@@ -62,6 +65,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
       icon: <Building2 className="w-5 h-5" />,
       badge: activeHotelsCount > 0 ? activeHotelsCount : undefined,
       badgeColor: 'bg-teal-100 text-teal-800',
+    },
+    {
+      id: 'followups',
+      label: 'Follow-ups',
+      icon: <MessageSquarePlus className="w-5 h-5" />,
+      badge: dueFollowUpsCount > 0 ? dueFollowUpsCount : undefined,
+      badgeColor: 'bg-emerald-100 text-emerald-800',
     },
     {
       id: 'calendar',

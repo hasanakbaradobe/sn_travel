@@ -12,6 +12,7 @@ import { ClientsView } from './pages/ClientsView';
 import { ClientProfileView } from './pages/ClientProfileView';
 import { ApplicationsView } from './pages/ApplicationsView';
 import { HotelsView } from './pages/HotelsView';
+import { FollowUpsView } from './pages/FollowUpsView';
 import { CalendarView } from './pages/CalendarView';
 import { TasksView } from './pages/TasksView';
 import { SettingsView } from './pages/SettingsView';
@@ -39,6 +40,7 @@ import {
   ScannedPassportData,
   Hotel,
   HotelBooking,
+  FollowUp,
 } from './types';
 
 export default function App() {
@@ -108,6 +110,7 @@ export default function App() {
   const [visaTypes, setVisaTypes] = useState<VisaType[]>([]);
   const [hotels, setHotels] = useState<Hotel[]>([]);
   const [hotelBookings, setHotelBookings] = useState<HotelBooking[]>([]);
+  const [followUps, setFollowUps] = useState<FollowUp[]>([]);
   const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
   const [dbStatus, setDbStatus] = useState<DatabaseStatus | null>(null);
   const [loading, setLoading] = useState(false);
@@ -123,7 +126,7 @@ export default function App() {
       if (!silent) {
         setLoading(true);
       }
-      const [cls, apps, tsks, vts, usrs, mtr, dbs, htls, hbkgs] = await Promise.all([
+      const [cls, apps, tsks, vts, usrs, mtr, dbs, htls, hbkgs, fus] = await Promise.all([
         api.getClients(),
         api.getApplications(),
         api.getTasks(),
@@ -133,6 +136,7 @@ export default function App() {
         api.getDbStatus(),
         api.getHotels(false),
         api.getHotelBookings(),
+        api.getFollowUps(),
       ]);
 
       setClients(cls);
@@ -144,6 +148,7 @@ export default function App() {
       setDbStatus(dbs);
       setHotels(htls);
       setHotelBookings(hbkgs);
+      setFollowUps(fus);
       setProfileRefreshKey((prev) => prev + 1);
     } catch (err: any) {
       console.error('[SN Travels] Error fetching data:', err);
@@ -398,26 +403,37 @@ export default function App() {
     const task = tasks.find((t) => t.id === taskId);
     if (!task) return;
 
-    const isCollectionOrAppTask =
-      task.is_delivery_task === 1 ||
-      !!task.application_id ||
-      /collection|delivery|passport/i.test(task.title || '') ||
-      /collection|delivery/i.test(task.description || '');
+    const isFollowUpTask =
+      task.title.startsWith('[Follow-up]') ||
+      followUps.some((f) => Number(f.task_id) === Number(task.id));
+
+    // Only genuine collection/delivery tasks interact with application Returned status
+    const isCollectionOrDeliveryTask =
+      !isFollowUpTask &&
+      (task.is_delivery_task === 1 ||
+        (task.application_id && /delivery|collection/i.test(task.title || '')) ||
+        /^Delivery\s*-/i.test(task.title || ''));
+
+    // If it's a follow-up task or standard non-delivery task, toggle directly without touching application status!
+    if (!isCollectionOrDeliveryTask) {
+      executeToggleTask(taskId);
+      return;
+    }
 
     // If task is currently Pending and being marked as Completed
     if (task.status !== 'Completed') {
       const linkedApp = task.application_id
         ? applications.find((a) => a.id === task.application_id)
-        : applications.find((a) => a.client_id === task.client_id && a.status !== 'Returned');
+        : applications.find((a) => a.client_id === task.client_id && (a.status === 'Pending Collection' || a.delivery_date));
 
-      if (isCollectionOrAppTask || linkedApp) {
+      if (linkedApp) {
         setReturnWarningState({
           isOpen: true,
           mode: 'mark_returned',
           taskId: task.id,
-          appId: linkedApp?.id,
-          clientName: linkedApp?.client_name || task.client_name || 'Client',
-          applicationCode: linkedApp?.application_id || task.application_code || `APP-#${task.application_id || task.id}`,
+          appId: linkedApp.id,
+          clientName: linkedApp.client_name || task.client_name || 'Client',
+          applicationCode: linkedApp.application_id || task.application_code || `APP-#${linkedApp.id}`,
           taskTitle: task.title,
           dueDate: task.due_date,
         });
@@ -429,7 +445,7 @@ export default function App() {
         ? applications.find((a) => a.id === task.application_id)
         : applications.find((a) => a.client_id === task.client_id && a.status === 'Returned');
 
-      if ((isCollectionOrAppTask || linkedApp) && linkedApp?.status === 'Returned') {
+      if (linkedApp && linkedApp.status === 'Returned') {
         let prevStatus: ApplicationStatus = 'Pending Collection';
         try {
           const appDetail = await api.getApplicationById(linkedApp.id);
@@ -503,10 +519,11 @@ export default function App() {
         setTasks((prev) =>
           prev.map((t) => {
             if (
-              t.application_id === appId ||
-              (targetApp &&
-                t.client_id === targetApp.client_id &&
-                (t.is_delivery_task === 1 || /delivery|collection|passport/i.test(t.title)))
+              !t.title.startsWith('[Follow-up]') &&
+              (t.application_id === appId ||
+                (targetApp &&
+                  t.client_id === targetApp.client_id &&
+                  (t.is_delivery_task === 1 || /delivery|collection/i.test(t.title))))
             ) {
               return { ...t, status: 'Pending', completed_at: null };
             }
@@ -560,10 +577,11 @@ export default function App() {
         setTasks((prev) =>
           prev.map((t) => {
             if (
-              t.application_id === appId ||
-              (targetApp &&
-                t.client_id === targetApp.client_id &&
-                (t.is_delivery_task === 1 || /delivery|collection|passport/i.test(t.title)))
+              !t.title.startsWith('[Follow-up]') &&
+              (t.application_id === appId ||
+                (targetApp &&
+                  t.client_id === targetApp.client_id &&
+                  (t.is_delivery_task === 1 || /delivery|collection/i.test(t.title))))
             ) {
               return { ...t, status: 'Completed', completed_at: new Date().toISOString() };
             }
@@ -734,6 +752,8 @@ export default function App() {
           onCloseMobile={() => setMobileSidebarOpen(false)}
           todayTasksCount={metrics?.today_tasks || 0}
           attentionAppsCount={metrics?.apps_requiring_attention?.length || 0}
+          activeHotelsCount={hotelBookings.filter(b => b.status === 'Confirmed' || b.status === 'Checked In').length}
+          dueFollowUpsCount={followUps.filter(f => f.status === 'Pending' && (f.due_date <= new Date().toISOString().split('T')[0])).length}
         />
 
         {/* Main Content Area */}
@@ -827,6 +847,21 @@ export default function App() {
                   navigateTo('settings');
                 }}
                 searchFilter={globalSearch}
+                onRefreshData={() => refreshAllData(true)}
+              />
+            )}
+
+            {/* Follow-ups View — Placed after Hotels and before Calendar as requested */}
+            {currentTab === 'followups' && (
+              <FollowUpsView
+                followUps={followUps}
+                clients={clients}
+                users={users}
+                onOpenClient={handleOpenClient}
+                onNewApplication={(clientInfo) => {
+                  setNewAppClientInfo(clientInfo);
+                  setNewAppModalOpen(true);
+                }}
                 onRefreshData={() => refreshAllData(true)}
               />
             )}

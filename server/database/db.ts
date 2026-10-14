@@ -39,6 +39,42 @@ async function probeMySQLConnection() {
     try { await conn.query('CREATE INDEX idx_app_hist_app_id ON application_status_history(application_id)'); } catch {}
     try { await conn.query('CREATE INDEX idx_hb_client_id ON hotel_bookings(client_id)'); } catch {}
 
+    // Ensure follow_ups table and indexes exist in MySQL
+    try {
+      await conn.query(`
+        CREATE TABLE IF NOT EXISTS follow_ups (
+          id INT AUTO_INCREMENT PRIMARY KEY,
+          client_id INT NOT NULL,
+          title VARCHAR(255) NOT NULL,
+          reason VARCHAR(150) NOT NULL,
+          channel ENUM('WhatsApp', 'Phone Call', 'WeChat', 'Email', 'SMS') NOT NULL DEFAULT 'WhatsApp',
+          cadence ENUM('1 Month', '2 Months', '3 Months', '6 Months', 'One-time') NOT NULL DEFAULT '1 Month',
+          due_date DATE NOT NULL,
+          notes TEXT DEFAULT NULL,
+          message_template TEXT DEFAULT NULL,
+          status ENUM('Pending', 'Completed', 'Cancelled') NOT NULL DEFAULT 'Pending',
+          priority ENUM('Low', 'Normal', 'High', 'Urgent') NOT NULL DEFAULT 'Normal',
+          task_id INT DEFAULT NULL,
+          assigned_user_id INT DEFAULT NULL,
+          completed_at DATETIME DEFAULT NULL,
+          completed_notes TEXT DEFAULT NULL,
+          created_by_user_id INT DEFAULT NULL,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+          INDEX idx_fu_client (client_id),
+          INDEX idx_fu_due (due_date),
+          INDEX idx_fu_status (status),
+          INDEX idx_fu_task (task_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+      `);
+    } catch (e: any) {
+      console.warn('[MySQL] Could not ensure follow_ups table:', e.message);
+    }
+    try { await conn.query('CREATE INDEX idx_fu_client ON follow_ups(client_id)'); } catch {}
+    try { await conn.query('CREATE INDEX idx_fu_due ON follow_ups(due_date)'); } catch {}
+    try { await conn.query('CREATE INDEX idx_fu_status ON follow_ups(status)'); } catch {}
+    try { await conn.query('CREATE INDEX idx_fu_task ON follow_ups(task_id)'); } catch {}
+
     conn.release();
     await syncFromMySQL(true);
     return true;
@@ -264,6 +300,27 @@ interface HotelBooking {
   updated_at: string;
 }
 
+interface FollowUp {
+  id: number;
+  client_id: number;
+  title: string;
+  reason: string;
+  channel: 'WhatsApp' | 'Phone Call' | 'WeChat' | 'Email' | 'SMS';
+  cadence: '1 Month' | '2 Months' | '3 Months' | '6 Months' | 'One-time';
+  due_date: string;
+  notes?: string | null;
+  message_template?: string | null;
+  status: 'Pending' | 'Completed' | 'Cancelled';
+  priority: 'Low' | 'Normal' | 'High' | 'Urgent';
+  task_id?: number | null;
+  assigned_user_id?: number | null;
+  completed_at?: string | null;
+  completed_notes?: string | null;
+  created_by_user_id?: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
 interface Setting {
   id: number;
   setting_key: string;
@@ -286,6 +343,7 @@ interface StoreData {
   hotels: Hotel[];
   hotel_rooms: HotelRoom[];
   hotel_bookings: HotelBooking[];
+  follow_ups: FollowUp[];
   settings: Setting[];
   nextIds: { [table: string]: number };
 }
@@ -455,6 +513,7 @@ function getInitialData(): StoreData {
       { id: 9, hotel_id: 5, name: 'Standard Queen Room', price_per_night: 95, currency: 'USD', capacity: 2, description: 'Clean modern room with buffet breakfast included', is_active: 1, created_at: now, updated_at: now },
     ],
     hotel_bookings: [],
+    follow_ups: [],
     settings: [
       { id: 1, setting_key: 'agency_name', setting_value: 'SN Travels Agency', updated_at: now },
       { id: 2, setting_key: 'secret_login_enabled', setting_value: '1', updated_at: now },
@@ -475,6 +534,7 @@ function getInitialData(): StoreData {
       hotels: 6,
       hotel_rooms: 10,
       hotel_bookings: 1,
+      follow_ups: 1,
       settings: 4,
     },
   };
@@ -506,6 +566,12 @@ function loadStore(): StoreData {
         parsed.nextIds.hotels = init.nextIds.hotels;
         parsed.nextIds.hotel_rooms = init.nextIds.hotel_rooms;
         parsed.nextIds.hotel_bookings = init.nextIds.hotel_bookings;
+        needsSave = true;
+      }
+      if (!parsed.follow_ups) {
+        parsed.follow_ups = [];
+        parsed.nextIds = parsed.nextIds || {};
+        parsed.nextIds.follow_ups = 1;
         needsSave = true;
       }
       if (!parsed.settings || parsed.settings.length === 0) {
@@ -589,11 +655,16 @@ async function deleteClientFromMySQL(id: number, clientIdString?: string): Promi
       console.warn('[MySQL] Could not delete comments by client_id:', e.message);
     }
 
-    // 4. Delete hotel bookings linked to client
+    // 4. Delete hotel bookings and follow-ups linked to client
     try {
       await pool.query('DELETE FROM hotel_bookings WHERE client_id = ?', [id]);
     } catch (e: any) {
       console.warn('[MySQL] Could not delete hotel_bookings:', e.message);
+    }
+    try {
+      await pool.query('DELETE FROM follow_ups WHERE client_id = ?', [id]);
+    } catch (e: any) {
+      console.warn('[MySQL] Could not delete follow_ups:', e.message);
     }
 
     // 5. Delete visa applications linked to client
@@ -667,7 +738,7 @@ async function syncFromMySQL(force = false) {
   };
 
   try {
-    const [u, c, cl, cf, cfv, vt, va, ash, t, cm, al, h, hr, hb, s] = await Promise.all([
+    const [u, c, cl, cf, cfv, vt, va, ash, t, cm, al, h, hr, hb, s, fu] = await Promise.all([
       safeQuery('SELECT * FROM users'),
       safeQuery('SELECT * FROM countries ORDER BY display_order ASC, name ASC'),
       safeQuery('SELECT * FROM clients'),
@@ -683,6 +754,7 @@ async function syncFromMySQL(force = false) {
       safeQuery('SELECT * FROM hotel_rooms'),
       safeQuery('SELECT * FROM hotel_bookings'),
       safeQuery('SELECT * FROM settings'),
+      safeQuery('SELECT * FROM follow_ups'),
     ]);
 
     if (Array.isArray(u) && u.length > 0) store.users = u;
@@ -720,6 +792,12 @@ async function syncFromMySQL(force = false) {
         check_out_date: item.check_out_date ? String(item.check_out_date).slice(0, 10) : new Date().toISOString().slice(0, 10),
       }));
     }
+    if (Array.isArray(fu)) {
+      store.follow_ups = fu.map((item: any) => ({
+        ...item,
+        due_date: item.due_date ? String(item.due_date).slice(0, 10) : new Date().toISOString().slice(0, 10),
+      }));
+    }
     if (Array.isArray(s) && s.length > 0) store.settings = s;
 
     // Recalculate nextIds safely
@@ -738,6 +816,7 @@ async function syncFromMySQL(force = false) {
       hotels: Math.max(...(store.hotels || []).map(x => x.id), 0) + 1,
       hotel_rooms: Math.max(...(store.hotel_rooms || []).map(x => x.id), 0) + 1,
       hotel_bookings: Math.max(...(store.hotel_bookings || []).map(x => x.id), 0) + 1,
+      follow_ups: Math.max(...(store.follow_ups || []).map(x => x.id), 0) + 1,
       settings: Math.max(...(store.settings || []).map(x => x.id), 0) + 1,
     };
 
@@ -1365,6 +1444,7 @@ export const dbService = {
     store.tasks = store.tasks.filter(t => t.client_id !== id && !relatedAppIds.includes(t.application_id || 0));
     store.comments = store.comments.filter(c => c.client_id !== id && !relatedAppIds.includes(c.application_id || 0));
     store.hotel_bookings = (store.hotel_bookings || []).filter(b => b.client_id !== id);
+    store.follow_ups = (store.follow_ups || []).filter(f => f.client_id !== id);
     store.application_status_history = store.application_status_history.filter(h => !relatedAppIds.includes(h.application_id));
 
     saveStore(store);
@@ -1655,11 +1735,13 @@ export const dbService = {
       await this.syncDeliveryTask(app, clientName, userId);
     }
 
-    // If status is Returned, complete any pending collection or delivery tasks linked to this application
+    // If status is Returned, complete any pending collection or delivery tasks linked to this application (excluding follow-up tasks)
     if (newStatus === 'Returned') {
       store.tasks.forEach(t => {
+        const isFollowUp = (t.title && t.title.startsWith('[Follow-up]')) || (store.follow_ups && store.follow_ups.some(f => Number(f.task_id) === Number(t.id)));
         if (
-          (t.application_id === id || (t.client_id === app.client_id && (t.is_delivery_task === 1 || t.title.toLowerCase().includes('delivery') || t.title.toLowerCase().includes('collection') || t.title.toLowerCase().includes('passport')))) &&
+          !isFollowUp &&
+          (t.application_id === id || (t.client_id === app.client_id && (t.is_delivery_task === 1 || t.title.toLowerCase().includes('delivery') || t.title.toLowerCase().includes('collection')))) &&
           t.status !== 'Completed'
         ) {
           t.status = 'Completed';
@@ -1669,8 +1751,10 @@ export const dbService = {
       });
     } else if (oldStatus === 'Returned') {
       store.tasks.forEach(t => {
+        const isFollowUp = (t.title && t.title.startsWith('[Follow-up]')) || (store.follow_ups && store.follow_ups.some(f => Number(f.task_id) === Number(t.id)));
         if (
-          (t.application_id === id || (t.client_id === app.client_id && (t.is_delivery_task === 1 || t.title.toLowerCase().includes('delivery') || t.title.toLowerCase().includes('collection') || t.title.toLowerCase().includes('passport')))) &&
+          !isFollowUp &&
+          (t.application_id === id || (t.client_id === app.client_id && (t.is_delivery_task === 1 || t.title.toLowerCase().includes('delivery') || t.title.toLowerCase().includes('collection')))) &&
           t.status === 'Completed'
         ) {
           t.status = 'Pending';
@@ -1743,7 +1827,8 @@ export const dbService = {
             await pool.query(
               `UPDATE tasks 
                SET status = 'Completed', completed_at = NOW(), updated_at = NOW() 
-               WHERE (application_id = ? OR (client_id = ? AND (is_delivery_task = 1 OR title LIKE '%Delivery%' OR title LIKE '%Collection%' OR title LIKE '%Passport%'))) 
+               WHERE (application_id = ? OR (client_id = ? AND (is_delivery_task = 1 OR title LIKE '%Delivery%' OR title LIKE '%Collection%'))) 
+                 AND title NOT LIKE '[Follow-up]%'
                  AND status != 'Completed'`,
               [id, app.client_id]
             );
@@ -1753,8 +1838,10 @@ export const dbService = {
         }
 
         store.tasks.forEach(t => {
+          const isFollowUp = (t.title && t.title.startsWith('[Follow-up]')) || (store.follow_ups && store.follow_ups.some(f => Number(f.task_id) === Number(t.id)));
           if (
-            (t.application_id === id || (t.client_id === app.client_id && (t.is_delivery_task === 1 || t.title.toLowerCase().includes('delivery') || t.title.toLowerCase().includes('collection') || t.title.toLowerCase().includes('passport')))) &&
+            !isFollowUp &&
+            (t.application_id === id || (t.client_id === app.client_id && (t.is_delivery_task === 1 || t.title.toLowerCase().includes('delivery') || t.title.toLowerCase().includes('collection')))) &&
             t.status !== 'Completed'
           ) {
             t.status = 'Completed';
@@ -1768,7 +1855,8 @@ export const dbService = {
             await pool.query(
               `UPDATE tasks 
                SET status = 'Pending', completed_at = NULL, updated_at = NOW() 
-               WHERE (application_id = ? OR (client_id = ? AND (is_delivery_task = 1 OR title LIKE '%Delivery%' OR title LIKE '%Collection%' OR title LIKE '%Passport%'))) 
+               WHERE (application_id = ? OR (client_id = ? AND (is_delivery_task = 1 OR title LIKE '%Delivery%' OR title LIKE '%Collection%'))) 
+                 AND title NOT LIKE '[Follow-up]%'
                  AND status = 'Completed'`,
               [id, app.client_id]
             );
@@ -1778,8 +1866,10 @@ export const dbService = {
         }
 
         store.tasks.forEach(t => {
+          const isFollowUp = (t.title && t.title.startsWith('[Follow-up]')) || (store.follow_ups && store.follow_ups.some(f => Number(f.task_id) === Number(t.id)));
           if (
-            (t.application_id === id || (t.client_id === app.client_id && (t.is_delivery_task === 1 || t.title.toLowerCase().includes('delivery') || t.title.toLowerCase().includes('collection') || t.title.toLowerCase().includes('passport')))) &&
+            !isFollowUp &&
+            (t.application_id === id || (t.client_id === app.client_id && (t.is_delivery_task === 1 || t.title.toLowerCase().includes('delivery') || t.title.toLowerCase().includes('collection')))) &&
             t.status === 'Completed'
           ) {
             t.status = 'Pending';
@@ -2045,11 +2135,18 @@ export const dbService = {
     }
     task.updated_at = new Date().toISOString();
 
-    if (data.status === 'Completed' && !wasCompleted) {
-      // If completing a collection/delivery or application-linked task, mark application status as Returned
+    const isFollowUpTask = (task.title && task.title.startsWith('[Follow-up]')) || (store.follow_ups && store.follow_ups.some(f => Number(f.task_id) === Number(task.id)));
+    const isDeliveryOrCollection = !isFollowUpTask && (
+      task.is_delivery_task === 1 ||
+      (task.application_id && (/delivery/i.test(task.title || '') || /collection/i.test(task.title || ''))) ||
+      (/^Delivery\s*-/i.test(task.title || ''))
+    );
+
+    if (isDeliveryOrCollection && data.status === 'Completed' && !wasCompleted) {
+      // Only completing a genuine collection/delivery task marks application status as Returned
       let appId = task.application_id;
       if (!appId && task.client_id) {
-        const activeApp = store.visa_applications.find(a => Number(a.client_id) === Number(task.client_id) && a.status !== 'Returned');
+        const activeApp = store.visa_applications.find(a => Number(a.client_id) === Number(task.client_id) && (a.status === 'Pending Collection' || a.delivery_date));
         if (activeApp) appId = activeApp.id;
       }
       if (appId) {
@@ -2059,8 +2156,8 @@ export const dbService = {
           console.error('[MySQL] Error auto-updating application to Returned on task complete:', err.message);
         }
       }
-    } else if (data.status === 'Pending' && wasCompleted) {
-      // If uncompleting a collection/delivery task, revert application status if currently Returned
+    } else if (isDeliveryOrCollection && data.status === 'Pending' && wasCompleted) {
+      // Only uncompleting a genuine collection/delivery task reverts application status if currently Returned
       let appId = task.application_id;
       if (!appId && task.client_id) {
         const returnedApp = store.visa_applications.find(a => Number(a.client_id) === Number(task.client_id) && a.status === 'Returned');
@@ -2112,6 +2209,36 @@ export const dbService = {
       }
     }
 
+    // Synchronize linked follow-up if this task was created from a follow-up
+    const linkedFollowUp = (store.follow_ups || []).find(f => Number(f.task_id) === Number(id));
+    if (linkedFollowUp) {
+      if (data.status !== undefined) {
+        linkedFollowUp.status = data.status === 'Completed' ? 'Completed' : 'Pending';
+        linkedFollowUp.completed_at = data.status === 'Completed' ? (linkedFollowUp.completed_at || new Date().toISOString()) : null;
+      }
+      if (data.due_date !== undefined) {
+        linkedFollowUp.due_date = data.due_date;
+      }
+      if (data.priority !== undefined) {
+        linkedFollowUp.priority = data.priority;
+      }
+      linkedFollowUp.updated_at = new Date().toISOString();
+      if (isConnectedToMySQL && pool) {
+        try {
+          await pool.query(
+            `UPDATE follow_ups SET status = ?, due_date = ?, priority = ?, completed_at = ?, updated_at = NOW() WHERE id = ?`,
+            [
+              linkedFollowUp.status,
+              linkedFollowUp.due_date,
+              linkedFollowUp.priority,
+              linkedFollowUp.completed_at ? new Date(linkedFollowUp.completed_at) : null,
+              linkedFollowUp.id,
+            ]
+          ).catch(() => {});
+        } catch {}
+      }
+    }
+
     saveStore(store);
     this.logActivity(userId, 'UPDATE_TASK', 'TASK', id, `Updated task: ${task.title} (${task.status})`);
     return task;
@@ -2154,6 +2281,14 @@ export const dbService = {
           }
         });
       }
+
+      if (store.follow_ups) {
+        store.follow_ups.forEach(f => {
+          if (Number(f.task_id) === Number(id)) {
+            f.task_id = null;
+          }
+        });
+      }
     }
 
     saveStore(store);
@@ -2161,6 +2296,7 @@ export const dbService = {
     if (isConnectedToMySQL && pool) {
       try {
         await pool.query('UPDATE hotel_bookings SET checkout_task_id = NULL WHERE checkout_task_id = ?', [id]).catch(() => {});
+        await pool.query('UPDATE follow_ups SET task_id = NULL WHERE task_id = ?', [id]).catch(() => {});
         await pool.query('DELETE FROM tasks WHERE id = ?', [id]);
         console.log(`[MySQL] Deleted task ${id} from MySQL`);
       } catch (err: any) {
@@ -3040,6 +3176,387 @@ export const dbService = {
     }
 
     this.logActivity(userId, 'DELETE_HOTEL_BOOKING', 'HOTEL', id, `Deleted hotel booking ${booking.booking_reference}`);
+    return true;
+  },
+
+  // --------------------------------------------------------------------------
+  // Recurring Visa Follow-up System (Client messaging & tasks)
+  // --------------------------------------------------------------------------
+  getFollowUps(filters?: { clientId?: number; status?: string; cadence?: string; search?: string }) {
+    if (!store.follow_ups) store.follow_ups = [];
+    let list = [...store.follow_ups];
+
+    if (filters?.clientId) {
+      list = list.filter(f => f.client_id === filters.clientId);
+    }
+    if (filters?.status && filters.status !== 'all') {
+      list = list.filter(f => f.status === filters.status);
+    }
+    if (filters?.cadence && filters.cadence !== 'all') {
+      list = list.filter(f => f.cadence === filters.cadence);
+    }
+    if (filters?.search) {
+      const q = filters.search.toLowerCase().trim();
+      list = list.filter(f => {
+        const client = store.clients.find(c => c.id === f.client_id);
+        return (
+          f.title.toLowerCase().includes(q) ||
+          f.reason.toLowerCase().includes(q) ||
+          (f.notes && f.notes.toLowerCase().includes(q)) ||
+          (client && (
+            client.full_name.toLowerCase().includes(q) ||
+            client.passport_number.toLowerCase().includes(q) ||
+            client.client_id.toLowerCase().includes(q) ||
+            (client.phone && client.phone.toLowerCase().includes(q)) ||
+            (client.whatsapp && client.whatsapp.toLowerCase().includes(q))
+          ))
+        );
+      });
+    }
+
+    return list.map(f => {
+      const client = store.clients.find(c => c.id === f.client_id);
+      const assignedUser = f.assigned_user_id ? store.users.find(u => u.id === f.assigned_user_id) : null;
+      const createdUser = f.created_by_user_id ? store.users.find(u => u.id === f.created_by_user_id) : null;
+
+      return {
+        ...f,
+        client_name: client?.full_name || 'Unknown Client',
+        client_code: client?.client_id || '',
+        passport_number: client?.passport_number || '',
+        client_phone: client?.phone || null,
+        client_whatsapp: client?.whatsapp || null,
+        client_photo_url: client?.photo_url || null,
+        assigned_user_name: assignedUser?.name || null,
+        created_by_user_name: createdUser?.name || null,
+      };
+    }).sort((a, b) => {
+      const aComp = a.status === 'Completed' ? 1 : 0;
+      const bComp = b.status === 'Completed' ? 1 : 0;
+      if (aComp !== bComp) return aComp - bComp;
+      return new Date(a.due_date).getTime() - new Date(b.due_date).getTime();
+    });
+  },
+
+  getFollowUpById(id: number) {
+    if (!store.follow_ups) return null;
+    const f = store.follow_ups.find(item => Number(item.id) === Number(id));
+    if (!f) return null;
+    const client = store.clients.find(c => c.id === f.client_id);
+    const assignedUser = f.assigned_user_id ? store.users.find(u => u.id === f.assigned_user_id) : null;
+    const createdUser = f.created_by_user_id ? store.users.find(u => u.id === f.created_by_user_id) : null;
+
+    return {
+      ...f,
+      client_name: client?.full_name || 'Unknown Client',
+      client_code: client?.client_id || '',
+      passport_number: client?.passport_number || '',
+      client_phone: client?.phone || null,
+      client_whatsapp: client?.whatsapp || null,
+      client_photo_url: client?.photo_url || null,
+      assigned_user_name: assignedUser?.name || null,
+      created_by_user_name: createdUser?.name || null,
+    };
+  },
+
+  async createFollowUp(data: {
+    client_id: number;
+    title?: string;
+    reason: string;
+    channel?: 'WhatsApp' | 'Phone Call' | 'WeChat' | 'Email' | 'SMS';
+    cadence?: '1 Month' | '2 Months' | '3 Months' | '6 Months' | 'One-time';
+    due_date: string;
+    notes?: string | null;
+    message_template?: string | null;
+    priority?: 'Low' | 'Normal' | 'High' | 'Urgent';
+    assigned_user_id?: number | null;
+  }, userId = 1) {
+    if (!store.follow_ups) store.follow_ups = [];
+    if (!store.nextIds.follow_ups) store.nextIds.follow_ups = 1;
+
+    const client = store.clients.find(c => c.id === data.client_id);
+    if (!client) throw new Error('Client not found');
+
+    const channel = data.channel || 'WhatsApp';
+    const cadence = data.cadence || '1 Month';
+    const reason = data.reason || 'Recurring Visa Renewal Check';
+    const priority = data.priority || 'Normal';
+    const title = data.title && data.title.trim() ? data.title.trim() : `${channel}: ${reason}`;
+    const now = new Date().toISOString();
+
+    let id = store.nextIds.follow_ups++;
+
+    // AUTOMATIC TASK CREATION: Follow-ups are automatically added as tasks on the calendar!
+    let taskId = store.nextIds.tasks++;
+    const taskTitle = `[Follow-up] ${client.full_name}: ${title}`;
+    const taskDesc = `Channel: ${channel} | Cadence: ${cadence}\nReason: ${reason}\nClient: ${client.full_name} (${client.passport_number})\nContact: ${client.whatsapp || client.phone || 'N/A'}${data.notes ? `\nNotes: ${data.notes}` : ''}${data.message_template ? `\nSuggested Message:\n${data.message_template}` : ''}`;
+
+    if (isConnectedToMySQL && pool) {
+      try {
+        const [taskRes]: any = await pool.query(
+          `INSERT INTO tasks (title, description, client_id, application_id, assigned_user_id, due_date, priority, status, is_delivery_task, created_at, updated_at)
+           VALUES (?, ?, ?, NULL, ?, ?, ?, 'Pending', 0, NOW(), NOW())`,
+          [taskTitle, taskDesc, client.id, data.assigned_user_id || userId || 1, data.due_date, priority]
+        );
+        if (taskRes && taskRes.insertId) taskId = taskRes.insertId;
+
+        const [fuRes]: any = await pool.query(
+          `INSERT INTO follow_ups (client_id, title, reason, channel, cadence, due_date, notes, message_template, status, priority, task_id, assigned_user_id, created_by_user_id, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Pending', ?, ?, ?, ?, NOW(), NOW())`,
+          [
+            data.client_id,
+            title,
+            reason,
+            channel,
+            cadence,
+            data.due_date,
+            data.notes ? data.notes.trim() : null,
+            data.message_template ? data.message_template.trim() : null,
+            priority,
+            taskId,
+            data.assigned_user_id || userId || 1,
+            userId,
+          ]
+        );
+        if (fuRes && fuRes.insertId) id = fuRes.insertId;
+      } catch (err: any) {
+        console.error('[MySQL] Error creating follow-up in MySQL:', err.message);
+      }
+    }
+
+    const linkedTask: Task = {
+      id: taskId,
+      title: taskTitle,
+      description: taskDesc,
+      client_id: client.id,
+      application_id: null,
+      assigned_user_id: data.assigned_user_id || userId || 1,
+      due_date: data.due_date,
+      priority,
+      status: 'Pending',
+      is_delivery_task: 0,
+      completed_at: null,
+      created_at: now,
+      updated_at: now,
+    };
+    store.tasks.push(linkedTask);
+
+    const followUp: FollowUp = {
+      id,
+      client_id: data.client_id,
+      title,
+      reason,
+      channel,
+      cadence,
+      due_date: data.due_date,
+      notes: data.notes ? data.notes.trim() : null,
+      message_template: data.message_template ? data.message_template.trim() : null,
+      status: 'Pending',
+      priority,
+      task_id: taskId,
+      assigned_user_id: data.assigned_user_id || userId || 1,
+      completed_at: null,
+      completed_notes: null,
+      created_by_user_id: userId,
+      created_at: now,
+      updated_at: now,
+    };
+
+    store.follow_ups.push(followUp);
+    saveStore(store);
+
+    this.logActivity(
+      userId,
+      'CREATE_FOLLOW_UP',
+      'FOLLOW_UP',
+      id,
+      `Scheduled follow-up with ${client.full_name} (${cadence} via ${channel}) due on ${data.due_date}`
+    );
+
+    return this.getFollowUpById(id);
+  },
+
+  async updateFollowUp(id: number, data: Partial<FollowUp>, userId = 1) {
+    if (!store.follow_ups) return null;
+    const fu = store.follow_ups.find(f => Number(f.id) === Number(id));
+    if (!fu) return null;
+
+    if (data.title !== undefined) fu.title = data.title.trim();
+    if (data.reason !== undefined) fu.reason = data.reason.trim();
+    if (data.channel !== undefined) fu.channel = data.channel;
+    if (data.cadence !== undefined) fu.cadence = data.cadence;
+    if (data.due_date !== undefined) fu.due_date = data.due_date;
+    if (data.notes !== undefined) fu.notes = data.notes?.trim() || null;
+    if (data.message_template !== undefined) fu.message_template = data.message_template?.trim() || null;
+    if (data.priority !== undefined) fu.priority = data.priority;
+    if (data.assigned_user_id !== undefined) fu.assigned_user_id = data.assigned_user_id;
+
+    if (data.status !== undefined) {
+      fu.status = data.status;
+      fu.completed_at = data.status === 'Completed' ? (fu.completed_at || new Date().toISOString()) : null;
+    }
+    if (data.completed_notes !== undefined) fu.completed_notes = data.completed_notes?.trim() || null;
+    fu.updated_at = new Date().toISOString();
+
+    // Synchronize linked task in tasks table
+    if (fu.task_id) {
+      const task = store.tasks.find(t => t.id === fu.task_id);
+      if (task) {
+        if (data.due_date) task.due_date = data.due_date;
+        if (data.priority) task.priority = data.priority;
+        if (data.assigned_user_id !== undefined) task.assigned_user_id = data.assigned_user_id;
+        if (data.status !== undefined) {
+          task.status = data.status === 'Completed' ? 'Completed' : 'Pending';
+          task.completed_at = data.status === 'Completed' ? (task.completed_at || new Date().toISOString()) : null;
+        }
+        task.updated_at = new Date().toISOString();
+      }
+    }
+
+    if (isConnectedToMySQL && pool) {
+      try {
+        await pool.query(
+          `UPDATE follow_ups SET
+            title = ?, reason = ?, channel = ?, cadence = ?, due_date = ?,
+            notes = ?, message_template = ?, status = ?, priority = ?,
+            assigned_user_id = ?, completed_at = ?, completed_notes = ?, updated_at = NOW()
+           WHERE id = ?`,
+          [
+            fu.title,
+            fu.reason,
+            fu.channel,
+            fu.cadence,
+            fu.due_date,
+            fu.notes,
+            fu.message_template,
+            fu.status,
+            fu.priority,
+            fu.assigned_user_id,
+            fu.completed_at ? new Date(fu.completed_at) : null,
+            fu.completed_notes,
+            id,
+          ]
+        );
+
+        if (fu.task_id) {
+          await pool.query(
+            `UPDATE tasks SET due_date = ?, priority = ?, status = ?, completed_at = ?, updated_at = NOW() WHERE id = ?`,
+            [
+              fu.due_date,
+              fu.priority,
+              fu.status === 'Completed' ? 'Completed' : 'Pending',
+              fu.completed_at ? new Date(fu.completed_at) : null,
+              fu.task_id,
+            ]
+          ).catch(() => {});
+        }
+      } catch (err: any) {
+        console.error('[MySQL] Error updating follow-up in MySQL:', err.message);
+      }
+    }
+
+    saveStore(store);
+    this.logActivity(userId, 'UPDATE_FOLLOW_UP', 'FOLLOW_UP', id, `Updated follow-up: ${fu.title} (${fu.status})`);
+    return this.getFollowUpById(id);
+  },
+
+  async completeFollowUp(id: number, data?: {
+    completed_notes?: string;
+    schedule_next?: boolean;
+    next_cadence?: '1 Month' | '2 Months' | '3 Months' | '6 Months' | 'One-time';
+    next_due_date?: string;
+  }, userId = 1) {
+    const updated = await this.updateFollowUp(id, {
+      status: 'Completed',
+      completed_notes: data?.completed_notes || 'Follow-up marked completed by staff.',
+    }, userId);
+
+    if (!updated) return null;
+
+    let nextFollowUp = null;
+    if (data?.schedule_next) {
+      const targetCadence = data.next_cadence || updated.cadence || '1 Month';
+      let nextDate = data.next_due_date;
+      if (!nextDate) {
+        const baseDate = new Date(updated.due_date || new Date().toISOString());
+        if (isNaN(baseDate.getTime())) {
+          baseDate.setTime(Date.now());
+        }
+        if (targetCadence === '1 Month') {
+          baseDate.setDate(baseDate.getDate() + 30);
+        } else if (targetCadence === '2 Months') {
+          baseDate.setDate(baseDate.getDate() + 60);
+        } else if (targetCadence === '3 Months') {
+          baseDate.setDate(baseDate.getDate() + 90);
+        } else if (targetCadence === '6 Months') {
+          baseDate.setDate(baseDate.getDate() + 180);
+        } else {
+          baseDate.setDate(baseDate.getDate() + 30);
+        }
+        nextDate = baseDate.toISOString().split('T')[0];
+      }
+
+      nextFollowUp = await this.createFollowUp({
+        client_id: updated.client_id,
+        title: updated.title,
+        reason: updated.reason,
+        channel: updated.channel,
+        cadence: targetCadence,
+        due_date: nextDate,
+        notes: updated.notes,
+        message_template: updated.message_template,
+        priority: updated.priority,
+        assigned_user_id: updated.assigned_user_id,
+      }, userId);
+    }
+
+    return {
+      completed_follow_up: updated,
+      next_follow_up: nextFollowUp,
+    };
+  },
+
+  async deleteFollowUp(id: number, userId = 1) {
+    if (!store.follow_ups) store.follow_ups = [];
+    const numId = Number(id);
+    if (isNaN(numId)) return false;
+
+    const idx = store.follow_ups.findIndex(f => Number(f.id) === numId);
+    let fu = idx !== -1 ? store.follow_ups[idx] : null;
+    let taskId = fu ? fu.task_id : null;
+    let title = fu ? fu.title : `Follow-up #${numId}`;
+
+    if (idx !== -1) {
+      store.follow_ups.splice(idx, 1);
+    }
+
+    if (isConnectedToMySQL && pool) {
+      try {
+        if (!taskId) {
+          const [rows]: any = await pool.query('SELECT task_id, title FROM follow_ups WHERE id = ?', [numId]).catch(() => [[]]);
+          if (rows && rows[0]) {
+            if (rows[0].task_id) taskId = rows[0].task_id;
+            if (rows[0].title) title = rows[0].title;
+          }
+        }
+        if (taskId) {
+          await pool.query('DELETE FROM tasks WHERE id = ?', [taskId]).catch(() => {});
+        }
+        await pool.query('DELETE FROM follow_ups WHERE id = ?', [numId]);
+      } catch (err: any) {
+        console.error('[MySQL] Error deleting follow-up in MySQL:', err.message);
+      }
+    }
+
+    if (taskId) {
+      const taskIdx = store.tasks.findIndex(t => Number(t.id) === Number(taskId));
+      if (taskIdx !== -1) {
+        store.tasks.splice(taskIdx, 1);
+      }
+    }
+
+    saveStore(store);
+    this.logActivity(userId, 'DELETE_FOLLOW_UP', 'FOLLOW_UP', numId, `Deleted follow-up: ${title}`);
     return true;
   },
 

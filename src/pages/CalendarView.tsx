@@ -20,6 +20,8 @@ import {
   ListOrdered,
   Layers,
   Building2,
+  MessageSquarePlus,
+  MessageCircle,
   RotateCcw,
   Loader2,
   GripVertical,
@@ -33,7 +35,7 @@ import { api } from '../services/api';
 
 export interface CalendarEvent {
   id: string; // unique ID e.g. "task-12" or "delivery-4" or "hotel-checkout-5"
-  type: 'task' | 'delivery' | 'hotel_checkout' | 'passport_expiry';
+  type: 'task' | 'delivery' | 'hotel_checkout' | 'passport_expiry' | 'followup';
   title: string;
   subtitle?: string;
   date: string; // YYYY-MM-DD
@@ -164,7 +166,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
 
   // Filters
   const [searchQuery, setSearchQuery] = useState('');
-  const [typeFilter, setTypeFilter] = useState<'all' | 'delivery' | 'task' | 'hotel' | 'urgent'>('all');
+  const [typeFilter, setTypeFilter] = useState<'all' | 'delivery' | 'task' | 'hotel' | 'followup' | 'urgent'>('all');
   const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'completed' | 'overdue'>('all');
   const [userFilter, setUserFilter] = useState<string>('all');
 
@@ -422,10 +424,11 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
       }
 
       const isDelivery = t.is_delivery_task === 1;
+      const isFollowUp = t.title.startsWith('[Follow-up]') || t.title.toLowerCase().includes('follow-up');
       const photo = t.client_id ? clientPhotoMap.get(t.client_id) : null;
       list.push({
         id: `task-${t.id}`,
-        type: isDelivery ? 'delivery' : 'task',
+        type: isDelivery ? 'delivery' : isFollowUp ? 'followup' : 'task',
         title: t.title,
         subtitle: t.client_name ? `${t.client_name} (${t.passport_number || t.client_code || ''})` : undefined,
         date: cleanDate(t.due_date),
@@ -562,6 +565,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
       if (typeFilter === 'delivery' && ev.type !== 'delivery') return false;
       if (typeFilter === 'task' && ev.type !== 'task') return false;
       if (typeFilter === 'hotel' && ev.type !== 'hotel_checkout') return false;
+      if (typeFilter === 'followup' && ev.type !== 'followup') return false;
       if (typeFilter === 'urgent' && ev.priority !== 'Urgent' && ev.priority !== 'High') return false;
 
       // Status filter
@@ -1263,6 +1267,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
               className="bg-transparent font-semibold text-slate-700 focus:outline-none cursor-pointer text-xs"
             >
               <option value="all">All Event Types</option>
+              <option value="followup">💬 Client Follow-ups</option>
               <option value="hotel">🏨 Hotel Check-Outs</option>
               <option value="delivery">📦 Deliveries Only</option>
               <option value="task">📋 Internal Tasks</option>
@@ -1431,6 +1436,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                       const isCompleted = ev.isCompleted;
                       const isDelivery = ev.type === 'delivery';
                       const isHotel = ev.type === 'hotel_checkout';
+                      const isFollowUp = ev.type === 'followup';
                       const isDraggable = !!((ev.taskId || ev.applicationId) && !isCompleted);
                       const isBeingDragged = !!(ev.taskId && draggingTaskId === ev.taskId);
 
@@ -1460,6 +1466,8 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                               ? 'bg-slate-100 border-slate-200 text-slate-400 line-through'
                               : isHotel
                               ? 'bg-teal-50 border-teal-300 text-teal-950 font-semibold'
+                              : isFollowUp
+                              ? 'bg-emerald-50 border-emerald-400 text-emerald-950 font-bold'
                               : isDelivery
                               ? 'bg-emerald-50 border-emerald-300 text-emerald-950 font-semibold'
                               : ev.priority === 'Urgent'
