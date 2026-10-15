@@ -215,10 +215,10 @@ export const FollowUpsView: React.FC<FollowUpsViewProps> = ({
           </button>
           <button
             onClick={() => setCreateModalOpen(true)}
-            className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs sm:text-sm rounded-xl shadow-sm transition-all flex items-center gap-1.5 active:scale-95"
+            className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs sm:text-sm rounded-xl shadow-sm transition-all flex items-center gap-1.5 active:scale-95 cursor-pointer"
           >
             <Plus className="w-4 h-4" />
-            <span>+ Add Follow-up</span>
+            <span>Add Follow-up</span>
           </button>
         </div>
       </div>
@@ -297,7 +297,7 @@ export const FollowUpsView: React.FC<FollowUpsViewProps> = ({
               className="mt-4 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl shadow-sm inline-flex items-center gap-1.5"
             >
               <Plus className="w-3.5 h-3.5" />
-              <span>+ Add Follow-up</span>
+              <span>Add Follow-up</span>
             </button>
           )}
         </div>

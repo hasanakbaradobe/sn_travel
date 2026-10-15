@@ -40,6 +40,7 @@ import {
   Link2,
   ExternalLink,
   CheckCircle2,
+  MessageSquare,
 } from 'lucide-react';
 import { api } from '../services/api';
 import {
@@ -165,6 +166,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     applications: true,
     hotel_bookings: true,
     tasks: true,
+    follow_ups: true,
     status_history: true,
     activity_logs: false,
   });
@@ -821,6 +823,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       applications: selectAll,
       hotel_bookings: selectAll,
       tasks: selectAll,
+      follow_ups: selectAll,
       status_history: selectAll,
       activity_logs: selectAll,
     };
@@ -896,18 +899,24 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
     if (cleanupTargets.tasks) {
       lines.push('-- 3. Purge Completed / Old Calendar & Operational Tasks');
-      lines.push(`DELETE FROM tasks WHERE ${dateCondition('created_at')};`);
+      lines.push(`DELETE FROM tasks WHERE ${dateCondition('created_at')} OR ${dateCondition('due_date')};`);
+      lines.push('');
+    }
+
+    if (cleanupTargets.follow_ups) {
+      lines.push('-- 4. Purge Client Follow-up Reminders & Schedules (Preserves Clients)');
+      lines.push(`DELETE FROM follow_ups WHERE (${dateCondition('created_at')}) OR (${dateCondition('due_date')});`);
       lines.push('');
     }
 
     if (cleanupTargets.status_history && !cleanupTargets.applications) {
-      lines.push('-- 4. Purge Status Audit History');
+      lines.push('-- 5. Purge Status Audit History');
       lines.push(`DELETE FROM application_status_history WHERE ${dateCondition('created_at')};`);
       lines.push('');
     }
 
     if (cleanupTargets.activity_logs) {
-      lines.push('-- 5. Purge System Activity Logs');
+      lines.push('-- 6. Purge System Activity Logs');
       lines.push(`DELETE FROM activity_logs WHERE ${dateCondition('created_at')};`);
       lines.push('');
     }
@@ -1864,7 +1873,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                   </span>
                 </div>
                 <p className="text-xs text-slate-300 max-w-2xl leading-relaxed">
-                  Purge old operational history records (Visa Applications, Hotel Bookings, Calendar Tasks &amp; Audit Logs) by date range to free database storage while keeping client profiles intact.
+                  Purge old operational history records (Visa Applications, Hotel Bookings, Client Follow-ups &amp; Reminders, Calendar Tasks &amp; Audit Logs) by date range to free database storage while keeping client profiles intact.
                 </p>
               </div>
 
@@ -2236,7 +2245,45 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 </div>
               </div>
 
-              {/* Option 4: Status History Audit */}
+              {/* Option 4: Client Follow-ups & Reminders */}
+              <div
+                onClick={() => handleToggleTarget('follow_ups')}
+                className={`p-4 rounded-xl border-2 transition cursor-pointer flex items-start gap-3 select-none ${
+                  cleanupTargets.follow_ups
+                    ? 'border-rose-500 bg-rose-50/40'
+                    : 'border-slate-200 hover:border-slate-300 bg-white'
+                }`}
+              >
+                <div className="pt-0.5">
+                  {cleanupTargets.follow_ups ? (
+                    <CheckSquare className="w-5 h-5 text-rose-600" />
+                  ) : (
+                    <Square className="w-5 h-5 text-slate-400" />
+                  )}
+                </div>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5">
+                      <MessageSquare className="w-4 h-4 text-emerald-700" />
+                      <span className="font-bold text-xs text-slate-900">Client Follow-ups &amp; Reminders</span>
+                    </div>
+                    {cleanupPreview && (
+                      <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${
+                        cleanupTargets.follow_ups && cleanupPreview.counts.follow_ups > 0
+                          ? 'bg-rose-100 text-rose-800'
+                          : 'bg-slate-100 text-slate-600'
+                      }`}>
+                        {cleanupPreview.counts.follow_ups} records
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-[11px] text-slate-500 mt-1 leading-relaxed">
+                    Purges client follow-up reminder history, WhatsApp touchpoint logs, and completed communication schedules in date range. Client contact details &amp; master profiles remain intact.
+                  </p>
+                </div>
+              </div>
+
+              {/* Option 5: Status History Audit */}
               <div
                 onClick={() => handleToggleTarget('status_history')}
                 className={`p-4 rounded-xl border-2 transition cursor-pointer flex items-start gap-3 select-none ${
@@ -2274,7 +2321,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 </div>
               </div>
 
-              {/* Option 5: Activity Logs */}
+              {/* Option 6: Activity Logs */}
               <div
                 onClick={() => handleToggleTarget('activity_logs')}
                 className={`p-4 rounded-xl border-2 transition cursor-pointer flex items-start gap-3 select-none ${
@@ -2331,7 +2378,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 type="button"
                 onClick={() => loadCleanupPreview(cleanupStartDate, cleanupEndDate, cleanupTargets)}
                 disabled={loadingPreview}
-                className="px-3.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition self-start sm:self-auto"
+                className="px-3.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-xl text-xs font-semibold flex items-center gap-1.5 transition self-start sm:self-auto cursor-pointer"
               >
                 {loadingPreview ? (
                   <Loader2 className="w-3.5 h-3.5 animate-spin" />
@@ -2343,7 +2390,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
 
             {/* Preview Metrics Grid */}
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-3">
               <div className="bg-slate-800/80 border border-slate-700/60 p-3.5 rounded-xl">
                 <div className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Applications</div>
                 <div className="text-xl font-black text-white mt-1">
@@ -2362,6 +2409,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 <div className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Tasks &amp; Calendar</div>
                 <div className="text-xl font-black text-white mt-1">
                   {cleanupPreview ? cleanupPreview.counts.tasks : '...'}
+                </div>
+              </div>
+
+              <div className="bg-slate-800/80 border border-slate-700/60 p-3.5 rounded-xl">
+                <div className="text-[10px] uppercase font-bold text-emerald-400 tracking-wider">Follow-ups</div>
+                <div className="text-xl font-black text-emerald-300 mt-1">
+                  {cleanupPreview ? cleanupPreview.counts.follow_ups : '...'}
                 </div>
               </div>
 
@@ -3224,6 +3278,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     <div className="flex items-center justify-between p-2 bg-white rounded-lg border border-slate-200">
                       <span className="text-slate-600">Tasks &amp; Calendar:</span>
                       <strong className="text-rose-600 font-bold">{cleanupPreview?.counts.tasks || 0}</strong>
+                    </div>
+                  )}
+                  {cleanupTargets.follow_ups && (
+                    <div className="flex items-center justify-between p-2 bg-white rounded-lg border border-slate-200">
+                      <span className="text-slate-600">Follow-up Reminders:</span>
+                      <strong className="text-rose-600 font-bold">{cleanupPreview?.counts.follow_ups || 0}</strong>
                     </div>
                   )}
                   {cleanupTargets.status_history && (

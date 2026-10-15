@@ -3623,6 +3623,7 @@ export const dbService = {
       applications?: boolean;
       hotel_bookings?: boolean;
       tasks?: boolean;
+      follow_ups?: boolean;
       status_history?: boolean;
       activity_logs?: boolean;
     };
@@ -3661,6 +3662,7 @@ export const dbService = {
     let matchingApps = 0;
     let matchingBookings = 0;
     let matchingTasks = 0;
+    let matchingFollowUps = 0;
     let matchingHistory = 0;
     let matchingLogs = 0;
 
@@ -3678,6 +3680,12 @@ export const dbService = {
       matchingTasks = (store.tasks || []).filter(t => isDateInRange(t.created_at) || isDateInRange(t.due_date)).length;
     }
 
+    if (targets.follow_ups) {
+      matchingFollowUps = (store.follow_ups || []).filter(
+        f => isDateInRange(f.created_at) || isDateInRange(f.due_date) || isDateInRange(f.completed_at)
+      ).length;
+    }
+
     if (targets.status_history) {
       matchingHistory = (store.application_status_history || []).filter(h => isDateInRange(h.created_at || (h as any).changed_at)).length;
     }
@@ -3686,7 +3694,7 @@ export const dbService = {
       matchingLogs = (store.activity_logs || []).filter(l => isDateInRange(l.created_at)).length;
     }
 
-    const totalToDelete = matchingApps + matchingBookings + matchingTasks + matchingHistory + matchingLogs;
+    const totalToDelete = matchingApps + matchingBookings + matchingTasks + matchingFollowUps + matchingHistory + matchingLogs;
 
     return {
       date_range: {
@@ -3697,6 +3705,7 @@ export const dbService = {
         applications: matchingApps,
         hotel_bookings: matchingBookings,
         tasks: matchingTasks,
+        follow_ups: matchingFollowUps,
         status_history: matchingHistory,
         activity_logs: matchingLogs,
         total: totalToDelete,
@@ -3707,6 +3716,7 @@ export const dbService = {
         applications: (store.visa_applications || []).length,
         hotel_bookings: (store.hotel_bookings || []).length,
         tasks: (store.tasks || []).length,
+        follow_ups: (store.follow_ups || []).length,
         status_history: (store.application_status_history || []).length,
         activity_logs: (store.activity_logs || []).length,
       },
@@ -3721,6 +3731,7 @@ export const dbService = {
         applications?: boolean;
         hotel_bookings?: boolean;
         tasks?: boolean;
+        follow_ups?: boolean;
         status_history?: boolean;
         activity_logs?: boolean;
       };
@@ -3761,6 +3772,7 @@ export const dbService = {
     let deletedAppsCount = 0;
     let deletedBookingsCount = 0;
     let deletedTasksCount = 0;
+    let deletedFollowUpsCount = 0;
     let deletedHistoryCount = 0;
     let deletedLogsCount = 0;
 
@@ -3815,17 +3827,56 @@ export const dbService = {
     // 3. Purge Tasks in Date Range
     if (targets.tasks) {
       const tasksToKeep: Task[] = [];
+      const deletedTaskIds = new Set<number>();
       for (const task of store.tasks || []) {
         if (isDateInRange(task.created_at) || isDateInRange(task.due_date)) {
           deletedTasksCount++;
+          deletedTaskIds.add(Number(task.id));
         } else {
           tasksToKeep.push(task);
         }
       }
       store.tasks = tasksToKeep;
+
+      // Dissociate task_id from follow-ups whose task was purged
+      if (store.follow_ups && deletedTaskIds.size > 0) {
+        store.follow_ups.forEach(f => {
+          if (f.task_id && deletedTaskIds.has(Number(f.task_id))) {
+            f.task_id = null;
+          }
+        });
+      }
     }
 
-    // 4. Purge Status Audit History in Date Range
+    // 4. Purge Follow-up Reminders & History in Date Range
+    if (targets.follow_ups) {
+      const followUpsToKeep: FollowUp[] = [];
+      const deletedFollowUpTaskIds = new Set<number>();
+
+      for (const fu of store.follow_ups || []) {
+        if (
+          isDateInRange(fu.created_at) ||
+          isDateInRange(fu.due_date) ||
+          isDateInRange(fu.completed_at)
+        ) {
+          deletedFollowUpsCount++;
+          if (fu.task_id) {
+            deletedFollowUpTaskIds.add(Number(fu.task_id));
+          }
+        } else {
+          followUpsToKeep.push(fu);
+        }
+      }
+
+      store.follow_ups = followUpsToKeep;
+
+      // Also clean up tasks created specifically for these follow ups
+      if (deletedFollowUpTaskIds.size > 0) {
+        store.tasks = (store.tasks || []).filter(t => !deletedFollowUpTaskIds.has(Number(t.id)));
+      }
+    }
+
+    // 5. Purge Status Audit History in Date Range
     if (targets.status_history) {
       const historyToKeep: ApplicationStatusHistory[] = [];
       for (const item of store.application_status_history || []) {
@@ -3838,7 +3889,7 @@ export const dbService = {
       store.application_status_history = historyToKeep;
     }
 
-    // 5. Purge Activity Logs in Date Range
+    // 6. Purge Activity Logs in Date Range
     if (targets.activity_logs) {
       const logsToKeep: ActivityLog[] = [];
       for (const item of store.activity_logs || []) {
@@ -3895,6 +3946,26 @@ export const dbService = {
             await pool.query('DELETE FROM tasks').catch(() => {});
           }
         }
+        if (targets.follow_ups) {
+          if (normStartDate && normEndDate) {
+            await pool.query(
+              'DELETE FROM follow_ups WHERE (created_at BETWEEN ? AND ?) OR (due_date BETWEEN ? AND ?)',
+              [normStartDate, normEndDate + ' 23:59:59', normStartDate, normEndDate + ' 23:59:59']
+            ).catch(() => {});
+          } else if (normStartDate) {
+            await pool.query(
+              'DELETE FROM follow_ups WHERE created_at >= ? OR due_date >= ?',
+              [normStartDate, normStartDate]
+            ).catch(() => {});
+          } else if (normEndDate) {
+            await pool.query(
+              'DELETE FROM follow_ups WHERE created_at <= ? OR due_date <= ?',
+              [normEndDate + ' 23:59:59', normEndDate + ' 23:59:59']
+            ).catch(() => {});
+          } else {
+            await pool.query('DELETE FROM follow_ups').catch(() => {});
+          }
+        }
         if (targets.status_history) {
           if (dateCondition) {
             await pool.query(`DELETE FROM application_status_history WHERE created_at ${dateCondition}`, params).catch(() => {});
@@ -3925,7 +3996,7 @@ export const dbService = {
       ? `up to ${endDate}`
       : 'all historical records';
 
-    const totalPurged = deletedAppsCount + deletedBookingsCount + deletedTasksCount + deletedHistoryCount + deletedLogsCount;
+    const totalPurged = deletedAppsCount + deletedBookingsCount + deletedTasksCount + deletedFollowUpsCount + deletedHistoryCount + deletedLogsCount;
 
     this.logActivity(
       operatorId,
@@ -3941,6 +4012,7 @@ export const dbService = {
         applications: deletedAppsCount,
         hotel_bookings: deletedBookingsCount,
         tasks: deletedTasksCount,
+        follow_ups: deletedFollowUpsCount,
         status_history: deletedHistoryCount,
         activity_logs: deletedLogsCount,
         total: totalPurged,
@@ -3951,6 +4023,7 @@ export const dbService = {
         applications: store.visa_applications.length,
         hotel_bookings: store.hotel_bookings.length,
         tasks: store.tasks.length,
+        follow_ups: (store.follow_ups || []).length,
         status_history: store.application_status_history.length,
         activity_logs: store.activity_logs.length,
       },
@@ -4107,6 +4180,7 @@ export const dbService = {
     dumpTable('hotels', store.hotels);
     dumpTable('hotel_rooms', store.hotel_rooms);
     dumpTable('hotel_bookings', store.hotel_bookings);
+    dumpTable('follow_ups', store.follow_ups || []);
     dumpTable('settings', store.settings || []);
 
     // Also append metadata JSON block for instant 100% faithful JSON parse restore
@@ -4128,6 +4202,7 @@ export const dbService = {
       applications: number;
       hotel_bookings: number;
       tasks: number;
+      follow_ups: number;
       users: number;
     };
   } {
@@ -4152,6 +4227,7 @@ export const dbService = {
           store.visa_applications = parsed.visa_applications || [];
           store.application_status_history = parsed.application_status_history || [];
           store.tasks = parsed.tasks || [];
+          store.follow_ups = parsed.follow_ups || [];
           store.comments = parsed.comments || [];
           store.activity_logs = parsed.activity_logs || [];
           store.hotels = parsed.hotels || [];
@@ -4177,6 +4253,7 @@ export const dbService = {
               applications: store.visa_applications.length,
               hotel_bookings: store.hotel_bookings.length,
               tasks: store.tasks.length,
+              follow_ups: (store.follow_ups || []).length,
               users: store.users.length,
             },
           };
@@ -4200,6 +4277,7 @@ export const dbService = {
               applications: store.visa_applications.length,
               hotel_bookings: store.hotel_bookings.length,
               tasks: store.tasks.length,
+              follow_ups: (store.follow_ups || []).length,
               users: store.users.length,
             },
           };

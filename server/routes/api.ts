@@ -1005,6 +1005,7 @@ apiRouter.post('/data-cleanup/preview', requireSuperAdmin, (req: Request, res: R
       applications: Boolean(targets.applications),
       hotel_bookings: Boolean(targets.hotel_bookings),
       tasks: Boolean(targets.tasks),
+      follow_ups: Boolean(targets.follow_ups),
       status_history: Boolean(targets.status_history),
       activity_logs: Boolean(targets.activity_logs),
     },
@@ -1013,7 +1014,7 @@ apiRouter.post('/data-cleanup/preview', requireSuperAdmin, (req: Request, res: R
   return res.json(preview);
 });
 
-apiRouter.post('/data-cleanup/purge', requireSuperAdmin, (req: Request, res: Response) => {
+apiRouter.post('/data-cleanup/purge', requireSuperAdmin, async (req: Request, res: Response) => {
   const currentUser = (req as any).user;
   const { startDate, endDate, targets, confirmation } = req.body;
 
@@ -1028,14 +1029,19 @@ apiRouter.post('/data-cleanup/purge', requireSuperAdmin, (req: Request, res: Res
   }
 
   const hasAnyTarget = Boolean(
-    targets.applications || targets.hotel_bookings || targets.tasks || targets.status_history || targets.activity_logs
+    targets.applications ||
+      targets.hotel_bookings ||
+      targets.tasks ||
+      targets.follow_ups ||
+      targets.status_history ||
+      targets.activity_logs
   );
 
   if (!hasAnyTarget) {
     return res.status(400).json({ error: 'Please select at least one data category to delete.' });
   }
 
-  const result = dbService.purgeData(
+  const result = await dbService.purgeData(
     {
       startDate: startDate || undefined,
       endDate: endDate || undefined,
@@ -1043,6 +1049,7 @@ apiRouter.post('/data-cleanup/purge', requireSuperAdmin, (req: Request, res: Res
         applications: Boolean(targets.applications),
         hotel_bookings: Boolean(targets.hotel_bookings),
         tasks: Boolean(targets.tasks),
+        follow_ups: Boolean(targets.follow_ups),
         status_history: Boolean(targets.status_history),
         activity_logs: Boolean(targets.activity_logs),
       },

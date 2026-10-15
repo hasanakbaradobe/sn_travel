@@ -362,6 +362,7 @@ export interface PurgeTargets {
   applications: boolean;
   hotel_bookings: boolean;
   tasks: boolean;
+  follow_ups: boolean;
   status_history: boolean;
   activity_logs: boolean;
 }
@@ -375,6 +376,7 @@ export interface PurgePreviewResult {
     applications: number;
     hotel_bookings: number;
     tasks: number;
+    follow_ups: number;
     status_history: number;
     activity_logs: number;
     total: number;
@@ -385,6 +387,7 @@ export interface PurgePreviewResult {
     applications: number;
     hotel_bookings: number;
     tasks: number;
+    follow_ups: number;
     status_history: number;
     activity_logs: number;
   };
@@ -396,6 +399,7 @@ export interface PurgeExecuteResult {
     applications: number;
     hotel_bookings: number;
     tasks: number;
+    follow_ups: number;
     status_history: number;
     activity_logs: number;
     total: number;
@@ -406,6 +410,7 @@ export interface PurgeExecuteResult {
     applications: number;
     hotel_bookings: number;
     tasks: number;
+    follow_ups: number;
     status_history: number;
     activity_logs: number;
   };

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import {
   X,
   Calendar,
@@ -7,6 +7,8 @@ import {
   Send,
   AlertCircle,
   Check,
+  Search,
+  Phone,
 } from 'lucide-react';
 import { Client, User as UserType } from '../types';
 import { ClientAvatar } from './ClientAvatar';
@@ -30,11 +32,32 @@ export const CreateFollowUpModal: React.FC<CreateFollowUpModalProps> = ({
   onSuccess,
 }) => {
   const [selectedClientId, setSelectedClientId] = useState<number | ''>(preSelectedClientId || '');
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [clientSearchQuery, setClientSearchQuery] = useState('');
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const searchContainerRef = useRef<HTMLDivElement>(null);
+
   const [cadence, setCadence] = useState<'1 Month' | '2 Months' | 'Custom'>('1 Month');
   const [dueDate, setDueDate] = useState('');
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Close search panel on outside click when a client is already selected
+  useEffect(() => {
+    const handleOutsideClick = (e: MouseEvent) => {
+      if (
+        searchContainerRef.current &&
+        !searchContainerRef.current.contains(e.target as Node)
+      ) {
+        if (selectedClientId) {
+          setIsSearchOpen(false);
+        }
+      }
+    };
+    document.addEventListener('mousedown', handleOutsideClick);
+    return () => document.removeEventListener('mousedown', handleOutsideClick);
+  }, [selectedClientId]);
 
   // Helper to calculate date
   const getDatePlusDays = (days: number): string => {
@@ -48,6 +71,28 @@ export const CreateFollowUpModal: React.FC<CreateFollowUpModalProps> = ({
     return clients.find((c) => c.id === Number(selectedClientId)) || null;
   }, [selectedClientId, clients]);
 
+  // Filter clients by search query (name, passport, phone, client_id, country)
+  const filteredClients = useMemo(() => {
+    if (!clientSearchQuery.trim()) {
+      return clients;
+    }
+    const q = clientSearchQuery.toLowerCase().trim();
+    return clients.filter((c) => {
+      const name = (c.full_name || '').toLowerCase();
+      const passport = (c.passport_number || '').toLowerCase();
+      const phone = (c.phone || '').toLowerCase();
+      const cid = (c.client_id || '').toLowerCase();
+      const country = (c.country || '').toLowerCase();
+      return (
+        name.includes(q) ||
+        passport.includes(q) ||
+        phone.includes(q) ||
+        cid.includes(q) ||
+        country.includes(q)
+      );
+    });
+  }, [clients, clientSearchQuery]);
+
   // Set default message
   const makeDefaultMessage = (clientName: string) => {
     const name = clientName ? clientName.split(' ')[0] : 'there';
@@ -57,13 +102,20 @@ export const CreateFollowUpModal: React.FC<CreateFollowUpModalProps> = ({
   useEffect(() => {
     if (isOpen) {
       setError(null);
-      const initialClient = preSelectedClientId || (clients.length > 0 ? clients[0].id : '');
-      setSelectedClientId(initialClient);
+      setClientSearchQuery('');
       setCadence('1 Month');
       setDueDate(getDatePlusDays(30));
 
-      const cObj = clients.find((c) => c.id === Number(initialClient));
-      setMessage(makeDefaultMessage(cObj?.full_name || ''));
+      if (preSelectedClientId) {
+        setSelectedClientId(preSelectedClientId);
+        setIsSearchOpen(false);
+        const cObj = clients.find((c) => c.id === Number(preSelectedClientId));
+        setMessage(makeDefaultMessage(cObj?.full_name || ''));
+      } else {
+        setSelectedClientId('');
+        setIsSearchOpen(true);
+        setMessage(makeDefaultMessage(''));
+      }
     }
   }, [isOpen, preSelectedClientId, clients]);
 
@@ -78,6 +130,8 @@ export const CreateFollowUpModal: React.FC<CreateFollowUpModalProps> = ({
 
   const handleClientChange = (clientId: number) => {
     setSelectedClientId(clientId);
+    setIsSearchOpen(false);
+    setClientSearchQuery('');
     const cObj = clients.find((c) => c.id === clientId);
     if (cObj) {
       setMessage(makeDefaultMessage(cObj.full_name));
@@ -163,42 +217,189 @@ export const CreateFollowUpModal: React.FC<CreateFollowUpModalProps> = ({
             </div>
           )}
 
-          {/* 1. Client Select */}
-          <div>
-            <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-              Select Client <span className="text-rose-500">*</span>
-            </label>
-            <select
-              value={selectedClientId}
-              onChange={(e) => handleClientChange(Number(e.target.value))}
-              className="w-full px-3 py-2.5 text-sm bg-slate-50 border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:bg-white text-slate-900 font-medium"
-            >
-              <option value="" disabled>Choose a client...</option>
-              {clients.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.full_name} {c.phone ? `(${c.phone})` : ''}
-                </option>
-              ))}
-            </select>
-          </div>
+          {/* 1. Searchable Client Select */}
+          <div className="space-y-1.5" ref={searchContainerRef}>
+            <div className="flex items-center justify-between">
+              <label className="block text-xs font-semibold text-slate-700">
+                Select Client <span className="text-rose-500">*</span>
+              </label>
+              <span className="text-[11px] text-slate-400">Search by name, phone, or passport</span>
+            </div>
 
-          {/* Selected Client Quick Badge */}
-          {selectedClient && (
-            <div className="p-2.5 bg-emerald-50/70 border border-emerald-100 rounded-xl flex items-center justify-between text-xs">
-              <div className="flex items-center gap-2">
-                <ClientAvatar name={selectedClient.full_name} photoUrl={selectedClient.photo_url} size="sm" />
-                <div>
-                  <span className="font-bold text-slate-800">{selectedClient.full_name}</span>
-                  <span className="text-slate-500 ml-2">Phone: {selectedClient.phone || 'No phone'}</span>
+            {selectedClient && !isSearchOpen ? (
+              <div className="p-3 bg-emerald-50/80 border border-emerald-200/90 rounded-xl flex items-center justify-between shadow-2xs">
+                <div className="flex items-center gap-3 min-w-0">
+                  <ClientAvatar
+                    name={selectedClient.full_name}
+                    photoUrl={selectedClient.photo_url}
+                    size="md"
+                    className="w-9 h-9 rounded-xl text-sm shrink-0"
+                  />
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="font-bold text-sm text-slate-900 truncate">
+                        {selectedClient.full_name}
+                      </span>
+                      <span className="font-mono text-[10px] bg-white px-1.5 py-0.5 rounded border border-emerald-200 text-emerald-800 font-semibold">
+                        {selectedClient.client_id}
+                      </span>
+                    </div>
+                    <div className="text-xs text-slate-600 flex items-center gap-2 mt-0.5 flex-wrap">
+                      <span>
+                        Passport: <strong className="font-mono text-slate-800">{selectedClient.passport_number}</strong>
+                      </span>
+                      {selectedClient.phone ? (
+                        <>
+                          <span>•</span>
+                          <span className="text-emerald-700 font-medium flex items-center gap-1">
+                            <Phone className="w-3 h-3 text-emerald-600" />
+                            {selectedClient.phone}
+                          </span>
+                          <span className="text-[10px] bg-emerald-100/80 text-emerald-800 px-1.5 py-0.5 rounded-full font-semibold flex items-center gap-0.5">
+                            <Check className="w-2.5 h-2.5 text-emerald-600" /> WhatsApp Ready
+                          </span>
+                        </>
+                      ) : (
+                        <>
+                          <span>•</span>
+                          <span className="text-slate-400">No phone</span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsSearchOpen(true);
+                    setClientSearchQuery('');
+                    setTimeout(() => searchInputRef.current?.focus(), 50);
+                  }}
+                  className="ml-2 shrink-0 px-3 py-1.5 text-xs font-semibold text-emerald-700 hover:text-emerald-900 bg-white hover:bg-emerald-100/70 border border-emerald-200 rounded-lg transition-colors flex items-center gap-1.5 shadow-2xs"
+                >
+                  <Search className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>Change</span>
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {/* Search input field */}
+                <div className="relative">
+                  <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
+                  <input
+                    ref={searchInputRef}
+                    type="text"
+                    value={clientSearchQuery}
+                    onChange={(e) => setClientSearchQuery(e.target.value)}
+                    placeholder="Type name, phone, passport number, or CL-ID..."
+                    className="w-full pl-9 pr-9 py-2.5 text-sm bg-slate-50 border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:bg-white text-slate-900 placeholder:text-slate-400 shadow-2xs font-medium"
+                  />
+                  {clientSearchQuery ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setClientSearchQuery('');
+                        searchInputRef.current?.focus();
+                      }}
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5"
+                    >
+                      <X className="w-4 h-4" />
+                    </button>
+                  ) : selectedClient ? (
+                    <button
+                      type="button"
+                      onClick={() => setIsSearchOpen(false)}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[11px] font-semibold text-slate-500 hover:text-slate-700 px-2 py-1 rounded hover:bg-slate-200/60"
+                    >
+                      Cancel
+                    </button>
+                  ) : null}
+                </div>
+
+                {/* Results summary & list */}
+                <div className="border border-slate-200 rounded-xl bg-white shadow-sm overflow-hidden">
+                  <div className="px-3 py-1.5 bg-slate-50 border-b border-slate-100 text-[11px] text-slate-500 flex items-center justify-between">
+                    <span>
+                      {clientSearchQuery.trim()
+                        ? `Found ${filteredClients.length} match${filteredClients.length === 1 ? '' : 'es'}`
+                        : `All clients (${clients.length})`}
+                    </span>
+                    <span className="text-slate-400">Click to select</span>
+                  </div>
+
+                  <div className="max-h-48 overflow-y-auto divide-y divide-slate-100">
+                    {filteredClients.length === 0 ? (
+                      <div className="p-4 text-center text-xs text-slate-400">
+                        No clients found matching "{clientSearchQuery}". Try another name, passport, or phone.
+                      </div>
+                    ) : (
+                      filteredClients.map((c) => {
+                        const isSelected = c.id === selectedClientId;
+                        return (
+                          <button
+                            key={c.id}
+                            type="button"
+                            onClick={() => handleClientChange(c.id)}
+                            className={`w-full text-left p-2.5 transition flex items-center justify-between group ${
+                              isSelected
+                                ? 'bg-emerald-50 text-emerald-950 font-semibold'
+                                : 'hover:bg-slate-50 text-slate-800'
+                            }`}
+                          >
+                            <div className="flex items-center gap-2.5 min-w-0">
+                              <ClientAvatar
+                                name={c.full_name}
+                                photoUrl={c.photo_url}
+                                size="xs"
+                                className="w-7 h-7 rounded-lg text-xs shrink-0"
+                              />
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-2">
+                                  <span className="font-semibold text-xs text-slate-900 truncate">
+                                    {c.full_name}
+                                  </span>
+                                  <span className="font-mono text-[10px] bg-slate-100 text-slate-600 px-1 py-0.2 rounded border border-slate-200">
+                                    {c.client_id}
+                                  </span>
+                                </div>
+                                <div className="text-[11px] text-slate-500 flex items-center gap-2 mt-0.5 flex-wrap">
+                                  <span>
+                                    Passport:{' '}
+                                    <strong className="font-mono text-slate-700 bg-amber-50 text-amber-900 px-1 py-0.2 rounded border border-amber-200/60">
+                                      {c.passport_number}
+                                    </strong>
+                                  </span>
+                                  {c.phone && (
+                                    <>
+                                      <span>•</span>
+                                      <span className="text-emerald-700 font-medium flex items-center gap-0.5">
+                                        <Phone className="w-2.5 h-2.5" />
+                                        {c.phone}
+                                      </span>
+                                    </>
+                                  )}
+                                  <span>•</span>
+                                  <span>{c.country}</span>
+                                </div>
+                              </div>
+                            </div>
+                            {isSelected ? (
+                              <Check className="w-4 h-4 text-emerald-600 shrink-0 ml-2" />
+                            ) : (
+                              <span className="text-[11px] text-emerald-600 opacity-0 group-hover:opacity-100 font-medium shrink-0 ml-2">
+                                Select
+                              </span>
+                            )}
+                          </button>
+                        );
+                      })
+                    )}
+                  </div>
                 </div>
               </div>
-              {selectedClient.phone && (
-                <span className="text-emerald-700 font-medium text-[11px] flex items-center gap-1">
-                  <Check className="w-3.5 h-3.5 text-emerald-600" /> WhatsApp Ready
-                </span>
-              )}
-            </div>
-          )}
+            )}
+          </div>
 
           {/* 2. When to Follow-up */}
           <div>
