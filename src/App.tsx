@@ -8,24 +8,28 @@ import React, { useState, useEffect } from 'react';
 import { Header } from './components/Header';
 import { Sidebar, NavTab } from './components/Sidebar';
 import { DashboardView } from './pages/DashboardView';
-import { ClientsView } from './pages/ClientsView';
-import { ClientProfileView } from './pages/ClientProfileView';
-import { ApplicationsView } from './pages/ApplicationsView';
-import { HotelsView } from './pages/HotelsView';
-import { FollowUpsView } from './pages/FollowUpsView';
-import { CalendarView } from './pages/CalendarView';
-import { TasksView } from './pages/TasksView';
-import { SettingsView } from './pages/SettingsView';
-import { NotFoundPage } from './pages/NotFoundPage';
 import { LoginView } from './pages/LoginView';
 import { CreateClientModal } from './components/CreateClientModal';
 import { NewApplicationModal } from './components/NewApplicationModal';
 import { ApplicationStatusModal } from './components/ApplicationStatusModal';
 import { NewTaskModal } from './components/NewTaskModal';
-import { DatabaseModal } from './components/DatabaseModal';
-import { PassportScannerModal } from './components/PassportScannerModal';
 import { ChangePasswordModal } from './components/ChangePasswordModal';
-import { ReturnStatusWarningModal } from './components/ReturnStatusWarningModal';
+import { CommandPalette } from './components/CommandPalette';
+import { CreateFollowUpModal } from './components/CreateFollowUpModal';
+
+// High-Performance Code Splitting: Lazy-load secondary views & heavy tools
+const ClientsView = React.lazy(() => import('./pages/ClientsView').then(m => ({ default: m.ClientsView })));
+const ClientProfileView = React.lazy(() => import('./pages/ClientProfileView').then(m => ({ default: m.ClientProfileView })));
+const ApplicationsView = React.lazy(() => import('./pages/ApplicationsView').then(m => ({ default: m.ApplicationsView })));
+const HotelsView = React.lazy(() => import('./pages/HotelsView').then(m => ({ default: m.HotelsView })));
+const FollowUpsView = React.lazy(() => import('./pages/FollowUpsView').then(m => ({ default: m.FollowUpsView })));
+const CalendarView = React.lazy(() => import('./pages/CalendarView').then(m => ({ default: m.CalendarView })));
+const TasksView = React.lazy(() => import('./pages/TasksView').then(m => ({ default: m.TasksView })));
+const SettingsView = React.lazy(() => import('./pages/SettingsView').then(m => ({ default: m.SettingsView })));
+const NotFoundPage = React.lazy(() => import('./pages/NotFoundPage').then(m => ({ default: m.NotFoundPage })));
+const PassportScannerModal = React.lazy(() => import('./components/PassportScannerModal').then(m => ({ default: m.PassportScannerModal })));
+const DatabaseModal = React.lazy(() => import('./components/DatabaseModal').then(m => ({ default: m.DatabaseModal })));
+const ReturnStatusWarningModal = React.lazy(() => import('./components/ReturnStatusWarningModal').then(m => ({ default: m.ReturnStatusWarningModal })));
 import { AlertTriangle, X, RotateCcw } from 'lucide-react';
 import { api } from './services/api';
 import {
@@ -42,6 +46,31 @@ import {
   HotelBooking,
   FollowUp,
 } from './types';
+
+const ViewLoadingSkeleton: React.FC = () => (
+  <div className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto space-y-6 animate-pulse">
+    <div className="flex items-center justify-between">
+      <div className="space-y-2">
+        <div className="h-7 w-48 bg-slate-200 rounded-lg"></div>
+        <div className="h-4 w-72 bg-slate-100 rounded-md"></div>
+      </div>
+      <div className="h-10 w-32 bg-slate-200 rounded-xl"></div>
+    </div>
+    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+      <div className="h-28 bg-slate-100 rounded-2xl border border-slate-200/60"></div>
+      <div className="h-28 bg-slate-100 rounded-2xl border border-slate-200/60"></div>
+      <div className="h-28 bg-slate-100 rounded-2xl border border-slate-200/60"></div>
+    </div>
+    <div className="h-96 bg-white rounded-2xl border border-slate-200/70 p-6 space-y-4">
+      <div className="h-6 w-36 bg-slate-200 rounded"></div>
+      <div className="space-y-3 pt-2">
+        <div className="h-12 bg-slate-50 rounded-xl"></div>
+        <div className="h-12 bg-slate-50 rounded-xl"></div>
+        <div className="h-12 bg-slate-50 rounded-xl"></div>
+      </div>
+    </div>
+  </div>
+);
 
 export default function App() {
   // Navigation & View State
@@ -68,6 +97,8 @@ export default function App() {
   const [newTaskClientInfo, setNewTaskClientInfo] = useState<{ id?: number; name?: string; dueDate?: string }>({});
   const [dbModalOpen, setDbModalOpen] = useState(false);
   const [changePasswordModalOpen, setChangePasswordModalOpen] = useState(false);
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  const [createFollowUpModalOpen, setCreateFollowUpModalOpen] = useState(false);
 
   // Return Status Warning Modal State & Toast Banner State
   const [returnWarningState, setReturnWarningState] = useState<{
@@ -126,32 +157,54 @@ export default function App() {
       if (!silent) {
         setLoading(true);
       }
-      const [cls, apps, tsks, vts, usrs, mtr, dbs, htls, hbkgs, fus] = await Promise.all([
+
+      // Priority 1: Instant Dashboard Boot (Metrics & Database Health)
+      const [mtrRes, dbsRes] = await Promise.allSettled([
+        api.getDashboardMetrics(),
+        api.getDbStatus(),
+      ]);
+
+      if (mtrRes.status === 'fulfilled') setMetrics(mtrRes.value);
+      if (dbsRes.status === 'fulfilled') setDbStatus(dbsRes.value);
+
+      // Immediately unblock dashboard screen for near-instant rendering
+      if (!silent) {
+        setLoading(false);
+      }
+
+      // Priority 2: Concurrent Background Hydration for secondary tabs
+      const [
+        clsRes,
+        appsRes,
+        tsksRes,
+        vtsRes,
+        usrsRes,
+        htlsRes,
+        hbkgsRes,
+        fusRes,
+      ] = await Promise.allSettled([
         api.getClients(),
         api.getApplications(),
         api.getTasks(),
         api.getVisaTypes(true),
         api.getUsers(),
-        api.getDashboardMetrics(),
-        api.getDbStatus(),
         api.getHotels(false),
         api.getHotelBookings(),
         api.getFollowUps(),
       ]);
 
-      setClients(cls);
-      setApplications(apps);
-      setTasks(tsks);
-      setVisaTypes(vts);
-      setUsers(usrs);
-      setMetrics(mtr);
-      setDbStatus(dbs);
-      setHotels(htls);
-      setHotelBookings(hbkgs);
-      setFollowUps(fus);
+      if (clsRes.status === 'fulfilled') setClients(clsRes.value);
+      if (appsRes.status === 'fulfilled') setApplications(appsRes.value);
+      if (tsksRes.status === 'fulfilled') setTasks(tsksRes.value);
+      if (vtsRes.status === 'fulfilled') setVisaTypes(vtsRes.value);
+      if (usrsRes.status === 'fulfilled') setUsers(usrsRes.value);
+      if (htlsRes.status === 'fulfilled') setHotels(htlsRes.value);
+      if (hbkgsRes.status === 'fulfilled') setHotelBookings(hbkgsRes.value);
+      if (fusRes.status === 'fulfilled') setFollowUps(fusRes.value);
+
       setProfileRefreshKey((prev) => prev + 1);
     } catch (err: any) {
-      console.error('[SN Travels] Error fetching data:', err);
+      console.warn('[SN Travels] Non-fatal issue during refreshAllData:', err);
     } finally {
       if (!silent) {
         setLoading(false);
@@ -775,10 +828,12 @@ export default function App() {
               }
             }}
             onToggleMobileSidebar={() => setMobileSidebarOpen(!mobileSidebarOpen)}
+            onOpenCommandPalette={() => setCommandPaletteOpen(true)}
           />
 
           <main className="flex-1 pb-16">
-            {/* Dashboard View */}
+            <React.Suspense fallback={<ViewLoadingSkeleton />}>
+              {/* Dashboard View */}
             {currentTab === 'dashboard' && (
               <DashboardView
                 metrics={metrics}
@@ -787,9 +842,11 @@ export default function App() {
                 onOpenNewClient={() => setCreateClientModalOpen(true)}
                 onOpenPassportScanner={() => setPassportScannerModalOpen(true)}
                 onOpenNewApplication={() => handleOpenNewAppForClient()}
+                onOpenNewFollowUp={() => setCreateFollowUpModalOpen(true)}
                 onOpenNewTask={() => handleOpenNewTaskForClient()}
                 onToggleTask={handleToggleTask}
                 onOpenStatusModal={handleOpenStatusModal}
+                onNavigate={(tab) => navigateTo(tab)}
               />
             )}
 
@@ -808,6 +865,7 @@ export default function App() {
                     refreshAllData(true);
                   }}
                   onRefreshData={() => refreshAllData(true)}
+                  users={users}
                 />
               ) : (
                 <ClientsView
@@ -921,6 +979,7 @@ export default function App() {
                 requestedPath={window.location.pathname}
               />
             )}
+            </React.Suspense>
           </main>
         </div>
       </div>
@@ -940,19 +999,23 @@ export default function App() {
         onOpenPassportScanner={() => setPassportScannerModalOpen(true)}
       />
 
-      <PassportScannerModal
-        isOpen={passportScannerModalOpen}
-        onClose={() => setPassportScannerModalOpen(false)}
-        onUseDataForNewClient={(data) => {
-          setScannedPassportData(data);
-          setPassportScannerModalOpen(false);
-          setCreateClientModalOpen(true);
-        }}
-        onOpenExistingClient={(clientId) => {
-          setPassportScannerModalOpen(false);
-          navigateTo('clients', clientId);
-        }}
-      />
+      {passportScannerModalOpen && (
+        <React.Suspense fallback={null}>
+          <PassportScannerModal
+            isOpen={passportScannerModalOpen}
+            onClose={() => setPassportScannerModalOpen(false)}
+            onUseDataForNewClient={(data) => {
+              setScannedPassportData(data);
+              setPassportScannerModalOpen(false);
+              setCreateClientModalOpen(true);
+            }}
+            onOpenExistingClient={(clientId) => {
+              setPassportScannerModalOpen(false);
+              navigateTo('clients', clientId);
+            }}
+          />
+        </React.Suspense>
+      )}
 
       <NewApplicationModal
         isOpen={newAppModalOpen}
@@ -980,11 +1043,15 @@ export default function App() {
         onTaskCreated={() => refreshAllData(true)}
       />
 
-      <DatabaseModal
-        isOpen={dbModalOpen}
-        onClose={() => setDbModalOpen(false)}
-        status={dbStatus}
-      />
+      {dbModalOpen && (
+        <React.Suspense fallback={null}>
+          <DatabaseModal
+            isOpen={dbModalOpen}
+            onClose={() => setDbModalOpen(false)}
+            status={dbStatus}
+          />
+        </React.Suspense>
+      )}
 
       <ChangePasswordModal
         isOpen={changePasswordModalOpen}
@@ -994,19 +1061,46 @@ export default function App() {
         }}
       />
 
-      {/* Return Status Warning Modal */}
-      <ReturnStatusWarningModal
-        isOpen={!!returnWarningState?.isOpen}
-        onClose={() => setReturnWarningState(null)}
-        onConfirm={handleConfirmReturnWarning}
-        mode={returnWarningState?.mode}
-        clientName={returnWarningState?.clientName}
-        applicationCode={returnWarningState?.applicationCode}
-        taskTitle={returnWarningState?.taskTitle}
-        dueDate={returnWarningState?.dueDate}
-        previousStatus={returnWarningState?.previousStatus}
-        loading={returnWarningLoading}
+      {/* Global Command Palette (⌘K) */}
+      <CommandPalette
+        isOpen={commandPaletteOpen}
+        onClose={() => setCommandPaletteOpen(false)}
+        clients={clients}
+        applications={applications}
+        onNavigate={(tab, clientId) => navigateTo(tab, clientId)}
+        onOpenNewClient={() => setCreateClientModalOpen(true)}
+        onOpenNewApplication={() => handleOpenNewAppForClient()}
+        onOpenNewFollowUp={() => setCreateFollowUpModalOpen(true)}
+        onOpenNewTask={() => handleOpenNewTaskForClient()}
+        onOpenPassportScanner={() => setPassportScannerModalOpen(true)}
       />
+
+      {/* Quick Follow-up creation modal */}
+      <CreateFollowUpModal
+        isOpen={createFollowUpModalOpen}
+        onClose={() => setCreateFollowUpModalOpen(false)}
+        clients={clients}
+        users={users}
+        onSuccess={() => refreshAllData(true)}
+      />
+
+      {/* Return Status Warning Modal */}
+      {returnWarningState?.isOpen && (
+        <React.Suspense fallback={null}>
+          <ReturnStatusWarningModal
+            isOpen={!!returnWarningState?.isOpen}
+            onClose={() => setReturnWarningState(null)}
+            onConfirm={handleConfirmReturnWarning}
+            mode={returnWarningState?.mode}
+            clientName={returnWarningState?.clientName}
+            applicationCode={returnWarningState?.applicationCode}
+            taskTitle={returnWarningState?.taskTitle}
+            dueDate={returnWarningState?.dueDate}
+            previousStatus={returnWarningState?.previousStatus}
+            loading={returnWarningLoading}
+          />
+        </React.Suspense>
+      )}
 
       {/* Return Status Alert Toast */}
       {returnStatusBanner && (

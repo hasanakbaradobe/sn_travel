@@ -26,7 +26,40 @@ export const apiRouter = Router();
 // --------------------------------------------------------------------------
 const sseClients = new Set<Response>();
 
+// --------------------------------------------------------------------------
+// High-Performance Micro-Cache for Static & Reference Tables
+// Prevents redundant DB querying and re-serialization for reference data
+// --------------------------------------------------------------------------
+const referenceCache = new Map<string, { data: any; expiresAt: number }>();
+
+export function getCachedReference<T>(key: string): T | null {
+  const item = referenceCache.get(key);
+  if (!item) return null;
+  if (Date.now() > item.expiresAt) {
+    referenceCache.delete(key);
+    return null;
+  }
+  return item.data as T;
+}
+
+export function setCachedReference<T>(key: string, data: T, ttlMs = 45000): void {
+  referenceCache.set(key, { data, expiresAt: Date.now() + ttlMs });
+}
+
+export function invalidateReferenceCache(prefix?: string): void {
+  if (!prefix) {
+    referenceCache.clear();
+    return;
+  }
+  for (const key of referenceCache.keys()) {
+    if (key.startsWith(prefix)) {
+      referenceCache.delete(key);
+    }
+  }
+}
+
 export function broadcastDataChange(eventType: string = 'data_changed', data?: any) {
+  invalidateReferenceCache();
   const payload = `data: ${JSON.stringify({ type: eventType, timestamp: Date.now(), ...(data || {}) })}\n\n`;
   sseClients.forEach((clientRes) => {
     try {
@@ -691,7 +724,12 @@ apiRouter.post('/comments', async (req: Request, res: Response) => {
 // --------------------------------------------------------------------------
 apiRouter.get('/custom-fields', (req: Request, res: Response) => {
   const { active_only } = req.query;
+  const cacheKey = `custom_fields_${active_only === 'true'}`;
+  const cached = getCachedReference(cacheKey);
+  if (cached) return res.json(cached);
+
   const fields = dbService.getCustomFields(active_only === 'true');
+  setCachedReference(cacheKey, fields, 60000);
   return res.json(fields);
 });
 
@@ -746,7 +784,12 @@ apiRouter.delete('/custom-fields/:id', async (req: Request, res: Response) => {
 // --------------------------------------------------------------------------
 apiRouter.get('/visa-types', (req: Request, res: Response) => {
   const { active_only } = req.query;
+  const cacheKey = `visa_types_${active_only === 'true'}`;
+  const cached = getCachedReference(cacheKey);
+  if (cached) return res.json(cached);
+
   const list = dbService.getVisaTypes(active_only === 'true');
+  setCachedReference(cacheKey, list, 60000);
   return res.json(list);
 });
 
@@ -802,7 +845,12 @@ apiRouter.delete('/visa-types/:id', async (req: Request, res: Response) => {
 // --------------------------------------------------------------------------
 apiRouter.get('/countries', (req: Request, res: Response) => {
   const { active_only } = req.query;
+  const cacheKey = `countries_${active_only === 'true'}`;
+  const cached = getCachedReference(cacheKey);
+  if (cached) return res.json(cached);
+
   const list = dbService.getCountries(active_only === 'true');
+  setCachedReference(cacheKey, list, 60000);
   return res.json(list);
 });
 
@@ -842,10 +890,16 @@ apiRouter.delete('/countries/:id', async (req: Request, res: Response) => {
 // --------------------------------------------------------------------------
 apiRouter.get('/users', (req: Request, res: Response) => {
   const currentUser = (req as any).user;
+  const isSuperAdmin = currentUser?.role === 'super_admin';
+  const cacheKey = `users_${isSuperAdmin ? 'admin' : 'staff'}`;
+  const cached = getCachedReference(cacheKey);
+  if (cached) return res.json(cached);
+
   const users = dbService.getUsers();
 
   // If super admin, return full user management data
-  if (currentUser?.role === 'super_admin') {
+  if (isSuperAdmin) {
+    setCachedReference(cacheKey, users, 45000);
     return res.json(users);
   }
 
@@ -857,6 +911,7 @@ apiRouter.get('/users', (req: Request, res: Response) => {
       name: u.name,
       role: u.role,
     }));
+  setCachedReference(cacheKey, directory, 45000);
   return res.json(directory);
 });
 
@@ -1057,6 +1112,8 @@ apiRouter.post('/data-cleanup/purge', requireSuperAdmin, async (req: Request, re
     currentUser.id
   );
 
+  broadcastDataChange('data_changed', { endpoint: req.path, purged: result.purged_counts });
+
   return res.json(result);
 });
 
@@ -1195,7 +1252,12 @@ apiRouter.post('/settings/secret-login-url', (req: Request, res: Response) => {
 // --------------------------------------------------------------------------
 apiRouter.get('/hotels', (req: Request, res: Response) => {
   const activeOnly = req.query.active_only === 'true';
+  const cacheKey = `hotels_${activeOnly}`;
+  const cached = getCachedReference(cacheKey);
+  if (cached) return res.json(cached);
+
   const hotels = dbService.getHotels(activeOnly);
+  setCachedReference(cacheKey, hotels, 60000);
   return res.json(hotels);
 });
 

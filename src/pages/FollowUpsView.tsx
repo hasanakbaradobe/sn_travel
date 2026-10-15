@@ -1,7 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import {
   MessageSquarePlus,
-  Plus,
   Search,
   Calendar,
   Clock,
@@ -215,9 +214,8 @@ export const FollowUpsView: React.FC<FollowUpsViewProps> = ({
           </button>
           <button
             onClick={() => setCreateModalOpen(true)}
-            className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs sm:text-sm rounded-xl shadow-sm transition-all flex items-center gap-1.5 active:scale-95 cursor-pointer"
+            className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs sm:text-sm rounded-xl shadow-sm transition-all active:scale-95 cursor-pointer"
           >
-            <Plus className="w-4 h-4" />
             <span>Add Follow-up</span>
           </button>
         </div>
@@ -294,9 +292,8 @@ export const FollowUpsView: React.FC<FollowUpsViewProps> = ({
           {activeTab === 'pending' && (
             <button
               onClick={() => setCreateModalOpen(true)}
-              className="mt-4 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl shadow-sm inline-flex items-center gap-1.5"
+              className="mt-4 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-semibold text-xs rounded-xl shadow-sm inline-flex items-center active:scale-95 transition-all cursor-pointer"
             >
-              <Plus className="w-3.5 h-3.5" />
               <span>Add Follow-up</span>
             </button>
           )}
@@ -310,8 +307,10 @@ export const FollowUpsView: React.FC<FollowUpsViewProps> = ({
             return (
               <div
                 key={f.id}
-                className={`bg-white rounded-2xl border p-4 shadow-sm transition-all flex flex-col sm:flex-row sm:items-center justify-between gap-3.5 ${
-                  isDone ? 'border-slate-200/70 bg-slate-50/50 opacity-80' : 'border-slate-200 hover:border-emerald-300'
+                className={`bg-white rounded-2xl border p-4 sm:p-5 shadow-xs transition-all duration-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3.5 ${
+                  isDone
+                    ? 'border-slate-200/60 bg-slate-50/60 opacity-85 hover:opacity-100 hover:border-slate-300'
+                    : 'border-slate-200/90 hover:border-emerald-400 hover:shadow-md'
                 }`}
               >
                 {/* Left: Client & Info */}

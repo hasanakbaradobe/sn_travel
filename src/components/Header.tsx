@@ -24,6 +24,7 @@ interface HeaderProps {
   onGlobalSearch: (query: string) => void;
   searchQuery: string;
   onToggleMobileSidebar: () => void;
+  onOpenCommandPalette?: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -38,9 +39,28 @@ export const Header: React.FC<HeaderProps> = ({
   onGlobalSearch,
   searchQuery,
   onToggleMobileSidebar,
+  onOpenCommandPalette,
 }) => {
   const [userDropdownOpen, setUserDropdownOpen] = useState(false);
   const userDropdownRef = useRef<HTMLDivElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+
+  // Global hotkey: Cmd+K / Ctrl+K opens Command Palette
+  useEffect(() => {
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault();
+        if (onOpenCommandPalette) {
+          onOpenCommandPalette();
+        } else {
+          searchInputRef.current?.focus();
+          searchInputRef.current?.select();
+        }
+      }
+    };
+    window.addEventListener('keydown', handleGlobalKeyDown);
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown);
+  }, [onOpenCommandPalette]);
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -64,12 +84,12 @@ export const Header: React.FC<HeaderProps> = ({
   }, [userDropdownOpen]);
 
   return (
-    <header className="h-16 bg-white border-b border-slate-200 sticky top-0 z-30 flex items-center justify-between px-4 sm:px-6">
+    <header className="h-16 bg-white/95 backdrop-blur-md border-b border-slate-200/80 sticky top-0 z-30 flex items-center justify-between px-4 sm:px-6 transition-all">
       {/* Left: Mobile hamburger & Global Search */}
       <div className="flex items-center gap-3 flex-1 max-w-2xl">
         <button
           onClick={onToggleMobileSidebar}
-          className="lg:hidden p-2 rounded-lg text-slate-600 hover:text-slate-900 hover:bg-slate-100"
+          className="lg:hidden p-2 rounded-xl text-slate-600 hover:text-slate-900 hover:bg-slate-100 transition-colors cursor-pointer"
           aria-label="Toggle navigation menu"
         >
           <Menu className="w-5 h-5" />
@@ -77,20 +97,35 @@ export const Header: React.FC<HeaderProps> = ({
 
         {/* Global Search Input */}
         <div className="relative w-full max-w-md">
-          <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+          <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
           <input
+            ref={searchInputRef}
             type="text"
             value={searchQuery}
             onChange={(e) => onGlobalSearch(e.target.value)}
+            onFocus={() => {
+              if (onOpenCommandPalette && !searchQuery) {
+                onOpenCommandPalette();
+              }
+            }}
             placeholder="Search by client name, passport, ID (e.g. CL-000001)..."
-            className="w-full pl-9 pr-4 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-600 transition"
+            className="w-full pl-9 pr-14 py-2 bg-slate-50/90 hover:bg-slate-100/70 border border-slate-200 rounded-xl text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-600 focus:bg-white transition-all shadow-2xs"
           />
-          {searchQuery && (
+          {searchQuery ? (
             <button
               onClick={() => onGlobalSearch('')}
-              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-xs text-slate-400 hover:text-slate-600"
+              className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-slate-400 hover:text-slate-600 px-1.5 py-0.5 rounded hover:bg-slate-200/60 transition-colors"
             >
               Clear
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={onOpenCommandPalette}
+              title="Open Command Palette (Cmd+K)"
+              className="hidden sm:flex absolute right-2.5 top-1/2 -translate-y-1/2 items-center gap-0.5 text-[10px] font-mono text-slate-400 hover:text-slate-700 bg-white hover:bg-slate-50 border border-slate-200 px-1.5 py-0.5 rounded shadow-2xs transition-colors cursor-pointer"
+            >
+              <span className="text-[9px]">⌘</span>K
             </button>
           )}
         </div>

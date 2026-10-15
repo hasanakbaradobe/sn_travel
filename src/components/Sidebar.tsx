@@ -133,21 +133,24 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 onSelectTab(item.id);
                 onCloseMobile();
               }}
-              className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium transition group ${
+              className={`w-full relative flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-150 group cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 active:scale-[0.99] ${
                 isActive
-                  ? 'bg-sky-700 text-white shadow-sm'
-                  : 'text-slate-300 hover:bg-slate-800/80 hover:text-white'
+                  ? 'bg-sky-600/90 text-white shadow-sm shadow-sky-950/40 font-semibold'
+                  : 'text-slate-300 hover:bg-slate-800/70 hover:text-white'
               }`}
             >
-              <div className="flex items-center gap-3">
-                <span className={isActive ? 'text-white' : 'text-slate-400 group-hover:text-white'}>
+              {isActive && (
+                <span className="absolute left-1 top-2.5 bottom-2.5 w-1 bg-sky-300 rounded-full" />
+              )}
+              <div className="flex items-center gap-3 pl-1.5">
+                <span className={isActive ? 'text-white' : 'text-slate-400 group-hover:text-slate-200 transition-colors'}>
                   {item.icon}
                 </span>
-                <span>{item.label}</span>
+                <span className="tracking-tight">{item.label}</span>
               </div>
               {item.badge !== undefined && (
                 <span
-                  className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${
+                  className={`text-[11px] font-bold px-2 py-0.5 rounded-full shadow-2xs transition-transform group-hover:scale-105 ${
                     isActive ? 'bg-white/20 text-white' : item.badgeColor
                   }`}
                 >

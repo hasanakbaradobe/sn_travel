@@ -30,14 +30,28 @@ async function probeMySQLConnection() {
     connectionError = null;
     console.log(`[Database] Connected to MySQL database "${DB_NAME}" at ${DB_HOST}:${DB_PORT}`);
     
-    // Ensure high-performance indexes exist in MySQL
+    // Ensure high-performance composite indexes exist in MySQL
     try { await conn.query('CREATE INDEX idx_tasks_app_id ON tasks(application_id)'); } catch {}
     try { await conn.query('CREATE INDEX idx_tasks_client_id ON tasks(client_id)'); } catch {}
     try { await conn.query('CREATE INDEX idx_tasks_status ON tasks(status)'); } catch {}
+    try { await conn.query('CREATE INDEX idx_tasks_due ON tasks(due_date)'); } catch {}
+    try { await conn.query('CREATE INDEX idx_tasks_due_status ON tasks(due_date, status)'); } catch {}
+    try { await conn.query('CREATE INDEX idx_tasks_client_due ON tasks(client_id, due_date)'); } catch {}
+
     try { await conn.query('CREATE INDEX idx_apps_client_id ON visa_applications(client_id)'); } catch {}
     try { await conn.query('CREATE INDEX idx_apps_status ON visa_applications(status)'); } catch {}
+    try { await conn.query('CREATE INDEX idx_apps_delivery ON visa_applications(delivery_date)'); } catch {}
+    try { await conn.query('CREATE INDEX idx_apps_status_delivery ON visa_applications(status, delivery_date)'); } catch {}
+    try { await conn.query('CREATE INDEX idx_apps_client_status ON visa_applications(client_id, status)'); } catch {}
+
     try { await conn.query('CREATE INDEX idx_app_hist_app_id ON application_status_history(application_id)'); } catch {}
     try { await conn.query('CREATE INDEX idx_hb_client_id ON hotel_bookings(client_id)'); } catch {}
+    try { await conn.query('CREATE INDEX idx_hb_status ON hotel_bookings(status)'); } catch {}
+    try { await conn.query('CREATE INDEX idx_hb_dates ON hotel_bookings(check_in_date, check_out_date)'); } catch {}
+    try { await conn.query('CREATE INDEX idx_hb_checkout_status ON hotel_bookings(check_out_date, status)'); } catch {}
+
+    try { await conn.query('CREATE INDEX idx_act_created ON activity_logs(created_at)'); } catch {}
+    try { await conn.query('CREATE INDEX idx_act_entity ON activity_logs(entity_type, entity_id)'); } catch {}
 
     // Ensure follow_ups table and indexes exist in MySQL
     try {
@@ -64,6 +78,7 @@ async function probeMySQLConnection() {
           INDEX idx_fu_client (client_id),
           INDEX idx_fu_due (due_date),
           INDEX idx_fu_status (status),
+          INDEX idx_fu_due_status (due_date, status),
           INDEX idx_fu_task (task_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
       `);
@@ -73,6 +88,7 @@ async function probeMySQLConnection() {
     try { await conn.query('CREATE INDEX idx_fu_client ON follow_ups(client_id)'); } catch {}
     try { await conn.query('CREATE INDEX idx_fu_due ON follow_ups(due_date)'); } catch {}
     try { await conn.query('CREATE INDEX idx_fu_status ON follow_ups(status)'); } catch {}
+    try { await conn.query('CREATE INDEX idx_fu_due_status ON follow_ups(due_date, status)'); } catch {}
     try { await conn.query('CREATE INDEX idx_fu_task ON follow_ups(task_id)'); } catch {}
 
     conn.release();
@@ -96,11 +112,14 @@ if (DB_HOST && DB_USER) {
       password: DB_PASSWORD,
       database: DB_NAME,
       waitForConnections: true,
-      connectionLimit: 10,
+      connectionLimit: 15,
+      maxIdle: 10,
+      idleTimeout: 60000,
       queueLimit: 0,
       enableKeepAlive: true,
-      keepAliveInitialDelay: 0,
+      keepAliveInitialDelay: 10000,
       dateStrings: true,
+      connectTimeout: 10000,
       ssl: DB_SSL ? { rejectUnauthorized: false } : undefined,
     });
     
@@ -111,6 +130,18 @@ if (DB_HOST && DB_USER) {
         connectionError = err.message;
       }
     });
+
+    // Periodic keep-alive heartbeat ping (every 45s) to keep TCP socket active through firewalls/proxies
+    setInterval(async () => {
+      if (pool && isConnectedToMySQL) {
+        try {
+          await pool.query('/* keep-alive */ SELECT 1');
+        } catch (err: any) {
+          console.warn('[MySQL KeepAlive] Ping failed, attempting probe:', err?.message || err);
+          probeMySQLConnection();
+        }
+      }
+    }, 45000).unref();
 
     probeMySQLConnection();
   } catch (err: any) {
@@ -715,8 +746,9 @@ async function deleteClientFromMySQL(id: number, clientIdString?: string): Promi
 
 let lastSyncTime = 0;
 const SYNC_CACHE_TTL_MS = 5000; // 5 seconds cache to prevent hammering MySQL on every sub-second request
+let inFlightSyncPromise: Promise<void> | null = null;
 
-async function syncFromMySQL(force = false) {
+async function syncFromMySQL(force = false): Promise<void> {
   if (!pool) return;
   if (!isConnectedToMySQL) {
     const connected = await probeMySQLConnection();
@@ -726,6 +758,12 @@ async function syncFromMySQL(force = false) {
   if (!force && (now - lastSyncTime < SYNC_CACHE_TTL_MS)) {
     return; // Serve cached in-memory store immediately
   }
+
+  if (inFlightSyncPromise) {
+    return inFlightSyncPromise;
+  }
+
+  inFlightSyncPromise = (async () => {
 
   const safeQuery = async (sql: string) => {
     try {
@@ -824,7 +862,11 @@ async function syncFromMySQL(force = false) {
     saveStore(store);
   } catch (err: any) {
     console.warn('[Database] Sync from MySQL encountered an issue:', err.message);
+  } finally {
+    inFlightSyncPromise = null;
   }
+  })();
+  return inFlightSyncPromise;
 }
 
 // --------------------------------------------------------------------------
@@ -1147,12 +1189,16 @@ export const dbService = {
     // Hotel Bookings for this client
     const hotelBookings = this.getHotelBookings({ clientId: client.id });
 
+    // Follow-ups for this client
+    const followUps = this.getFollowUps({ clientId: client.id });
+
     return {
       ...client,
       custom_values: customValues,
       applications,
       tasks,
       hotel_bookings: hotelBookings,
+      follow_ups: followUps,
       comments,
       activity,
     };

@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import express from 'express';
+import compression from 'compression';
 import path from 'path';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
@@ -10,6 +11,11 @@ const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// HTTP Response Compression (Gzip / Deflate)
+app.use(compression({
+  threshold: 1024,
+}));
 
 // Security Headers & Request Hygiene
 app.use((_req, res, next) => {

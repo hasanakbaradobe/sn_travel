@@ -29,8 +29,6 @@ import {
   PaginatedResponse,
 } from '../types';
 
-import { scanPassportInBrowser } from './clientPassportScanner';
-
 const API_BASE = '/api';
 const CACHE_KEY_PREFIX = 'sn_api_cache_';
 const DEFAULT_CACHE_TTL_MS = 60 * 1000; // 1 minute default TTL
@@ -120,6 +118,7 @@ class ApiService {
 
   private async request<T>(endpoint: string, options: CacheOptions = {}): Promise<T> {
     const headers: Record<string, string> = {
+      'Accept': 'application/json',
       'Content-Type': 'application/json',
       'Cache-Control': 'no-cache, no-store, must-revalidate',
       'Pragma': 'no-cache',
@@ -139,12 +138,19 @@ class ApiService {
       headers,
     });
 
+    const contentType = response.headers.get('content-type') || '';
+
     if (!response.ok) {
       let errorMessage = 'An error occurred';
       let errorData: any = null;
       try {
-        errorData = await response.json();
-        errorMessage = errorData.error || errorData.message || errorMessage;
+        if (contentType.includes('application/json')) {
+          errorData = await response.json();
+          errorMessage = errorData.error || errorData.message || errorMessage;
+        } else {
+          const rawText = await response.text();
+          errorMessage = rawText.slice(0, 200) || response.statusText || errorMessage;
+        }
       } catch (e) {
         errorMessage = response.statusText || errorMessage;
       }
@@ -161,6 +167,19 @@ class ApiService {
       error.status = response.status;
       error.data = errorData;
       throw error;
+    }
+
+    // Safety guard: ensure response is valid JSON before parsing
+    if (!contentType.includes('application/json')) {
+      const rawText = await response.text();
+      if (rawText.trim().startsWith('<')) {
+        throw new Error(`Server returned HTML instead of JSON for ${endpoint}. Please verify API routing.`);
+      }
+      try {
+        return JSON.parse(rawText) as T;
+      } catch {
+        throw new Error(`Expected JSON from ${endpoint}, but received: ${rawText.slice(0, 100)}`);
+      }
     }
 
     const data: T = await response.json();
@@ -230,6 +249,7 @@ class ApiService {
   ): Promise<ScannedPassportData> {
     // Stage 1: 100% Client-Side In-Browser Execution (0% Server Load)
     try {
+      const { scanPassportInBrowser } = await import('./clientPassportScanner');
       const browserResult = await scanPassportInBrowser(image, onStatusUpdate);
       if (browserResult && browserResult.passportNumber) {
         return { ...browserResult, confidenceScore: browserResult.confidenceScore || 100 };

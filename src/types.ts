@@ -84,6 +84,7 @@ export interface ClientProfileDetails extends Client {
   applications: Array<VisaApplication & { visa_type_name: string; assigned_user_name: string | null }>;
   tasks: Array<Task & { assigned_user_name: string | null }>;
   hotel_bookings?: Array<HotelBooking>;
+  follow_ups?: Array<FollowUp>;
   comments: Array<Comment>;
   activity: Array<ActivityLog>;
 }

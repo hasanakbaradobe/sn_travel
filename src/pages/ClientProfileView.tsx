@@ -26,10 +26,11 @@ import {
   Building2,
   BedDouble,
   MessageSquarePlus,
+  MessageCircle,
   X,
 } from 'lucide-react';
 import { api } from '../services/api';
-import { ClientProfileDetails, ApplicationStatus, Country, HotelBooking } from '../types';
+import { ClientProfileDetails, ApplicationStatus, Country, HotelBooking, FollowUp, User as UserType } from '../types';
 import { STATUS_CONFIG, getPriorityBadge } from '../utils/status';
 import { CountrySelectSearch } from '../components/CountrySelectSearch';
 import { ClientAvatar } from '../components/ClientAvatar';
@@ -49,7 +50,9 @@ interface ClientProfileViewProps {
   onOpenStatusModal: (applicationId: number) => void;
   onClientDeleted: () => void;
   onOpenBookHotel?: (clientId: number, clientName: string) => void;
+  onOpenNewFollowUp?: (clientId: number, clientName: string) => void;
   onRefreshData?: () => void;
+  users?: UserType[];
 }
 
 export const ClientProfileView: React.FC<ClientProfileViewProps> = ({
@@ -61,11 +64,14 @@ export const ClientProfileView: React.FC<ClientProfileViewProps> = ({
   onOpenStatusModal,
   onClientDeleted,
   onOpenBookHotel,
+  onOpenNewFollowUp,
   onRefreshData,
+  users,
 }) => {
   const [client, setClient] = useState<ClientProfileDetails | null>(null);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'overview' | 'applications' | 'hotels' | 'tasks' | 'comments' | 'activity'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'applications' | 'hotels' | 'tasks' | 'followups' | 'comments' | 'activity'>('overview');
+  const [usersList, setUsersList] = useState<UserType[]>(users || []);
   const [commentMessage, setCommentMessage] = useState('');
   const [submittingComment, setSubmittingComment] = useState(false);
   const [editingClient, setEditingClient] = useState(false);
@@ -148,14 +154,16 @@ export const ClientProfileView: React.FC<ClientProfileViewProps> = ({
       if (!silent && !client) {
         setLoading(true);
       }
-      const [data, ctrs, htls] = await Promise.all([
+      const [data, ctrs, htls, usrs] = await Promise.all([
         api.getClientById(clientId),
         api.getCountries(true).catch(() => []),
         api.getHotels(false).catch(() => []),
+        usersList.length > 0 ? Promise.resolve(usersList) : api.getUsers().catch(() => []),
       ]);
       setClient(data);
       setCountries(ctrs);
       setHotelsList(htls);
+      if (Array.isArray(usrs) && usrs.length > 0) setUsersList(usrs);
       setTempClientId(data.client_id || '');
       setEditFormData({
         client_id: data.client_id || '',
@@ -214,6 +222,40 @@ export const ClientProfileView: React.FC<ClientProfileViewProps> = ({
     } catch (err) {
       console.error('Failed to toggle task', err);
     }
+  };
+
+  const handleToggleFollowUp = async (followUp: FollowUp) => {
+    try {
+      const newStatus = followUp.status === 'Completed' ? 'Pending' : 'Completed';
+      await api.updateFollowUp(followUp.id, {
+        status: newStatus,
+        completed_at: newStatus === 'Completed' ? new Date().toISOString() : null,
+      });
+      fetchClientData(true);
+      if (onRefreshData) onRefreshData();
+    } catch (err: any) {
+      console.error('Failed to toggle follow-up status', err);
+    }
+  };
+
+  const handleDeleteFollowUp = async (followUpId: number) => {
+    if (!window.confirm('Are you sure you want to delete this follow-up reminder?')) return;
+    try {
+      await api.deleteFollowUp(followUpId);
+      fetchClientData(true);
+      if (onRefreshData) onRefreshData();
+    } catch (err: any) {
+      console.error('Failed to delete follow-up', err);
+    }
+  };
+
+  const getWhatsAppLink = (phone?: string | null, messageText?: string | null) => {
+    if (!phone) return null;
+    let clean = phone.replace(/[^\d+]/g, '');
+    if (clean.startsWith('+')) clean = clean.substring(1);
+    if (!clean) return null;
+    const msg = messageText ? encodeURIComponent(messageText) : '';
+    return `https://wa.me/${clean}${msg ? `?text=${msg}` : ''}`;
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -461,15 +503,24 @@ export const ClientProfileView: React.FC<ClientProfileViewProps> = ({
 
             <button
               onClick={() => onOpenNewApplication(client.id, client.full_name)}
-              className="px-3.5 py-2 bg-sky-700 hover:bg-sky-800 text-white rounded-lg text-xs font-semibold shadow-xs flex items-center gap-1.5 transition active:scale-95"
+              className="px-3.5 py-2 bg-sky-700 hover:bg-sky-800 text-white rounded-lg text-xs font-semibold shadow-xs flex items-center gap-1.5 transition active:scale-95 cursor-pointer"
             >
               <Plus className="w-3.5 h-3.5" />
               <span>New Application</span>
             </button>
 
             <button
+              onClick={() => setFollowUpModalOpen(true)}
+              className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold shadow-xs flex items-center gap-1.5 transition active:scale-95 cursor-pointer"
+              title="Set visa follow-up reminder for this client"
+            >
+              <MessageSquarePlus className="w-3.5 h-3.5" />
+              <span>Set Follow-up</span>
+            </button>
+
+            <button
               onClick={() => setBookingModalOpen(true)}
-              className="px-3 py-2 bg-teal-700 hover:bg-teal-800 text-white rounded-lg text-xs font-semibold shadow-xs flex items-center gap-1.5 transition active:scale-95"
+              className="px-3 py-2 bg-teal-700 hover:bg-teal-800 text-white rounded-lg text-xs font-semibold shadow-xs flex items-center gap-1.5 transition active:scale-95 cursor-pointer"
             >
               <Building2 className="w-3.5 h-3.5" />
               <span>Book Hotel</span>
@@ -547,7 +598,7 @@ export const ClientProfileView: React.FC<ClientProfileViewProps> = ({
           </button>
           <button
             onClick={() => setActiveTab('tasks')}
-            className={`pb-2 px-3 border-b-2 transition flex items-center gap-1.5 whitespace-nowrap ${
+            className={`pb-2 px-3 border-b-2 transition flex items-center gap-1.5 whitespace-nowrap cursor-pointer ${
               activeTab === 'tasks'
                 ? 'border-sky-700 text-sky-800'
                 : 'border-transparent hover:text-slate-900'
@@ -556,6 +607,20 @@ export const ClientProfileView: React.FC<ClientProfileViewProps> = ({
             <span>Tasks</span>
             <span className="text-[10px] bg-slate-100 px-1.5 py-0.2 rounded-full font-bold">
               {client.tasks.length}
+            </span>
+          </button>
+          <button
+            onClick={() => setActiveTab('followups')}
+            className={`pb-2 px-3 border-b-2 transition flex items-center gap-1.5 whitespace-nowrap cursor-pointer ${
+              activeTab === 'followups'
+                ? 'border-emerald-600 text-emerald-800 font-bold'
+                : 'border-transparent hover:text-slate-900'
+            }`}
+          >
+            <MessageSquarePlus className="w-3.5 h-3.5 text-emerald-600" />
+            <span>Follow-ups</span>
+            <span className="text-[10px] bg-slate-100 px-1.5 py-0.2 rounded-full font-bold">
+              {client.follow_ups ? client.follow_ups.length : 0}
             </span>
           </button>
           <button
@@ -948,6 +1013,48 @@ export const ClientProfileView: React.FC<ClientProfileViewProps> = ({
                 <p className="text-slate-600 whitespace-pre-wrap">{client.notes}</p>
               </div>
             )}
+
+            {/* Quick Follow-up Summary Card */}
+            <div className="p-3.5 bg-emerald-50/60 border border-emerald-200/90 rounded-xl space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-xs text-emerald-900 flex items-center gap-1.5">
+                  <MessageSquarePlus className="w-3.5 h-3.5 text-emerald-700" />
+                  <span>Client Follow-up</span>
+                </span>
+                <button
+                  onClick={() => setFollowUpModalOpen(true)}
+                  className="text-[11px] font-bold text-emerald-700 hover:text-emerald-900 hover:underline cursor-pointer"
+                >
+                  + Set Follow-up
+                </button>
+              </div>
+
+              {client.follow_ups && client.follow_ups.filter((f) => f.status === 'Pending').length > 0 ? (
+                (() => {
+                  const pendingFu = client.follow_ups.filter((f) => f.status === 'Pending')[0];
+                  return (
+                    <div className="text-xs space-y-1">
+                      <div className="font-semibold text-slate-800">{pendingFu.title}</div>
+                      <div className="text-[11px] text-slate-500 flex items-center gap-2">
+                        <span>Cadence: <strong>{pendingFu.cadence}</strong></span>
+                        <span>•</span>
+                        <span>Due: <strong className="text-emerald-800">{pendingFu.due_date}</strong></span>
+                      </div>
+                      <button
+                        onClick={() => setActiveTab('followups')}
+                        className="text-[11px] text-emerald-700 font-medium hover:underline pt-0.5 block cursor-pointer"
+                      >
+                        View all reminders ({client.follow_ups.length}) →
+                      </button>
+                    </div>
+                  );
+                })()
+              ) : (
+                <p className="text-[11px] text-slate-500">
+                  No active follow-up scheduled. Click "+ Set Follow-up" to schedule a visa renewal or re-engagement check-in.
+                </p>
+              )}
+            </div>
           </div>
 
           {/* Custom Profile Fields (Configured in Settings) */}
@@ -1332,6 +1439,156 @@ export const ClientProfileView: React.FC<ClientProfileViewProps> = ({
         </div>
       )}
 
+      {/* Tab: Follow-ups & Reminders */}
+      {activeTab === 'followups' && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between flex-wrap gap-3">
+            <div>
+              <h2 className="font-bold text-sm text-slate-900">
+                Follow-up Reminders ({client.follow_ups?.length || 0})
+              </h2>
+              <p className="text-xs text-slate-500">
+                Automated and scheduled re-engagement check-ins for {client.full_name}
+              </p>
+            </div>
+            <button
+              onClick={() => setFollowUpModalOpen(true)}
+              className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 shadow-xs transition active:scale-95 cursor-pointer"
+            >
+              <MessageSquarePlus className="w-3.5 h-3.5" />
+              <span>Set Follow-up</span>
+            </button>
+          </div>
+
+          <div className="bg-white rounded-2xl border border-slate-200/90 shadow-xs divide-y divide-slate-100 overflow-hidden">
+            {!client.follow_ups || client.follow_ups.length === 0 ? (
+              <div className="p-10 text-center space-y-3">
+                <div className="w-12 h-12 rounded-2xl bg-emerald-50 text-emerald-600 flex items-center justify-center mx-auto">
+                  <MessageSquarePlus className="w-6 h-6" />
+                </div>
+                <div className="font-semibold text-sm text-slate-800">
+                  No Follow-up Reminders Set
+                </div>
+                <p className="text-xs text-slate-500 max-w-sm mx-auto">
+                  Keep in touch with {client.full_name} for recurring visa renewals, inquiries, or return follow-ups.
+                </p>
+                <button
+                  onClick={() => setFollowUpModalOpen(true)}
+                  className="mt-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold rounded-xl shadow-xs inline-flex items-center gap-1.5 transition active:scale-95 cursor-pointer"
+                >
+                  <MessageSquarePlus className="w-3.5 h-3.5" />
+                  <span>Set Follow-up Reminder</span>
+                </button>
+              </div>
+            ) : (
+              client.follow_ups.map((f) => {
+                const isCompleted = f.status === 'Completed';
+                const waLink = getWhatsAppLink(client.phone || client.whatsapp, f.message_template);
+                const isOverdue = !isCompleted && f.due_date && new Date(f.due_date).getTime() < new Date().setHours(0, 0, 0, 0);
+
+                return (
+                  <div
+                    key={f.id}
+                    className={`p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 transition-colors ${
+                      isCompleted ? 'bg-slate-50/70 opacity-80' : 'hover:bg-slate-50/50'
+                    }`}
+                  >
+                    <div className="flex items-start gap-3.5 min-w-0">
+                      <button
+                        onClick={() => handleToggleFollowUp(f)}
+                        className={`w-5 h-5 mt-0.5 rounded-md border flex items-center justify-center shrink-0 transition-colors cursor-pointer ${
+                          isCompleted
+                            ? 'bg-emerald-600 border-emerald-600 text-white'
+                            : 'border-slate-300 hover:border-emerald-500'
+                        }`}
+                        title={isCompleted ? 'Mark as Pending' : 'Mark as Completed'}
+                      >
+                        {isCompleted && <CheckCircle2 className="w-3.5 h-3.5" />}
+                      </button>
+
+                      <div className="min-w-0 space-y-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span
+                            className={`font-semibold text-sm ${
+                              isCompleted ? 'line-through text-slate-400' : 'text-slate-900'
+                            }`}
+                          >
+                            {f.title}
+                          </span>
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-800 border border-emerald-200">
+                            {f.cadence}
+                          </span>
+                          <span className="text-[10px] font-medium px-2 py-0.5 rounded-full bg-slate-100 text-slate-700">
+                            {f.channel}
+                          </span>
+                          <span
+                            className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                              isCompleted
+                                ? 'bg-slate-100 text-slate-600 border-slate-200'
+                                : isOverdue
+                                ? 'bg-rose-50 text-rose-700 border-rose-200'
+                                : 'bg-amber-50 text-amber-700 border-amber-200'
+                            }`}
+                          >
+                            {isCompleted ? 'Completed' : isOverdue ? 'Overdue' : 'Pending'}
+                          </span>
+                        </div>
+
+                        {f.reason && (
+                          <div className="text-xs text-slate-600">
+                            <span className="font-medium text-slate-500">Reason: </span>
+                            {f.reason}
+                          </div>
+                        )}
+
+                        {f.message_template && (
+                          <div className="p-2.5 bg-slate-50 border border-slate-200/70 rounded-xl text-xs text-slate-700 font-mono italic max-w-xl">
+                            "{f.message_template}"
+                          </div>
+                        )}
+
+                        <div className="flex items-center gap-3 text-[11px] text-slate-400 pt-1">
+                          <span className="flex items-center gap-1 font-medium">
+                            <Calendar className="w-3 h-3 text-slate-400" />
+                            Due: <strong className={isOverdue ? 'text-rose-600' : 'text-slate-600'}>{f.due_date}</strong>
+                          </span>
+                          {f.completed_at && (
+                            <span>• Completed: {String(f.completed_at).slice(0, 10)}</span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+                      {waLink && !isCompleted && (
+                        <a
+                          href={waLink}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="px-3 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg text-xs font-semibold flex items-center gap-1.5 shadow-xs transition active:scale-95"
+                          title="Open WhatsApp message chat"
+                        >
+                          <Send className="w-3 h-3" />
+                          <span>WhatsApp</span>
+                        </a>
+                      )}
+
+                      <button
+                        onClick={() => handleDeleteFollowUp(f.id)}
+                        className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition cursor-pointer"
+                        title="Delete follow-up reminder"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+                );
+              })
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Tab: Comments / Notes */}
       {activeTab === 'comments' && (
         <div className="space-y-4">
@@ -1457,7 +1714,7 @@ export const ClientProfileView: React.FC<ClientProfileViewProps> = ({
           isOpen={followUpModalOpen}
           onClose={() => setFollowUpModalOpen(false)}
           clients={[client]}
-          users={[]}
+          users={usersList}
           preSelectedClientId={client.id}
           onSuccess={() => {
             fetchClientData(true);
