@@ -38,15 +38,40 @@ function logError(msg) {
 }
 
 // 1. Security Check: Ensure secrets were not accidentally exposed with VITE_ or REACT_APP_ prefixes
-if (process.env.VITE_PUBLIC_SITE_EXPORT_TOKEN || process.env.REACT_APP_PUBLIC_SITE_EXPORT_TOKEN) {
+if (
+  process.env.VITE_PUBLIC_SITE_EXPORT_TOKEN ||
+  process.env.REACT_APP_PUBLIC_SITE_EXPORT_TOKEN ||
+  process.env.VITE_CRM_PUBLIC_EXPORT_TOKEN ||
+  process.env.REACT_APP_CRM_PUBLIC_EXPORT_TOKEN
+) {
   logError(
-    'SECURITY VIOLATION: Do not define PUBLIC_SITE_EXPORT_TOKEN with a VITE_ or REACT_APP_ prefix! Configure it only as PUBLIC_SITE_EXPORT_TOKEN in Netlify Environment Variables.'
+    'SECURITY VIOLATION: Do not define the export token with a VITE_ or REACT_APP_ prefix! Configure it only as PUBLIC_SITE_EXPORT_TOKEN or CRM_PUBLIC_EXPORT_TOKEN in Netlify Environment Variables.'
   );
   process.exit(1);
 }
 
-const exportApiUrl = (process.env.PUBLIC_SITE_EXPORT_API_URL || '').trim();
-const exportToken = (process.env.PUBLIC_SITE_EXPORT_TOKEN || '').trim();
+function normalizeExportUrl(rawUrl) {
+  const trimmed = (rawUrl || '').trim().replace(/\/+$/, '');
+  if (!trimmed) return '';
+  if (trimmed.endsWith('/api/public-site/export')) {
+    return trimmed;
+  }
+  if (trimmed.endsWith('/api')) {
+    return `${trimmed}/public-site/export`;
+  }
+  return `${trimmed}/api/public-site/export`;
+}
+
+const rawExportUrl =
+  process.env.PUBLIC_SITE_EXPORT_API_URL ||
+  process.env.CRM_PUBLIC_EXPORT_URL ||
+  '';
+const exportApiUrl = normalizeExportUrl(rawExportUrl);
+const exportToken = (
+  process.env.PUBLIC_SITE_EXPORT_TOKEN ||
+  process.env.CRM_PUBLIC_EXPORT_TOKEN ||
+  ''
+).trim();
 const isNetlifyCi = process.env.NETLIFY === 'true';
 
 /**
@@ -133,7 +158,7 @@ async function fetchWithRetries(url, token) {
 
   for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
     try {
-      logInfo(`Fetching published snapshot from CRM export endpoint (Attempt ${attempt}/${MAX_RETRIES})...`);
+      logInfo(`Fetching published snapshot from CRM export endpoint: ${url} (Attempt ${attempt}/${MAX_RETRIES})...`);
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), TIMEOUT_MS);
 
@@ -141,6 +166,7 @@ async function fetchWithRetries(url, token) {
         method: 'GET',
         headers: {
           Authorization: `Bearer ${token}`,
+          'X-Public-Export-Token': token,
           Accept: 'application/json',
           'User-Agent': 'Netlify-PublicHotelSite-Builder/1.0',
         },
@@ -148,6 +174,19 @@ async function fetchWithRetries(url, token) {
       });
 
       clearTimeout(timer);
+
+      // If 404 (no snapshot published yet in CRM) and we have the initial unconfigured placeholder,
+      // allow the first-time Netlify setup deploy to succeed with the "Setup Pending" screen.
+      if (response.status === 404 && fs.existsSync(OUTPUT_JSON_PATH)) {
+        const existing = JSON.parse(fs.readFileSync(OUTPUT_JSON_PATH, 'utf-8'));
+        if (existing && existing.published_version === 0) {
+          logInfo(
+            'CRM reported 404 (no snapshot published yet). Using initial "Setup Pending" snapshot so your first Netlify deploy succeeds.'
+          );
+          validateSnapshot(existing);
+          return existing;
+        }
+      }
 
       if (!response.ok) {
         let errorDetail = `HTTP ${response.status}`;
@@ -188,13 +227,13 @@ async function main() {
   if (exportApiUrl || exportToken || isNetlifyCi) {
     if (!exportApiUrl) {
       logError(
-        'Missing PUBLIC_SITE_EXPORT_API_URL environment variable. Configure it in Netlify -> Site configuration -> Environment variables (e.g., https://your-crm-on-render.onrender.com/api/public-site/export).'
+        'Missing CRM_PUBLIC_EXPORT_URL (or PUBLIC_SITE_EXPORT_API_URL) environment variable. Configure it in Netlify -> Site configuration -> Environment variables.'
       );
       process.exit(1);
     }
     if (!exportToken || exportToken.length < 12) {
       logError(
-        'Missing or invalid PUBLIC_SITE_EXPORT_TOKEN environment variable. Configure the matching secret token in Netlify -> Site configuration -> Environment variables.'
+        'Missing or invalid CRM_PUBLIC_EXPORT_TOKEN (or PUBLIC_SITE_EXPORT_TOKEN) environment variable (must be at least 12 characters).'
       );
       process.exit(1);
     }
@@ -204,7 +243,7 @@ async function main() {
       fs.writeFileSync(OUTPUT_JSON_PATH, JSON.stringify(snapshot, null, 2), 'utf-8');
       writeSeoStaticFiles(snapshot);
       logInfo(
-        `Successfully wrote validated published snapshot v${snapshot.published_version} (${snapshot.hotel.name || 'Hotel'}) to src/generated/published-site-data.json`
+        `Successfully wrote validated published snapshot v${snapshot.published_version} (${snapshot.hotel.name || 'Setup Pending'}) to src/generated/published-site-data.json`
       );
       process.exit(0);
     } catch (err) {
@@ -216,14 +255,14 @@ async function main() {
   // Case B: Local offline build verification when env vars are not set
   if (fs.existsSync(OUTPUT_JSON_PATH)) {
     logInfo(
-      'PUBLIC_SITE_EXPORT_API_URL not set in local environment; using existing src/generated/published-site-data.json for local build verification.'
+      'Export URL not set in local environment; using existing src/generated/published-site-data.json for local build verification.'
     );
     const existing = JSON.parse(fs.readFileSync(OUTPUT_JSON_PATH, 'utf-8'));
     validateSnapshot(existing);
     writeSeoStaticFiles(existing);
     process.exit(0);
   } else {
-    logError('No published-site-data.json found and PUBLIC_SITE_EXPORT_API_URL is not configured.');
+    logError('No published-site-data.json found and CRM_PUBLIC_EXPORT_URL is not configured.');
     process.exit(1);
   }
 }

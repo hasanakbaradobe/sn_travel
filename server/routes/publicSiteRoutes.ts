@@ -38,7 +38,11 @@ function verifyExportToken(providedToken: string, expectedToken: string): boolea
 publicSiteExportRouter.get('/export', async (req: Request, res: Response) => {
   await publicSiteDb.ensureInitialized();
 
-  const configuredToken = (process.env.PUBLIC_SITE_EXPORT_TOKEN || '').trim();
+  const configuredToken = (
+    process.env.PUBLIC_SITE_EXPORT_TOKEN ||
+    process.env.CRM_PUBLIC_EXPORT_TOKEN ||
+    ''
+  ).trim();
   if (!configuredToken || configuredToken.length < 12) {
     return res.status(503).json({
       error: 'Publication export endpoint is not yet configured on the server. Set PUBLIC_SITE_EXPORT_TOKEN (minimum 12 characters) in your Render environment variables.',
@@ -49,6 +53,8 @@ publicSiteExportRouter.get('/export', async (req: Request, res: Response) => {
   const authHeader = req.headers.authorization;
   if (authHeader && authHeader.startsWith('Bearer ')) {
     candidateToken = authHeader.substring(7).trim();
+  } else if (typeof req.headers['x-public-export-token'] === 'string') {
+    candidateToken = req.headers['x-public-export-token'].trim();
   } else if (typeof req.headers['x-public-site-export-token'] === 'string') {
     candidateToken = req.headers['x-public-site-export-token'].trim();
   }
