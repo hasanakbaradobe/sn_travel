@@ -518,3 +518,343 @@ export interface InvoiceSettings {
   updated_at?: string;
 }
 
+// --------------------------------------------------------------------------
+// Public Hotel Website CMS Types
+// --------------------------------------------------------------------------
+export type PublicSiteDeploymentStatus =
+  | 'Draft'
+  | 'Unpublished'
+  | 'Deployment Requested'
+  | 'Building'
+  | 'Published'
+  | 'Deployment Failed';
+
+export interface HomepageSectionConfig {
+  id: 'hero' | 'welcome' | 'featured_rooms' | 'facilities' | 'gallery' | 'about' | 'faq' | 'location' | 'contact';
+  label: string;
+  enabled: boolean;
+  order: number;
+}
+
+export interface NavLinkItem {
+  label: string;
+  href: string;
+  visible: boolean;
+}
+
+export interface SocialLinksConfig {
+  facebook?: string;
+  instagram?: string;
+  twitter?: string;
+  linkedin?: string;
+  youtube?: string;
+  tiktok?: string;
+  wechat?: string;
+  tripadvisor?: string;
+}
+
+export interface PublicSiteSettings {
+  id: number;
+  site_status: PublicSiteDeploymentStatus;
+  has_unpublished_changes: number;
+  hotel_name: string;
+  tagline: string;
+  short_description: string;
+  about_title: string;
+  about_content: string;
+  logo_url: string;
+  favicon_url: string;
+  primary_color: string;
+  accent_color: string;
+  contact_phone: string;
+  whatsapp_number: string;
+  contact_email: string;
+  address_line: string;
+  city: string;
+  country: string;
+  postal_code: string;
+  google_maps_url: string;
+  google_maps_embed_url: string;
+  social_links: SocialLinksConfig;
+  reservation_url: string;
+  reservation_button_text: string;
+  check_in_time: string;
+  check_out_time: string;
+  cancellation_policy: string;
+  general_policies: string;
+  footer_text: string;
+  copyright_text: string;
+  hero_heading: string;
+  hero_subtitle: string;
+  hero_image_url: string;
+  hero_cta_text: string;
+  hero_cta_link: string;
+  hero_secondary_cta_text: string;
+  hero_secondary_cta_link: string;
+  welcome_heading: string;
+  welcome_body: string;
+  homepage_sections: HomepageSectionConfig[];
+  nav_links: NavLinkItem[];
+  footer_links: NavLinkItem[];
+  seo_title: string;
+  seo_description: string;
+  og_title: string;
+  og_description: string;
+  og_image_url: string;
+  canonical_domain: string;
+  robots_indexing: string;
+  sitemap_enabled: number;
+  public_site_url: string;
+  last_edited_by: number | null;
+  last_edited_at: string;
+  last_published_at: string | null;
+  last_published_version: number | null;
+  updated_at: string;
+}
+
+export interface PublicSitePage {
+  id: number;
+  slug: 'home' | 'about' | 'rooms' | 'facilities' | 'gallery' | 'location' | 'contact' | 'faq';
+  title: string;
+  heading: string;
+  subheading: string;
+  hero_image_url: string;
+  content_body: string;
+  structured_data: Record<string, any>;
+  seo_title: string;
+  seo_description: string;
+  is_visible: number;
+  show_in_nav: number;
+  show_in_footer: number;
+  display_order: number;
+  updated_at: string;
+}
+
+export interface PublicSiteRoom {
+  id: number;
+  name: string;
+  slug: string;
+  short_description: string;
+  full_description: string;
+  featured_image_url: string;
+  gallery_images: string[];
+  capacity: string;
+  bed_type: string;
+  room_size: string;
+  amenities: string[];
+  optional_price: number | null;
+  currency: string;
+  price_note: string;
+  enquiry_url: string;
+  is_featured: number;
+  is_visible: number;
+  display_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PublicSiteFacility {
+  id: number;
+  name: string;
+  category: string;
+  description: string;
+  icon_name: string;
+  image_url: string;
+  is_featured: number;
+  is_visible: number;
+  display_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PublicSiteGalleryItem {
+  id: number;
+  title: string;
+  caption: string;
+  alt_text: string;
+  category: string;
+  image_url: string;
+  is_featured: number;
+  is_visible: number;
+  display_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PublicSiteFaq {
+  id: number;
+  question: string;
+  answer: string;
+  category: string;
+  is_visible: number;
+  display_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PublicSitePublicationLog {
+  id: number;
+  version_number: number;
+  snapshot_id: number;
+  initiated_by_user_id: number | null;
+  initiated_by_name: string;
+  deployment_status: PublicSiteDeploymentStatus;
+  build_hook_configured: number;
+  build_hook_triggered: number;
+  build_hook_http_status: number | null;
+  netlify_deploy_id: string | null;
+  netlify_deploy_state: string | null;
+  netlify_deploy_url: string | null;
+  verified_at: string | null;
+  error_message: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PublicWebsiteSnapshot {
+  schema_version: '1.0';
+  published_version: number;
+  published_at: string;
+  is_configured: boolean;
+  hotel: {
+    name: string;
+    tagline: string;
+    short_description: string;
+    about_title: string;
+    about_content: string;
+    logo_url: string;
+    favicon_url: string;
+    primary_color: string;
+    accent_color: string;
+    contact_phone: string;
+    whatsapp_number: string;
+    contact_email: string;
+    address_line: string;
+    city: string;
+    country: string;
+    postal_code: string;
+    google_maps_url: string;
+    google_maps_embed_url: string;
+    social_links: SocialLinksConfig;
+    reservation_url: string;
+    reservation_button_text: string;
+    check_in_time: string;
+    check_out_time: string;
+    cancellation_policy: string;
+    general_policies: string;
+    footer_text: string;
+    copyright_text: string;
+  };
+  homepage: {
+    hero_heading: string;
+    hero_subtitle: string;
+    hero_image_url: string;
+    hero_cta_text: string;
+    hero_cta_link: string;
+    hero_secondary_cta_text: string;
+    hero_secondary_cta_link: string;
+    welcome_heading: string;
+    welcome_body: string;
+    sections: HomepageSectionConfig[];
+  };
+  navigation: {
+    header_links: NavLinkItem[];
+    footer_links: NavLinkItem[];
+  };
+  seo: {
+    title: string;
+    description: string;
+    og_title: string;
+    og_description: string;
+    og_image_url: string;
+    canonical_domain: string;
+    robots_indexing: string;
+    sitemap_enabled: boolean;
+  };
+  pages: Array<{
+    slug: string;
+    title: string;
+    heading: string;
+    subheading: string;
+    hero_image_url: string;
+    content_body: string;
+    structured_data: Record<string, any>;
+    seo_title: string;
+    seo_description: string;
+    show_in_nav: boolean;
+    show_in_footer: boolean;
+    display_order: number;
+  }>;
+  rooms: Array<{
+    id: number;
+    name: string;
+    slug: string;
+    short_description: string;
+    full_description: string;
+    featured_image_url: string;
+    gallery_images: string[];
+    capacity: string;
+    bed_type: string;
+    room_size: string;
+    amenities: string[];
+    optional_price: number | null;
+    currency: string;
+    price_note: string;
+    enquiry_url: string;
+    is_featured: boolean;
+    display_order: number;
+  }>;
+  facilities: Array<{
+    id: number;
+    name: string;
+    category: string;
+    description: string;
+    icon_name: string;
+    image_url: string;
+    is_featured: boolean;
+    display_order: number;
+  }>;
+  gallery: Array<{
+    id: number;
+    title: string;
+    caption: string;
+    alt_text: string;
+    category: string;
+    image_url: string;
+    is_featured: boolean;
+    display_order: number;
+  }>;
+  faqs: Array<{
+    id: number;
+    question: string;
+    answer: string;
+    category: string;
+    display_order: number;
+  }>;
+}
+
+export interface PublicSiteBootstrapResponse {
+  settings: PublicSiteSettings;
+  pages: PublicSitePage[];
+  rooms: PublicSiteRoom[];
+  facilities: PublicSiteFacility[];
+  gallery: PublicSiteGalleryItem[];
+  faqs: PublicSiteFaq[];
+  publications: PublicSitePublicationLog[];
+  latest_publication: PublicSitePublicationLog | null;
+  latest_snapshot_meta: {
+    id: number;
+    version_number: number;
+    snapshot_hash: string;
+    published_by_name: string;
+    created_at: string;
+  } | null;
+  env_status: {
+    netlify_build_hook_configured: boolean;
+    export_token_configured: boolean;
+    netlify_status_api_configured: boolean;
+  };
+}
+
+

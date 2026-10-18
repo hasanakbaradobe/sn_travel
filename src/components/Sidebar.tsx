@@ -17,7 +17,7 @@ import {
 } from 'lucide-react';
 import { UserRole } from '../types';
 
-export type NavTab = 'dashboard' | 'clients' | 'applications' | 'hotels' | 'followups' | 'invoices' | 'calendar' | 'tasks' | 'settings' | '404';
+export type NavTab = 'dashboard' | 'clients' | 'applications' | 'hotels' | 'followups' | 'invoices' | 'calendar' | 'tasks' | 'public-website' | 'settings' | '404';
 
 interface SidebarProps {
   currentTab: NavTab;
@@ -42,6 +42,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   activeHotelsCount = 0,
   dueFollowUpsCount = 0,
 }) => {
+  const canManagePublicWebsite = userRole === 'super_admin' || userRole === 'admin';
+
   const navItems: Array<{ id: NavTab; label: string; icon: React.ReactNode; badge?: number; badgeColor?: string }> = [
     {
       id: 'dashboard',
@@ -91,6 +93,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
       badge: todayTasksCount > 0 ? todayTasksCount : undefined,
       badgeColor: 'bg-sky-100 text-sky-800',
     },
+    ...(canManagePublicWebsite
+      ? [
+          {
+            id: 'public-website' as NavTab,
+            label: 'Public Website Management',
+            icon: <Globe className="w-5 h-5" />,
+          },
+        ]
+      : []),
     {
       id: 'settings',
       label: 'Settings',

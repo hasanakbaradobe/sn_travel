@@ -31,6 +31,15 @@ import {
   InvoiceCatalogItem,
   InvoiceSettings,
   InvoiceItem,
+  PublicSiteBootstrapResponse,
+  PublicSiteSettings,
+  PublicSitePage,
+  PublicSiteRoom,
+  PublicSiteFacility,
+  PublicSiteGalleryItem,
+  PublicSiteFaq,
+  PublicWebsiteSnapshot,
+  PublicSitePublicationLog,
 } from '../types';
 
 const API_BASE = '/api';
@@ -1009,6 +1018,165 @@ class ApiService {
       method: 'DELETE',
     });
   }
+
+  // --------------------------------------------------------------------------
+  // Public Hotel Website CMS (Admin / Super Admin)
+  // --------------------------------------------------------------------------
+  async getPublicSiteBootstrap(): Promise<PublicSiteBootstrapResponse> {
+    return this.request<PublicSiteBootstrapResponse>('/public-site/admin/bootstrap', {
+      skipCache: true,
+    });
+  }
+
+  async getPublicSitePreviewSnapshot(): Promise<{ snapshot: PublicWebsiteSnapshot }> {
+    return this.request<{ snapshot: PublicWebsiteSnapshot }>('/public-site/admin/preview-snapshot', {
+      skipCache: true,
+    });
+  }
+
+  async updatePublicSiteSettings(data: Partial<PublicSiteSettings>): Promise<PublicSiteSettings> {
+    return this.request<PublicSiteSettings>('/public-site/admin/settings', {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updatePublicSitePage(slug: string, data: Partial<PublicSitePage>): Promise<PublicSitePage> {
+    return this.request<PublicSitePage>(`/public-site/admin/pages/${encodeURIComponent(slug)}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async createPublicSiteRoom(data: Partial<PublicSiteRoom>): Promise<PublicSiteRoom> {
+    return this.request<PublicSiteRoom>('/public-site/admin/rooms', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updatePublicSiteRoom(id: number, data: Partial<PublicSiteRoom>): Promise<PublicSiteRoom> {
+    return this.request<PublicSiteRoom>(`/public-site/admin/rooms/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async reorderPublicSiteRooms(orderedIds: number[]): Promise<PublicSiteRoom[]> {
+    return this.request<PublicSiteRoom[]>('/public-site/admin/rooms-reorder', {
+      method: 'PUT',
+      body: JSON.stringify({ orderedIds }),
+    });
+  }
+
+  async deletePublicSiteRoom(id: number): Promise<{ success: boolean; message: string }> {
+    return this.request<{ success: boolean; message: string }>(`/public-site/admin/rooms/${id}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async createPublicSiteFacility(data: Partial<PublicSiteFacility>): Promise<PublicSiteFacility> {
+    return this.request<PublicSiteFacility>('/public-site/admin/facilities', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updatePublicSiteFacility(id: number, data: Partial<PublicSiteFacility>): Promise<PublicSiteFacility> {
+    return this.request<PublicSiteFacility>(`/public-site/admin/facilities/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async reorderPublicSiteFacilities(orderedIds: number[]): Promise<PublicSiteFacility[]> {
+    return this.request<PublicSiteFacility[]>('/public-site/admin/facilities-reorder', {
+      method: 'PUT',
+      body: JSON.stringify({ orderedIds }),
+    });
+  }
+
+  async deletePublicSiteFacility(id: number): Promise<{ success: boolean; message: string }> {
+    return this.request<{ success: boolean; message: string }>(`/public-site/admin/facilities/${id}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async createPublicSiteGalleryItem(data: Partial<PublicSiteGalleryItem>): Promise<PublicSiteGalleryItem> {
+    return this.request<PublicSiteGalleryItem>('/public-site/admin/gallery', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updatePublicSiteGalleryItem(id: number, data: Partial<PublicSiteGalleryItem>): Promise<PublicSiteGalleryItem> {
+    return this.request<PublicSiteGalleryItem>(`/public-site/admin/gallery/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async reorderPublicSiteGallery(orderedIds: number[]): Promise<PublicSiteGalleryItem[]> {
+    return this.request<PublicSiteGalleryItem[]>('/public-site/admin/gallery-reorder', {
+      method: 'PUT',
+      body: JSON.stringify({ orderedIds }),
+    });
+  }
+
+  async deletePublicSiteGalleryItem(id: number): Promise<{ success: boolean; message: string }> {
+    return this.request<{ success: boolean; message: string }>(`/public-site/admin/gallery/${id}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async createPublicSiteFaq(data: Partial<PublicSiteFaq>): Promise<PublicSiteFaq> {
+    return this.request<PublicSiteFaq>('/public-site/admin/faqs', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updatePublicSiteFaq(id: number, data: Partial<PublicSiteFaq>): Promise<PublicSiteFaq> {
+    return this.request<PublicSiteFaq>(`/public-site/admin/faqs/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async reorderPublicSiteFaqs(orderedIds: number[]): Promise<PublicSiteFaq[]> {
+    return this.request<PublicSiteFaq[]>('/public-site/admin/faqs-reorder', {
+      method: 'PUT',
+      body: JSON.stringify({ orderedIds }),
+    });
+  }
+
+  async deletePublicSiteFaq(id: number): Promise<{ success: boolean; message: string }> {
+    return this.request<{ success: boolean; message: string }>(`/public-site/admin/faqs/${id}`, {
+      method: 'DELETE',
+    });
+  }
+
+  async publishPublicWebsite(notes?: string): Promise<{
+    publication: PublicSitePublicationLog;
+    snapshot: PublicWebsiteSnapshot;
+    message: string;
+  }> {
+    return this.request('/public-site/admin/publish', {
+      method: 'POST',
+      body: JSON.stringify({ notes }),
+    });
+  }
+
+  async verifyPublicWebsiteDeployment(publicationId: number): Promise<{
+    verified: boolean;
+    publication: PublicSitePublicationLog | null;
+    message: string;
+  }> {
+    return this.request(`/public-site/admin/verify-deployment/${publicationId}`, {
+      method: 'POST',
+    });
+  }
 }
 
 export const api = new ApiService();
+

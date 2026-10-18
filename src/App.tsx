@@ -26,6 +26,7 @@ const FollowUpsView = React.lazy(() => import('./pages/FollowUpsView').then(m =>
 const InvoicesView = React.lazy(() => import('./pages/InvoicesView').then(m => ({ default: m.InvoicesView })));
 const CalendarView = React.lazy(() => import('./pages/CalendarView').then(m => ({ default: m.CalendarView })));
 const TasksView = React.lazy(() => import('./pages/TasksView').then(m => ({ default: m.TasksView })));
+const PublicWebsiteManagementView = React.lazy(() => import('./pages/PublicWebsiteManagementView').then(m => ({ default: m.PublicWebsiteManagementView })));
 const SettingsView = React.lazy(() => import('./pages/SettingsView').then(m => ({ default: m.SettingsView })));
 const NotFoundPage = React.lazy(() => import('./pages/NotFoundPage').then(m => ({ default: m.NotFoundPage })));
 const PassportScannerModal = React.lazy(() => import('./components/PassportScannerModal').then(m => ({ default: m.PassportScannerModal })));
@@ -368,6 +369,7 @@ export default function App() {
     if (clean === 'invoices') return { tab: 'invoices' };
     if (clean === 'calendar') return { tab: 'calendar' };
     if (clean === 'tasks') return { tab: 'tasks' };
+    if (clean === 'public-website') return { tab: 'public-website' };
     if (clean === 'settings') return { tab: 'settings' };
     if (clean === 'settings/security') {
       setSettingsTab('security');
@@ -976,6 +978,11 @@ export default function App() {
                 onDeleteTask={handleDeleteTask}
                 onOpenClient={handleOpenClient}
               />
+            )}
+
+            {/* Public Website Management View (Admin & Super Admin) */}
+            {currentTab === 'public-website' && (
+              <PublicWebsiteManagementView currentUser={currentUser} />
             )}
 
             {/* Settings View */}

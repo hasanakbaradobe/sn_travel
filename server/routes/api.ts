@@ -18,6 +18,7 @@ import {
 } from '../services/auth.ts';
 import fs from 'fs';
 import path from 'path';
+import { publicSiteExportRouter, publicSiteAdminRouter } from './publicSiteRoutes.ts';
 
 export const apiRouter = Router();
 
@@ -298,10 +299,16 @@ apiRouter.post('/auth/login', (req: Request, res: Response) => {
   });
 });
 
+// Server-to-Server Protected Public Website Export Endpoint (Authenticated via PUBLIC_SITE_EXPORT_TOKEN)
+apiRouter.use('/public-site', publicSiteExportRouter);
+
 // --------------------------------------------------------------------------
 // Protected Routes — All endpoints below require a valid authentication token
 // --------------------------------------------------------------------------
 apiRouter.use(requireAuth);
+
+// Public Website CMS Administrative Endpoints (Restricted to Admin & Super Admin)
+apiRouter.use('/public-site/admin', publicSiteAdminRouter);
 
 apiRouter.get('/auth/me', (req: Request, res: Response) => {
   const user = (req as any).user;

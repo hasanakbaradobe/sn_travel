@@ -5808,3 +5808,8 @@ export const dbService = {
     return true;
   },
 };
+
+export function getMySQLPool() {
+  return { pool, isConnected: isConnectedToMySQL };
+}
+
