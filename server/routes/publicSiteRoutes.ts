@@ -140,6 +140,65 @@ publicSiteAdminRouter.put('/pages/:slug', async (req: Request, res: Response) =>
   }
 });
 
+// Hotels CRUD, Reorder & Sync from CRM
+publicSiteAdminRouter.post('/hotels/sync-from-crm', async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user;
+    const result = await publicSiteDb.syncFromCrmHotels(user.id);
+    return res.json(result);
+  } catch (err: any) {
+    return res.status(400).json({ error: err.message || 'Failed to sync hotels from CRM' });
+  }
+});
+
+publicSiteAdminRouter.post('/hotels', async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user;
+    const hotel = await publicSiteDb.createHotel(req.body, user.id);
+    return res.status(201).json(hotel);
+  } catch (err: any) {
+    return res.status(400).json({ error: err.message || 'Failed to create hotel' });
+  }
+});
+
+publicSiteAdminRouter.put('/hotels-reorder', async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user;
+    const { orderedIds } = req.body;
+    if (!Array.isArray(orderedIds)) {
+      return res.status(400).json({ error: 'orderedIds array is required' });
+    }
+    const hotels = await publicSiteDb.reorderHotels(orderedIds, user.id);
+    return res.json(hotels);
+  } catch (err: any) {
+    return res.status(400).json({ error: err.message || 'Failed to reorder hotels' });
+  }
+});
+
+publicSiteAdminRouter.put('/hotels/:id', async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user;
+    const id = parseInt(req.params.id, 10);
+    const updated = await publicSiteDb.updateHotel(id, req.body, user.id);
+    if (!updated) return res.status(404).json({ error: 'Hotel not found' });
+    return res.json(updated);
+  } catch (err: any) {
+    return res.status(400).json({ error: err.message || 'Failed to update hotel' });
+  }
+});
+
+publicSiteAdminRouter.delete('/hotels/:id', async (req: Request, res: Response) => {
+  try {
+    const user = (req as any).user;
+    const id = parseInt(req.params.id, 10);
+    const ok = await publicSiteDb.deleteHotel(id, user.id);
+    if (!ok) return res.status(404).json({ error: 'Hotel not found' });
+    return res.json({ success: true, message: 'Hotel and its rooms deleted' });
+  } catch (err: any) {
+    return res.status(400).json({ error: err.message || 'Failed to delete hotel' });
+  }
+});
+
 // Rooms CRUD & Reorder
 publicSiteAdminRouter.post('/rooms', async (req: Request, res: Response) => {
   try {

@@ -6,7 +6,6 @@ import {
   ExternalLink,
   CheckCircle2,
   AlertTriangle,
-  Clock,
   Plus,
   Trash2,
   Edit3,
@@ -23,15 +22,18 @@ import {
   HelpCircle,
   Search,
   History,
-  ShieldCheck,
   X,
-  EyeOff,
+  Star,
+  MapPin,
+  DownloadCloud,
+  FolderKanban,
 } from 'lucide-react';
 import { api } from '../services/api';
 import {
   PublicSiteBootstrapResponse,
   PublicSiteSettings,
   PublicSitePage,
+  PublicSiteHotel,
   PublicSiteRoom,
   PublicSiteFacility,
   PublicSiteGalleryItem,
@@ -47,9 +49,10 @@ interface PublicWebsiteManagementViewProps {
 
 type CmsSectionTab =
   | 'dashboard'
+  | 'hotels'
+  | 'rooms'
   | 'general'
   | 'homepage'
-  | 'rooms'
   | 'facilities'
   | 'gallery'
   | 'pages'
@@ -77,6 +80,7 @@ export const PublicWebsiteManagementView: React.FC<PublicWebsiteManagementViewPr
   const [activeTab, setActiveTab] = useState<CmsSectionTab>('dashboard');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [syncingCrm, setSyncingCrm] = useState(false);
   const [publishing, setPublishing] = useState(false);
   const [verifyingId, setVerifyingId] = useState<number | null>(null);
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
@@ -93,6 +97,13 @@ export const PublicWebsiteManagementView: React.FC<PublicWebsiteManagementViewPr
   // Publish Modal State
   const [publishModalOpen, setPublishModalOpen] = useState(false);
   const [publishNotes, setPublishNotes] = useState('');
+
+  // Hotel Modal / Editor State
+  const [editingHotel, setEditingHotel] = useState<Partial<PublicSiteHotel> | null>(null);
+  const [hotelAmenitiesInput, setHotelAmenitiesInput] = useState('');
+  const [hotelGalleryInput, setHotelGalleryInput] = useState('');
+  const [expandedHotelId, setExpandedHotelId] = useState<number | null>(null);
+  const [roomFilterHotelId, setRoomFilterHotelId] = useState<number | 'all'>('all');
 
   // Room Modal / Editor State
   const [editingRoom, setEditingRoom] = useState<Partial<PublicSiteRoom> | null>(null);
@@ -124,6 +135,9 @@ export const PublicWebsiteManagementView: React.FC<PublicWebsiteManagementViewPr
       const foundPage = res.pages.find((p) => p.slug === selectedPageSlug) || res.pages[0];
       if (foundPage) {
         setPageForm({ ...foundPage });
+      }
+      if (expandedHotelId === null && res.hotels && res.hotels.length > 0) {
+        setExpandedHotelId(res.hotels[0].id);
       }
     } catch (err: any) {
       setFeedback({ type: 'error', message: err.message || 'Failed to load Public Website CMS data' });
@@ -163,9 +177,12 @@ export const PublicWebsiteManagementView: React.FC<PublicWebsiteManagementViewPr
     }, 7000);
   };
 
-  const handleOpenPreview = async () => {
+  const handleOpenPreview = async (initialHotelSlug?: string) => {
     try {
       setLoadingPreview(true);
+      if (initialHotelSlug && typeof window !== 'undefined') {
+        window.location.hash = `#hotel/${initialHotelSlug}`;
+      }
       const res = await api.getPublicSitePreviewSnapshot();
       setPreviewSnapshot(res.snapshot);
       setPreviewOpen(true);
@@ -173,6 +190,22 @@ export const PublicWebsiteManagementView: React.FC<PublicWebsiteManagementViewPr
       showNotice('error', err.message || 'Failed to generate draft preview');
     } finally {
       setLoadingPreview(false);
+    }
+  };
+
+  const handleSyncFromCrm = async () => {
+    try {
+      setSyncingCrm(true);
+      const res = await api.syncPublicSiteHotelsFromCrm();
+      await loadBootstrap(true);
+      showNotice(
+        'success',
+        `Synced partner hotels from CRM (${res.hotels_added} added, ${res.hotels_updated} updated, ${res.rooms_added} room types imported).`
+      );
+    } catch (err: any) {
+      showNotice('error', err.message || 'Failed to sync hotels from CRM');
+    } finally {
+      setSyncingCrm(false);
     }
   };
 
@@ -184,7 +217,7 @@ export const PublicWebsiteManagementView: React.FC<PublicWebsiteManagementViewPr
       const updated = await api.updatePublicSiteSettings(settingsForm);
       setSettingsForm(updated);
       await loadBootstrap(true);
-      showNotice('success', 'Draft website settings saved to MySQL.');
+      showNotice('success', 'Draft website brand settings saved to MySQL.');
     } catch (err: any) {
       showNotice('error', err.message || 'Failed to save website settings');
     } finally {
@@ -223,29 +256,109 @@ export const PublicWebsiteManagementView: React.FC<PublicWebsiteManagementViewPr
     }
   };
 
+  // Hotel Modal Handlers
+  const openHotelModal = (hotel?: PublicSiteHotel) => {
+    if (hotel) {
+      setEditingHotel({ ...hotel });
+      setHotelAmenitiesInput((hotel.amenities || []).join(', '));
+      setHotelGalleryInput((hotel.gallery_images || []).join('\n'));
+    } else {
+      setEditingHotel({
+        name: '',
+        slug: '',
+        city: '',
+        country: '',
+        address: '',
+        star_rating: 5,
+        short_description: '',
+        full_description: '',
+        featured_image_url: '',
+        check_in_time: '14:00',
+        check_out_time: '12:00',
+        cancellation_policy: '',
+        contact_phone: '',
+        contact_email: '',
+        whatsapp_number: '',
+        google_maps_url: '',
+        google_maps_embed_url: '',
+        booking_url: '',
+        starting_price: null,
+        currency: 'USD',
+        is_featured: 1,
+        is_visible: 1,
+      });
+      setHotelAmenitiesInput('Free High-Speed Wi-Fi, 24-Hour Front Desk, Restaurant, Airport Transfer, Concierge');
+      setHotelGalleryInput('');
+    }
+  };
+
+  const handleSaveHotel = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingHotel || !editingHotel.name?.trim()) {
+      showNotice('error', 'Hotel name is required');
+      return;
+    }
+    try {
+      setSaving(true);
+      const payload: Partial<PublicSiteHotel> = {
+        ...editingHotel,
+        amenities: hotelAmenitiesInput
+          .split(',')
+          .map((s) => s.trim())
+          .filter(Boolean),
+        gallery_images: hotelGalleryInput
+          .split('\n')
+          .map((s) => s.trim())
+          .filter(Boolean),
+      };
+
+      if (editingHotel.id) {
+        await api.updatePublicSiteHotel(editingHotel.id, payload);
+        showNotice('success', `Hotel "${editingHotel.name}" updated in draft.`);
+      } else {
+        const created = await api.createPublicSiteHotel(payload);
+        setExpandedHotelId(created.id);
+        showNotice('success', `New hotel "${created.name}" added with automatic dedicated page (#hotel/${created.slug}).`);
+      }
+      setEditingHotel(null);
+      await loadBootstrap(true);
+    } catch (err: any) {
+      showNotice('error', err.message || 'Failed to save hotel');
+    } finally {
+      setSaving(false);
+    }
+  };
+
   // Room Handlers
-  const openRoomModal = (room?: PublicSiteRoom) => {
+  const openRoomModal = (room?: PublicSiteRoom, defaultHotelId?: number | null) => {
     if (room) {
       setEditingRoom({ ...room });
       setRoomAmenitiesInput((room.amenities || []).join(', '));
       setRoomGalleryInput((room.gallery_images || []).join('\n'));
     } else {
+      const fallbackHotelId =
+        defaultHotelId !== undefined
+          ? defaultHotelId
+          : cmsData?.hotels && cmsData.hotels.length > 0
+          ? cmsData.hotels[0].id
+          : null;
       setEditingRoom({
+        hotel_id: fallbackHotelId,
         name: '',
         short_description: '',
         full_description: '',
         featured_image_url: '',
-        capacity: '',
-        bed_type: '',
-        room_size: '',
+        capacity: 'Up to 2 Guests',
+        bed_type: '1 King Bed',
+        room_size: '35 m²',
         optional_price: null,
         currency: 'USD',
-        price_note: 'per night (indicative)',
+        price_note: 'per night',
         enquiry_url: '',
         is_featured: 1,
         is_visible: 1,
       });
-      setRoomAmenitiesInput('');
+      setRoomAmenitiesInput('Free Wi-Fi, Air Conditioning, En-suite Bathroom, Flat-screen TV, Work Desk');
       setRoomGalleryInput('');
     }
   };
@@ -258,24 +371,28 @@ export const PublicWebsiteManagementView: React.FC<PublicWebsiteManagementViewPr
     }
     try {
       setSaving(true);
+      const galleryList = roomGalleryInput
+        .split('\n')
+        .map((s) => s.trim())
+        .filter(Boolean);
+      const featuredImg = editingRoom.featured_image_url?.trim() || galleryList[0] || '';
+
       const payload: Partial<PublicSiteRoom> = {
         ...editingRoom,
+        featured_image_url: featuredImg,
         amenities: roomAmenitiesInput
           .split(',')
           .map((s) => s.trim())
           .filter(Boolean),
-        gallery_images: roomGalleryInput
-          .split('\n')
-          .map((s) => s.trim())
-          .filter(Boolean),
+        gallery_images: galleryList,
       };
 
       if (editingRoom.id) {
         await api.updatePublicSiteRoom(editingRoom.id, payload);
-        showNotice('success', 'Room updated in draft.');
+        showNotice('success', 'Room type & pictures updated in draft.');
       } else {
         await api.createPublicSiteRoom(payload);
-        showNotice('success', 'New room added to draft.');
+        showNotice('success', 'New room type added to hotel draft.');
       }
       setEditingRoom(null);
       await loadBootstrap(true);
@@ -287,12 +404,12 @@ export const PublicWebsiteManagementView: React.FC<PublicWebsiteManagementViewPr
   };
 
   const handleMoveItem = async (
-    type: 'rooms' | 'facilities' | 'gallery' | 'faqs',
+    type: 'hotels' | 'rooms' | 'facilities' | 'gallery' | 'faqs',
     index: number,
     direction: 'up' | 'down'
   ) => {
     if (!cmsData) return;
-    const list = [...cmsData[type]];
+    const list = [...(cmsData[type] || [])];
     const targetIdx = direction === 'up' ? index - 1 : index + 1;
     if (targetIdx < 0 || targetIdx >= list.length) return;
 
@@ -302,6 +419,7 @@ export const PublicWebsiteManagementView: React.FC<PublicWebsiteManagementViewPr
     const orderedIds = list.map((item) => item.id);
 
     try {
+      if (type === 'hotels') await api.reorderPublicSiteHotels(orderedIds);
       if (type === 'rooms') await api.reorderPublicSiteRooms(orderedIds);
       if (type === 'facilities') await api.reorderPublicSiteFacilities(orderedIds);
       if (type === 'gallery') await api.reorderPublicSiteGallery(orderedIds);
@@ -318,7 +436,12 @@ export const PublicWebsiteManagementView: React.FC<PublicWebsiteManagementViewPr
       <PublicHotelWebsiteRenderer
         snapshot={previewSnapshot}
         isPreview={true}
-        onExitPreview={() => setPreviewOpen(false)}
+        onExitPreview={() => {
+          if (typeof window !== 'undefined' && window.location.hash.startsWith('#hotel/')) {
+            window.history.replaceState(null, '', window.location.pathname + window.location.search);
+          }
+          setPreviewOpen(false);
+        }}
       />
     );
   }
@@ -340,12 +463,18 @@ export const PublicWebsiteManagementView: React.FC<PublicWebsiteManagementViewPr
 
   const latestPub = cmsData.latest_publication;
   const envStatus = cmsData.env_status;
+  const hotelsList = cmsData.hotels || [];
 
   const tabs: Array<{ id: CmsSectionTab; label: string; icon: React.ReactNode }> = [
     { id: 'dashboard', label: 'Overview', icon: <Globe className="w-4 h-4" /> },
-    { id: 'general', label: 'Hotel Info', icon: <Building2 className="w-4 h-4" /> },
+    {
+      id: 'hotels',
+      label: `Hotels Directory (${hotelsList.length})`,
+      icon: <Building2 className="w-4 h-4" />,
+    },
+    { id: 'rooms', label: `All Room Types (${cmsData.rooms.length})`, icon: <BedDouble className="w-4 h-4" /> },
+    { id: 'general', label: 'Brand & Contact', icon: <FolderKanban className="w-4 h-4" /> },
     { id: 'homepage', label: 'Homepage', icon: <Layout className="w-4 h-4" /> },
-    { id: 'rooms', label: `Rooms (${cmsData.rooms.length})`, icon: <BedDouble className="w-4 h-4" /> },
     { id: 'facilities', label: `Facilities (${cmsData.facilities.length})`, icon: <Sparkles className="w-4 h-4" /> },
     { id: 'gallery', label: `Gallery (${cmsData.gallery.length})`, icon: <ImageIcon className="w-4 h-4" /> },
     { id: 'pages', label: 'Pages & Nav', icon: <FileText className="w-4 h-4" /> },
@@ -360,23 +489,33 @@ export const PublicWebsiteManagementView: React.FC<PublicWebsiteManagementViewPr
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 border-b border-slate-200">
         <div>
           <div className="flex items-center gap-2 text-xs text-slate-500 mb-1">
-            <span>Public Website Management</span>
+            <span>Multi-Hotel Public Website CMS</span>
             <span aria-hidden="true">·</span>
-            <span>Isolated Static Netlify Architecture</span>
+            <span>Automatic Dedicated Hotel Pages & Room Showcases</span>
           </div>
           <h1 className="text-2xl font-bold text-slate-900 tracking-tight">
-            {settingsForm.hotel_name || 'Public Hotel Website CMS'}
+            {settingsForm.hotel_name || 'Public Hotel Collection & Directory CMS'}
           </h1>
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5">
           <button
-            onClick={handleOpenPreview}
+            onClick={handleSyncFromCrm}
+            disabled={syncingCrm}
+            className="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-semibold text-sky-700 bg-sky-50 border border-sky-200 hover:bg-sky-100 rounded-lg transition cursor-pointer whitespace-nowrap shrink-0"
+            title="Import partner hotels & room types from your CRM Hotels tab"
+          >
+            <DownloadCloud className={`w-4 h-4 ${syncingCrm ? 'animate-bounce' : ''}`} />
+            <span>{syncingCrm ? 'Syncing CRM Hotels...' : 'Sync Hotels from CRM'}</span>
+          </button>
+
+          <button
+            onClick={() => handleOpenPreview()}
             disabled={loadingPreview}
             className="inline-flex items-center gap-2 px-4 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-lg transition cursor-pointer whitespace-nowrap shrink-0"
           >
             <Eye className="w-4 h-4 text-slate-500" />
-            <span>{loadingPreview ? 'Loading Preview...' : 'Preview Draft'}</span>
+            <span>{loadingPreview ? 'Loading Preview...' : 'Preview Draft Website'}</span>
           </button>
 
           {settingsForm.public_site_url && (
@@ -386,7 +525,7 @@ export const PublicWebsiteManagementView: React.FC<PublicWebsiteManagementViewPr
               rel="noopener noreferrer"
               className="inline-flex items-center gap-2 px-4 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-lg transition whitespace-nowrap shrink-0"
             >
-              <span>View Public Website</span>
+              <span>View Live Site</span>
               <ExternalLink className="w-3.5 h-3.5 text-slate-400" />
             </a>
           )}
@@ -464,13 +603,12 @@ export const PublicWebsiteManagementView: React.FC<PublicWebsiteManagementViewPr
             </div>
 
             <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-1">
-              <span className="text-xs text-slate-500">Last Content Update</span>
-              <div className="text-sm font-semibold text-slate-900 font-mono tabular-nums pt-1">
-                {settingsForm.last_edited_at
-                  ? new Date(settingsForm.last_edited_at).toLocaleString()
-                  : 'Never'}
+              <span className="text-xs text-slate-500">Published Hotels & Pages</span>
+              <div className="text-base font-bold text-slate-900 font-mono tabular-nums pt-1">
+                {hotelsList.filter((h) => h.is_visible === 1).length} Hotels ·{' '}
+                {cmsData.rooms.filter((r) => r.is_visible === 1).length} Rooms
               </div>
-              <p className="text-xs text-slate-500 pt-1">Saved in AlwaysData MySQL</p>
+              <p className="text-xs text-slate-500 pt-1">Each hotel gets an automatic dedicated page</p>
             </div>
 
             <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-1">
@@ -502,30 +640,42 @@ export const PublicWebsiteManagementView: React.FC<PublicWebsiteManagementViewPr
             </div>
           </div>
 
-          {/* Honest Deployment & Environment Configuration Status */}
+          {/* Quick Actions & Multi-Hotel Summary */}
           <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
             <div className="lg:col-span-7 bg-white border border-slate-200 rounded-xl p-6 space-y-4">
-              <div className="flex items-center justify-between border-b border-slate-100 pb-4">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 pb-4">
                 <div>
-                  <h2 className="text-base font-bold text-slate-900">Quick Actions & Content Summary</h2>
+                  <h2 className="text-base font-bold text-slate-900">Multi-Hotel Catalog & Room Showcase</h2>
                   <p className="text-xs text-slate-500 mt-0.5">
-                    Manage public hotel information without exposing any private CRM records.
+                    Every hotel in your directory gets its own dedicated page with room types, room photos, amenities, and direct enquiry links.
                   </p>
                 </div>
-                <button
-                  onClick={() => setActiveTab('general')}
-                  className="px-3.5 py-2 text-xs font-medium text-slate-700 border border-slate-300 rounded-lg hover:bg-slate-50 cursor-pointer"
-                >
-                  Edit Website Content
-                </button>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    onClick={() => setActiveTab('hotels')}
+                    className="px-3.5 py-2 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg cursor-pointer"
+                  >
+                    Manage Hotels ({hotelsList.length})
+                  </button>
+                </div>
               </div>
 
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 pt-1">
                 <button
+                  onClick={() => setActiveTab('hotels')}
+                  className="p-4 rounded-xl border border-slate-200 hover:border-sky-300 bg-sky-50/40 text-left transition cursor-pointer"
+                >
+                  <span className="text-xs text-slate-600 font-medium block">Public Hotels</span>
+                  <span className="text-xl font-bold text-slate-900 font-mono tabular-nums mt-1 block">
+                    {hotelsList.filter((h) => h.is_visible === 1).length} / {hotelsList.length}
+                  </span>
+                </button>
+
+                <button
                   onClick={() => setActiveTab('rooms')}
                   className="p-4 rounded-xl border border-slate-200 hover:border-slate-300 text-left transition cursor-pointer"
                 >
-                  <span className="text-xs text-slate-500 block">Public Rooms</span>
+                  <span className="text-xs text-slate-500 block">Room Types</span>
                   <span className="text-xl font-bold text-slate-900 font-mono tabular-nums mt-1 block">
                     {cmsData.rooms.filter((r) => r.is_visible === 1).length} / {cmsData.rooms.length}
                   </span>
@@ -548,16 +698,6 @@ export const PublicWebsiteManagementView: React.FC<PublicWebsiteManagementViewPr
                   <span className="text-xs text-slate-500 block">Gallery Photos</span>
                   <span className="text-xl font-bold text-slate-900 font-mono tabular-nums mt-1 block">
                     {cmsData.gallery.filter((g) => g.is_visible === 1).length} / {cmsData.gallery.length}
-                  </span>
-                </button>
-
-                <button
-                  onClick={() => setActiveTab('faqs')}
-                  className="p-4 rounded-xl border border-slate-200 hover:border-slate-300 text-left transition cursor-pointer"
-                >
-                  <span className="text-xs text-slate-500 block">Published FAQs</span>
-                  <span className="text-xl font-bold text-slate-900 font-mono tabular-nums mt-1 block">
-                    {cmsData.faqs.filter((q) => q.is_visible === 1).length} / {cmsData.faqs.length}
                   </span>
                 </button>
               </div>
@@ -660,25 +800,544 @@ export const PublicWebsiteManagementView: React.FC<PublicWebsiteManagementViewPr
                   </span>
                 </div>
               </div>
-
-              <p className="text-[11px] text-slate-500 leading-relaxed">
-                See <code className="font-mono text-slate-700">PUBLIC-WEBSITE-DEPLOYMENT.md</code> in the project root for step-by-step Render, Netlify, and custom domain DNS setup instructions.
-              </p>
             </div>
           </div>
         </div>
       )}
 
       {/* ==================================================================
-          5.2 GENERAL HOTEL INFORMATION
+          5.2 MULTI-HOTEL DIRECTORY & DEDICATED HOTEL PAGE MANAGER
+      ================================================================== */}
+      {activeTab === 'hotels' && (
+        <div className="space-y-6">
+          <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-6">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-slate-200">
+              <div>
+                <h2 className="text-base font-bold text-slate-900">
+                  Hotels Directory & Dedicated Hotel Pages ({hotelsList.length})
+                </h2>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Each hotel listed here is showcased in your public website directory and automatically gets its own dedicated page (<code className="font-mono text-slate-700">#hotel/hotel-slug</code>) displaying its room types, room pictures, amenities, and map.
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+                <button
+                  onClick={handleSyncFromCrm}
+                  disabled={syncingCrm}
+                  className="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-semibold text-sky-700 bg-sky-50 border border-sky-200 hover:bg-sky-100 rounded-lg cursor-pointer whitespace-nowrap"
+                >
+                  <DownloadCloud className={`w-4 h-4 ${syncingCrm ? 'animate-bounce' : ''}`} />
+                  <span>{syncingCrm ? 'Syncing...' : 'Sync Partner Hotels from CRM'}</span>
+                </button>
+                <button
+                  onClick={() => openHotelModal()}
+                  className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg cursor-pointer whitespace-nowrap"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Add Hotel</span>
+                </button>
+              </div>
+            </div>
+
+            {hotelsList.length === 0 ? (
+              <div className="py-12 text-center space-y-4">
+                <Building2 className="w-10 h-10 text-slate-400 mx-auto" />
+                <div className="space-y-1">
+                  <p className="text-sm font-bold text-slate-800">No Public Hotels Added Yet</p>
+                  <p className="text-xs text-slate-500 max-w-md mx-auto">
+                    Click "Sync Partner Hotels from CRM" to automatically import your hotels and room types from your CRM Hotels tab, or click "Add Hotel" to create one manually.
+                  </p>
+                </div>
+                <div className="flex items-center justify-center gap-3 pt-2">
+                  <button
+                    onClick={handleSyncFromCrm}
+                    disabled={syncingCrm}
+                    className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-white bg-sky-600 hover:bg-sky-700 rounded-lg cursor-pointer"
+                  >
+                    <DownloadCloud className="w-4 h-4" />
+                    <span>Sync Partner Hotels from CRM</span>
+                  </button>
+                  <button
+                    onClick={() => openHotelModal()}
+                    className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-slate-700 border border-slate-300 hover:bg-slate-50 rounded-lg cursor-pointer"
+                  >
+                    <Plus className="w-4 h-4" />
+                    <span>Add Hotel Manually</span>
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {hotelsList.map((hotel, idx) => {
+                  const hotelRooms = cmsData.rooms.filter((r) => r.hotel_id === hotel.id);
+                  const isExpanded = expandedHotelId === hotel.id;
+
+                  return (
+                    <div
+                      key={hotel.id}
+                      className="border border-slate-200 rounded-xl overflow-hidden bg-white shadow-2xs"
+                    >
+                      {/* Hotel Row Header */}
+                      <div className="p-4 sm:p-5 flex flex-col lg:flex-row lg:items-center justify-between gap-4 bg-slate-50/60">
+                        <div className="flex items-start gap-4">
+                          <div className="w-24 h-18 rounded-lg bg-slate-200 border border-slate-300 overflow-hidden shrink-0 flex items-center justify-center">
+                            {hotel.featured_image_url || (hotel.gallery_images && hotel.gallery_images[0]) ? (
+                              <img
+                                src={hotel.featured_image_url || hotel.gallery_images[0]}
+                                alt={hotel.name}
+                                referrerPolicy="no-referrer"
+                                className="w-full h-full object-cover"
+                              />
+                            ) : (
+                              <Building2 className="w-6 h-6 text-slate-400" />
+                            )}
+                          </div>
+
+                          <div className="space-y-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <h3 className="text-base font-bold text-slate-900">{hotel.name}</h3>
+                              <span className="inline-flex items-center gap-0.5 text-amber-500 text-xs font-semibold">
+                                {Array.from({ length: Math.min(5, Math.max(1, hotel.star_rating || 5)) }).map(
+                                  (_, i) => (
+                                    <Star key={i} className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
+                                  )
+                                )}
+                              </span>
+                              <span
+                                className={`px-2 py-0.5 text-[11px] font-semibold rounded-md ${
+                                  hotel.is_visible
+                                    ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                                    : 'bg-slate-100 text-slate-600 border border-slate-200'
+                                }`}
+                              >
+                                {hotel.is_visible ? 'Published on Site' : 'Hidden'}
+                              </span>
+                              {hotel.crm_hotel_id && (
+                                <span className="px-2 py-0.5 text-[11px] font-medium bg-sky-50 text-sky-700 border border-sky-200 rounded-md">
+                                  Synced from CRM
+                                </span>
+                              )}
+                            </div>
+
+                            <div className="flex flex-wrap items-center gap-3 text-xs text-slate-600">
+                              {(hotel.city || hotel.country || hotel.address) && (
+                                <span className="inline-flex items-center gap-1">
+                                  <MapPin className="w-3.5 h-3.5 text-slate-400" />
+                                  {[hotel.city, hotel.country].filter(Boolean).join(', ') || hotel.address}
+                                </span>
+                              )}
+                              <span className="font-mono text-[11px] text-slate-500 bg-white px-2 py-0.5 rounded border border-slate-200">
+                                Page URL: #hotel/{hotel.slug}
+                              </span>
+                              <span className="font-semibold text-slate-800">
+                                {hotelRooms.length} Room Type{hotelRooms.length === 1 ? '' : 's'}
+                              </span>
+                            </div>
+
+                            {hotel.short_description && (
+                              <p className="text-xs text-slate-500 line-clamp-1 max-w-2xl">
+                                {hotel.short_description}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Hotel Actions */}
+                        <div className="flex flex-wrap items-center gap-2 shrink-0">
+                          <button
+                            onClick={() => handleMoveItem('hotels', idx, 'up')}
+                            disabled={idx === 0}
+                            className="p-1.5 text-slate-500 hover:text-slate-900 disabled:opacity-30 cursor-pointer border border-slate-200 bg-white rounded-lg"
+                            title="Move Hotel Up"
+                          >
+                            <ArrowUp className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={() => handleMoveItem('hotels', idx, 'down')}
+                            disabled={idx === hotelsList.length - 1}
+                            className="p-1.5 text-slate-500 hover:text-slate-900 disabled:opacity-30 cursor-pointer border border-slate-200 bg-white rounded-lg"
+                            title="Move Hotel Down"
+                          >
+                            <ArrowDown className="w-4 h-4" />
+                          </button>
+
+                          <button
+                            onClick={() => handleOpenPreview(hotel.slug)}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-sky-700 bg-sky-50 border border-sky-200 hover:bg-sky-100 rounded-lg cursor-pointer"
+                            title="Preview this hotel's dedicated page"
+                          >
+                            <Eye className="w-3.5 h-3.5" />
+                            <span>Preview Page</span>
+                          </button>
+
+                          <button
+                            onClick={() => setExpandedHotelId(isExpanded ? null : hotel.id)}
+                            className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border cursor-pointer transition ${
+                              isExpanded
+                                ? 'bg-slate-900 text-white border-slate-900'
+                                : 'bg-white text-slate-800 border-slate-300 hover:bg-slate-100'
+                            }`}
+                          >
+                            <BedDouble className="w-3.5 h-3.5" />
+                            <span>Rooms & Photos ({hotelRooms.length})</span>
+                          </button>
+
+                          <button
+                            onClick={async () => {
+                              await api.updatePublicSiteHotel(hotel.id, {
+                                is_visible: hotel.is_visible ? 0 : 1,
+                              });
+                              await loadBootstrap(true);
+                            }}
+                            className="px-2.5 py-1.5 text-xs font-medium bg-white border border-slate-200 rounded-lg hover:bg-slate-50 cursor-pointer"
+                          >
+                            {hotel.is_visible ? 'Hide' : 'Show'}
+                          </button>
+
+                          <button
+                            onClick={() => openHotelModal(hotel)}
+                            className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 rounded-lg cursor-pointer"
+                          >
+                            <Edit3 className="w-3.5 h-3.5" />
+                            <span>Edit Hotel</span>
+                          </button>
+
+                          <button
+                            onClick={async () => {
+                              await api.deletePublicSiteHotel(hotel.id);
+                              await loadBootstrap(true);
+                              showNotice('info', `Hotel "${hotel.name}" removed from public catalog.`);
+                            }}
+                            className="p-1.5 text-rose-600 hover:text-rose-800 bg-white border border-slate-200 rounded-lg cursor-pointer"
+                            title="Delete Hotel"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* Expanded Hotel Room Types & Room Pictures Sub-Panel */}
+                      {isExpanded && (
+                        <div className="p-4 sm:p-5 border-t border-slate-200 bg-white space-y-4">
+                          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                            <div>
+                              <h4 className="text-xs font-bold uppercase tracking-wider text-slate-700">
+                                Room Types & Room Pictures for {hotel.name}
+                              </h4>
+                              <p className="text-xs text-slate-500">
+                                Add or edit room categories, capacities, prices, and multiple room pictures shown on {hotel.name}&apos;s page.
+                              </p>
+                            </div>
+                            <button
+                              onClick={() => openRoomModal(undefined, hotel.id)}
+                              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg cursor-pointer shrink-0"
+                            >
+                              <Plus className="w-3.5 h-3.5" />
+                              <span>Add Room Type to {hotel.name}</span>
+                            </button>
+                          </div>
+
+                          {hotelRooms.length === 0 ? (
+                            <div className="p-6 rounded-xl bg-slate-50 border border-dashed border-slate-200 text-center space-y-2">
+                              <p className="text-xs font-medium text-slate-600">
+                                No room types added to {hotel.name} yet.
+                              </p>
+                              <button
+                                onClick={() => openRoomModal(undefined, hotel.id)}
+                                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-sky-700 bg-sky-50 border border-sky-200 rounded-lg hover:bg-sky-100 cursor-pointer"
+                              >
+                                <Plus className="w-3.5 h-3.5" />
+                                <span>Add First Room Type</span>
+                              </button>
+                            </div>
+                          ) : (
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                              {hotelRooms.map((room) => {
+                                const allPhotos = Array.from(
+                                  new Set(
+                                    [room.featured_image_url, ...(room.gallery_images || [])].filter(Boolean)
+                                  )
+                                );
+                                return (
+                                  <div
+                                    key={room.id}
+                                    className="p-4 rounded-xl border border-slate-200 hover:border-slate-300 flex flex-col justify-between gap-3 bg-slate-50/40"
+                                  >
+                                    <div className="flex items-start gap-3.5">
+                                      <div className="w-24 h-20 rounded-lg bg-slate-200 border border-slate-300 overflow-hidden shrink-0 flex items-center justify-center relative">
+                                        {allPhotos[0] ? (
+                                          <img
+                                            src={allPhotos[0]}
+                                            alt={room.name}
+                                            referrerPolicy="no-referrer"
+                                            className="w-full h-full object-cover"
+                                          />
+                                        ) : (
+                                          <BedDouble className="w-5 h-5 text-slate-400" />
+                                        )}
+                                        {allPhotos.length > 1 && (
+                                          <span className="absolute bottom-1 right-1 px-1.5 py-0.5 text-[10px] font-bold bg-slate-900/80 text-white rounded">
+                                            {allPhotos.length} photos
+                                          </span>
+                                        )}
+                                      </div>
+
+                                      <div className="space-y-1 min-w-0 flex-1">
+                                        <div className="flex items-center justify-between gap-2">
+                                          <h5 className="text-sm font-bold text-slate-900 truncate">
+                                            {room.name}
+                                          </h5>
+                                          <span
+                                            className={`text-[11px] font-medium px-2 py-0.5 rounded ${
+                                              room.is_visible
+                                                ? 'bg-emerald-50 text-emerald-700'
+                                                : 'bg-slate-200 text-slate-600'
+                                            }`}
+                                          >
+                                            {room.is_visible ? 'Visible' : 'Hidden'}
+                                          </span>
+                                        </div>
+
+                                        <p className="text-xs text-slate-600">
+                                          {[
+                                            room.capacity,
+                                            room.bed_type,
+                                            room.room_size,
+                                            room.optional_price !== null
+                                              ? `${room.currency} ${room.optional_price}`
+                                              : 'Rate on enquiry',
+                                          ]
+                                            .filter(Boolean)
+                                            .join(' · ')}
+                                        </p>
+
+                                        {room.amenities && room.amenities.length > 0 && (
+                                          <p className="text-[11px] text-slate-500 truncate">
+                                            {room.amenities.slice(0, 4).join(', ')}
+                                          </p>
+                                        )}
+                                      </div>
+                                    </div>
+
+                                    <div className="flex items-center justify-between pt-2 border-t border-slate-200/80">
+                                      <span className="text-[11px] text-slate-500">
+                                        {allPhotos.length === 0
+                                          ? 'No room photo URL added yet'
+                                          : `${allPhotos.length} room picture${allPhotos.length === 1 ? '' : 's'}`}
+                                      </span>
+                                      <div className="flex items-center gap-1.5">
+                                        <button
+                                          onClick={() => openRoomModal(room)}
+                                          className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-slate-800 bg-white border border-slate-300 hover:bg-slate-100 rounded-md cursor-pointer"
+                                        >
+                                          <Edit3 className="w-3 h-3" />
+                                          <span>Edit Room & Photos</span>
+                                        </button>
+                                        <button
+                                          onClick={async () => {
+                                            await api.deletePublicSiteRoom(room.id);
+                                            await loadBootstrap(true);
+                                            showNotice('info', 'Room deleted from draft.');
+                                          }}
+                                          className="p-1 text-rose-600 hover:text-rose-800 cursor-pointer"
+                                          title="Delete Room"
+                                        >
+                                          <Trash2 className="w-3.5 h-3.5" />
+                                        </button>
+                                      </div>
+                                    </div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ==================================================================
+          5.3 ALL ROOMS & ACCOMMODATION MANAGEMENT
+      ================================================================== */}
+      {activeTab === 'rooms' && (
+        <div className="space-y-6">
+          <div className="bg-white border border-slate-200 rounded-xl p-6">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-200">
+              <div>
+                <h2 className="text-base font-bold text-slate-900">All Room Types & Room Pictures</h2>
+                <p className="text-xs text-slate-500">
+                  Manage room types across all hotels, including room photos, capacities, bed types, and indicative prices.
+                </p>
+              </div>
+              <div className="flex flex-wrap items-center gap-2.5">
+                {hotelsList.length > 0 && (
+                  <select
+                    value={roomFilterHotelId}
+                    onChange={(e) =>
+                      setRoomFilterHotelId(e.target.value === 'all' ? 'all' : Number(e.target.value))
+                    }
+                    className="px-3 py-2 text-xs bg-white border border-slate-300 rounded-lg text-slate-700"
+                  >
+                    <option value="all">All Hotels ({cmsData.rooms.length})</option>
+                    {hotelsList.map((h) => (
+                      <option key={h.id} value={h.id}>
+                        {h.name} ({cmsData.rooms.filter((r) => r.hotel_id === h.id).length})
+                      </option>
+                    ))}
+                  </select>
+                )}
+                <button
+                  onClick={() =>
+                    openRoomModal(undefined, roomFilterHotelId === 'all' ? undefined : roomFilterHotelId)
+                  }
+                  className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg cursor-pointer whitespace-nowrap shrink-0"
+                >
+                  <Plus className="w-4 h-4" />
+                  <span>Add Room Type</span>
+                </button>
+              </div>
+            </div>
+
+            {cmsData.rooms.length === 0 ? (
+              <div className="py-12 text-center space-y-3">
+                <BedDouble className="w-8 h-8 text-slate-400 mx-auto" />
+                <p className="text-sm font-medium text-slate-700">No public room types added yet</p>
+                <p className="text-xs text-slate-500 max-w-md mx-auto">
+                  Add your room categories with capacities, bed types, room pictures, and optional indicative rates.
+                </p>
+              </div>
+            ) : (
+              <div className="divide-y divide-slate-200 mt-4">
+                {cmsData.rooms
+                  .filter((r) => roomFilterHotelId === 'all' || r.hotel_id === roomFilterHotelId)
+                  .map((room, idx) => {
+                    const parentHotel = hotelsList.find((h) => h.id === room.hotel_id);
+                    const photoCount = Array.from(
+                      new Set([room.featured_image_url, ...(room.gallery_images || [])].filter(Boolean))
+                    ).length;
+
+                    return (
+                      <div
+                        key={room.id}
+                        className="py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4"
+                      >
+                        <div className="flex items-start gap-4">
+                          <div className="w-24 h-16 rounded-lg bg-slate-100 border border-slate-200 overflow-hidden shrink-0 flex items-center justify-center relative">
+                            {room.featured_image_url || (room.gallery_images && room.gallery_images[0]) ? (
+                              <img
+                                src={room.featured_image_url || room.gallery_images[0]}
+                                alt={room.name}
+                                referrerPolicy="no-referrer"
+                                className="w-full h-full object-cover"
+                              />
+                            ) : (
+                              <BedDouble className="w-5 h-5 text-slate-400" />
+                            )}
+                            {photoCount > 0 && (
+                              <span className="absolute bottom-1 right-1 px-1.5 py-0.5 text-[10px] font-bold bg-slate-900/80 text-white rounded">
+                                {photoCount} pic{photoCount === 1 ? '' : 's'}
+                              </span>
+                            )}
+                          </div>
+                          <div>
+                            <div className="flex flex-wrap items-center gap-2">
+                              <h3 className="text-sm font-bold text-slate-900">{room.name}</h3>
+                              {parentHotel && (
+                                <span className="px-2 py-0.5 text-[11px] font-semibold bg-slate-100 text-slate-700 rounded border border-slate-200">
+                                  {parentHotel.name}
+                                </span>
+                              )}
+                              <span className="text-xs text-slate-500">
+                                · {room.is_visible ? 'Visible' : 'Hidden'}
+                                {room.is_featured ? ' · Featured' : ''}
+                              </span>
+                            </div>
+                            <p className="text-xs text-slate-500 mt-0.5">
+                              {[
+                                room.capacity,
+                                room.bed_type,
+                                room.room_size,
+                                room.optional_price !== null
+                                  ? `${room.currency} ${room.optional_price} (${room.price_note})`
+                                  : 'Rate on enquiry',
+                              ]
+                                .filter(Boolean)
+                                .join(' · ')}
+                            </p>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <button
+                            onClick={() => handleMoveItem('rooms', idx, 'up')}
+                            disabled={idx === 0}
+                            className="p-1.5 text-slate-500 hover:text-slate-900 disabled:opacity-30 cursor-pointer"
+                            title="Move Up"
+                          >
+                            <ArrowUp className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={() => handleMoveItem('rooms', idx, 'down')}
+                            disabled={idx === cmsData.rooms.length - 1}
+                            className="p-1.5 text-slate-500 hover:text-slate-900 disabled:opacity-30 cursor-pointer"
+                            title="Move Down"
+                          >
+                            <ArrowDown className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={async () => {
+                              await api.updatePublicSiteRoom(room.id, { is_visible: room.is_visible ? 0 : 1 });
+                              await loadBootstrap(true);
+                            }}
+                            className="px-2.5 py-1 text-xs font-medium border border-slate-200 rounded-md hover:bg-slate-50 cursor-pointer"
+                          >
+                            {room.is_visible ? 'Hide' : 'Show'}
+                          </button>
+                          <button
+                            onClick={() => openRoomModal(room)}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-slate-700 border border-slate-200 rounded-md hover:bg-slate-50 cursor-pointer"
+                            title="Edit Room & Photos"
+                          >
+                            <Edit3 className="w-3.5 h-3.5" />
+                            <span>Edit & Photos</span>
+                          </button>
+                          <button
+                            onClick={async () => {
+                              await api.deletePublicSiteRoom(room.id);
+                              await loadBootstrap(true);
+                              showNotice('info', 'Room deleted from draft.');
+                            }}
+                            className="p-1.5 text-rose-600 hover:text-rose-800 cursor-pointer"
+                            title="Delete"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* ==================================================================
+          5.4 GENERAL BRAND / COLLECTION INFORMATION
       ================================================================== */}
       {activeTab === 'general' && (
         <form onSubmit={handleSaveSettings} className="bg-white border border-slate-200 rounded-xl p-6 space-y-8">
           <div className="flex items-center justify-between border-b border-slate-200 pb-4">
             <div>
-              <h2 className="text-base font-bold text-slate-900">General Hotel Information</h2>
+              <h2 className="text-base font-bold text-slate-900">Website Brand & Collection Information</h2>
               <p className="text-xs text-slate-500">
-                Enter your official hotel brand details, contact numbers, check-in timings, and policies.
+                Enter your main hotel group / directory brand name, main contact details, and default policies.
               </p>
             </div>
             <button
@@ -687,18 +1346,20 @@ export const PublicWebsiteManagementView: React.FC<PublicWebsiteManagementViewPr
               className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg cursor-pointer"
             >
               <Save className="w-3.5 h-3.5" />
-              <span>{saving ? 'Saving...' : 'Save General Info'}</span>
+              <span>{saving ? 'Saving...' : 'Save Brand Info'}</span>
             </button>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
             <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">Hotel Name *</label>
+              <label className="block text-xs font-semibold text-slate-700 mb-1">
+                Website Brand / Hotel Group Name *
+              </label>
               <input
                 type="text"
                 value={settingsForm.hotel_name}
                 onChange={(e) => setSettingsForm({ ...settingsForm, hotel_name: e.target.value })}
-                placeholder="e.g., Grand Horizon Hotel"
+                placeholder="e.g., Grand Horizon Hotels & Resorts"
                 className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg"
               />
             </div>
@@ -709,7 +1370,7 @@ export const PublicWebsiteManagementView: React.FC<PublicWebsiteManagementViewPr
                 type="text"
                 value={settingsForm.tagline}
                 onChange={(e) => setSettingsForm({ ...settingsForm, tagline: e.target.value })}
-                placeholder="e.g., Boutique City-Center Hospitality"
+                placeholder="e.g., Curated Partner Hotels & Luxury Accommodations"
                 className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg"
               />
             </div>
@@ -733,7 +1394,7 @@ export const PublicWebsiteManagementView: React.FC<PublicWebsiteManagementViewPr
                 type="text"
                 value={settingsForm.about_title}
                 onChange={(e) => setSettingsForm({ ...settingsForm, about_title: e.target.value })}
-                placeholder="e.g., About Our Hotel"
+                placeholder="e.g., About Our Hotel Collection"
                 className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg"
               />
             </div>
@@ -753,13 +1414,13 @@ export const PublicWebsiteManagementView: React.FC<PublicWebsiteManagementViewPr
 
             <div className="md:col-span-2">
               <label className="block text-xs font-semibold text-slate-700 mb-1">
-                About the Hotel (Full Story & Overview)
+                About Our Hotels (Full Story & Overview)
               </label>
               <textarea
                 rows={4}
                 value={settingsForm.about_content}
                 onChange={(e) => setSettingsForm({ ...settingsForm, about_content: e.target.value })}
-                placeholder="Detailed description of the property, architecture, and guest experience..."
+                placeholder="Detailed description of your hotel network, hospitality standards, and guest experience..."
                 className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg"
               />
             </div>
@@ -789,7 +1450,7 @@ export const PublicWebsiteManagementView: React.FC<PublicWebsiteManagementViewPr
 
           {/* Contact & Location */}
           <div className="pt-6 border-t border-slate-200 space-y-4">
-            <h3 className="text-sm font-bold text-slate-900">Contact Details & Location</h3>
+            <h3 className="text-sm font-bold text-slate-900">Central Reservations Contact & Headquarters</h3>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div>
                 <label className="block text-xs font-semibold text-slate-700 mb-1">Main Contact Phone</label>
@@ -891,7 +1552,7 @@ export const PublicWebsiteManagementView: React.FC<PublicWebsiteManagementViewPr
 
           {/* Reservation CTA, Timings & Policies */}
           <div className="pt-6 border-t border-slate-200 space-y-4">
-            <h3 className="text-sm font-bold text-slate-900">Reservations, Check-In/Out & Policies</h3>
+            <h3 className="text-sm font-bold text-slate-900">Default Reservations, Check-In/Out & Policies</h3>
             <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
               <div className="md:col-span-2">
                 <label className="block text-xs font-semibold text-slate-700 mb-1">
@@ -1037,7 +1698,7 @@ export const PublicWebsiteManagementView: React.FC<PublicWebsiteManagementViewPr
       )}
 
       {/* ==================================================================
-          5.3 HOMEPAGE EDITOR
+          5.5 HOMEPAGE EDITOR
       ================================================================== */}
       {activeTab === 'homepage' && (
         <form onSubmit={handleSaveSettings} className="bg-white border border-slate-200 rounded-xl p-6 space-y-8">
@@ -1098,7 +1759,7 @@ export const PublicWebsiteManagementView: React.FC<PublicWebsiteManagementViewPr
                 type="text"
                 value={settingsForm.hero_cta_text}
                 onChange={(e) => setSettingsForm({ ...settingsForm, hero_cta_text: e.target.value })}
-                placeholder="Explore Rooms"
+                placeholder="Explore Hotels"
                 className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg"
               />
             </div>
@@ -1108,7 +1769,7 @@ export const PublicWebsiteManagementView: React.FC<PublicWebsiteManagementViewPr
                 type="text"
                 value={settingsForm.hero_cta_link}
                 onChange={(e) => setSettingsForm({ ...settingsForm, hero_cta_link: e.target.value })}
-                placeholder="#rooms"
+                placeholder="#hotels"
                 className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg"
               />
             </div>
@@ -1127,7 +1788,7 @@ export const PublicWebsiteManagementView: React.FC<PublicWebsiteManagementViewPr
                 rows={3}
                 value={settingsForm.welcome_body}
                 onChange={(e) => setSettingsForm({ ...settingsForm, welcome_body: e.target.value })}
-                placeholder="Introductory paragraph welcoming guests to your property..."
+                placeholder="Introductory paragraph welcoming guests to your hotel collection..."
                 className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg"
               />
             </div>
@@ -1208,341 +1869,15 @@ export const PublicWebsiteManagementView: React.FC<PublicWebsiteManagementViewPr
       )}
 
       {/* ==================================================================
-          5.4 ROOMS & ACCOMMODATION MANAGEMENT
-      ================================================================== */}
-      {activeTab === 'rooms' && (
-        <div className="space-y-6">
-          <div className="bg-white border border-slate-200 rounded-xl p-6">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-200">
-              <div>
-                <h2 className="text-base font-bold text-slate-900">Rooms & Accommodation Management</h2>
-                <p className="text-xs text-slate-500">
-                  Manage public room cards. Isolated from confidential CRM client hotel bookings.
-                </p>
-              </div>
-              <button
-                onClick={() => openRoomModal()}
-                className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg cursor-pointer whitespace-nowrap shrink-0"
-              >
-                <Plus className="w-4 h-4" />
-                <span>Add Room Type</span>
-              </button>
-            </div>
-
-            {cmsData.rooms.length === 0 ? (
-              <div className="py-12 text-center space-y-3">
-                <BedDouble className="w-8 h-8 text-slate-400 mx-auto" />
-                <p className="text-sm font-medium text-slate-700">No public room types added yet</p>
-                <p className="text-xs text-slate-500 max-w-md mx-auto">
-                  Add your room categories with capacities, bed types, amenities, and optional indicative rates.
-                </p>
-              </div>
-            ) : (
-              <div className="divide-y divide-slate-200 mt-4">
-                {cmsData.rooms.map((room, idx) => (
-                  <div key={room.id} className="py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-                    <div className="flex items-start gap-4">
-                      <div className="w-20 h-14 rounded-lg bg-slate-100 border border-slate-200 overflow-hidden shrink-0 flex items-center justify-center">
-                        {room.featured_image_url ? (
-                          <img
-                            src={room.featured_image_url}
-                            alt={room.name}
-                            referrerPolicy="no-referrer"
-                            className="w-full h-full object-cover"
-                          />
-                        ) : (
-                          <BedDouble className="w-5 h-5 text-slate-400" />
-                        )}
-                      </div>
-                      <div>
-                        <div className="flex items-center gap-2">
-                          <h3 className="text-sm font-bold text-slate-900">{room.name}</h3>
-                          <span className="text-xs text-slate-500">
-                            · {room.is_visible ? 'Visible' : 'Hidden'}
-                            {room.is_featured ? ' · Featured' : ''}
-                          </span>
-                        </div>
-                        <p className="text-xs text-slate-500 mt-0.5">
-                          {[
-                            room.capacity,
-                            room.bed_type,
-                            room.room_size,
-                            room.optional_price !== null
-                              ? `${room.currency} ${room.optional_price} (${room.price_note})`
-                              : 'Rate on enquiry',
-                          ]
-                            .filter(Boolean)
-                            .join(' · ')}
-                        </p>
-                      </div>
-                    </div>
-
-                    <div className="flex items-center gap-1.5 shrink-0">
-                      <button
-                        onClick={() => handleMoveItem('rooms', idx, 'up')}
-                        disabled={idx === 0}
-                        className="p-1.5 text-slate-500 hover:text-slate-900 disabled:opacity-30 cursor-pointer"
-                        title="Move Up"
-                      >
-                        <ArrowUp className="w-4 h-4" />
-                      </button>
-                      <button
-                        onClick={() => handleMoveItem('rooms', idx, 'down')}
-                        disabled={idx === cmsData.rooms.length - 1}
-                        className="p-1.5 text-slate-500 hover:text-slate-900 disabled:opacity-30 cursor-pointer"
-                        title="Move Down"
-                      >
-                        <ArrowDown className="w-4 h-4" />
-                      </button>
-                      <button
-                        onClick={async () => {
-                          await api.updatePublicSiteRoom(room.id, { is_visible: room.is_visible ? 0 : 1 });
-                          await loadBootstrap(true);
-                        }}
-                        className="px-2.5 py-1 text-xs font-medium border border-slate-200 rounded-md hover:bg-slate-50 cursor-pointer"
-                      >
-                        {room.is_visible ? 'Hide' : 'Show'}
-                      </button>
-                      <button
-                        onClick={() => openRoomModal(room)}
-                        className="p-1.5 text-slate-600 hover:text-slate-900 cursor-pointer"
-                        title="Edit"
-                      >
-                        <Edit3 className="w-4 h-4" />
-                      </button>
-                      <button
-                        onClick={async () => {
-                          await api.deletePublicSiteRoom(room.id);
-                          await loadBootstrap(true);
-                          showNotice('info', 'Room deleted from draft.');
-                        }}
-                        className="p-1.5 text-rose-600 hover:text-rose-800 cursor-pointer"
-                        title="Delete"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-
-          {/* Room Editor Modal */}
-          {editingRoom && (
-            <div className="fixed inset-0 z-50 bg-slate-950/60 flex items-center justify-center p-4">
-              <form
-                onSubmit={handleSaveRoom}
-                className="bg-white rounded-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto border border-slate-200 p-6 space-y-4"
-              >
-                <div className="flex items-center justify-between border-b border-slate-200 pb-3">
-                  <h3 className="text-base font-bold text-slate-900">
-                    {editingRoom.id ? 'Edit Room Type' : 'Add Room Type'}
-                  </h3>
-                  <button
-                    type="button"
-                    onClick={() => setEditingRoom(null)}
-                    className="p-1 text-slate-400 hover:text-slate-700 cursor-pointer"
-                  >
-                    <X className="w-5 h-5" />
-                  </button>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div className="sm:col-span-2">
-                    <label className="block text-xs font-semibold text-slate-700 mb-1">Room Name *</label>
-                    <input
-                      type="text"
-                      required
-                      value={editingRoom.name || ''}
-                      onChange={(e) => setEditingRoom({ ...editingRoom, name: e.target.value })}
-                      placeholder="e.g., Deluxe King Suite"
-                      className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-1">Capacity</label>
-                    <input
-                      type="text"
-                      value={editingRoom.capacity || ''}
-                      onChange={(e) => setEditingRoom({ ...editingRoom, capacity: e.target.value })}
-                      placeholder="e.g., Up to 2 Guests"
-                      className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-1">Bed Type</label>
-                    <input
-                      type="text"
-                      value={editingRoom.bed_type || ''}
-                      onChange={(e) => setEditingRoom({ ...editingRoom, bed_type: e.target.value })}
-                      placeholder="e.g., 1 King Bed"
-                      className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-1">Room Size</label>
-                    <input
-                      type="text"
-                      value={editingRoom.room_size || ''}
-                      onChange={(e) => setEditingRoom({ ...editingRoom, room_size: e.target.value })}
-                      placeholder="e.g., 38 m²"
-                      className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-1">Featured Image URL</label>
-                    <input
-                      type="url"
-                      value={editingRoom.featured_image_url || ''}
-                      onChange={(e) => setEditingRoom({ ...editingRoom, featured_image_url: e.target.value })}
-                      placeholder="https://.../room.jpg"
-                      className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg"
-                    />
-                  </div>
-
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-1">
-                      Optional Indicative Price (Leave blank if not shown)
-                    </label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      value={editingRoom.optional_price ?? ''}
-                      onChange={(e) =>
-                        setEditingRoom({
-                          ...editingRoom,
-                          optional_price: e.target.value === '' ? null : Number(e.target.value),
-                        })
-                      }
-                      placeholder="Optional"
-                      className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg"
-                    />
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1">Currency</label>
-                      <input
-                        type="text"
-                        value={editingRoom.currency || 'USD'}
-                        onChange={(e) => setEditingRoom({ ...editingRoom, currency: e.target.value })}
-                        className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-xs font-semibold text-slate-700 mb-1">Price Note</label>
-                      <input
-                        type="text"
-                        value={editingRoom.price_note || ''}
-                        onChange={(e) => setEditingRoom({ ...editingRoom, price_note: e.target.value })}
-                        placeholder="per night"
-                        className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="sm:col-span-2">
-                    <label className="block text-xs font-semibold text-slate-700 mb-1">Short Summary</label>
-                    <input
-                      type="text"
-                      value={editingRoom.short_description || ''}
-                      onChange={(e) => setEditingRoom({ ...editingRoom, short_description: e.target.value })}
-                      placeholder="1-2 sentence room summary for card view"
-                      className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg"
-                    />
-                  </div>
-
-                  <div className="sm:col-span-2">
-                    <label className="block text-xs font-semibold text-slate-700 mb-1">Full Room Description</label>
-                    <textarea
-                      rows={3}
-                      value={editingRoom.full_description || ''}
-                      onChange={(e) => setEditingRoom({ ...editingRoom, full_description: e.target.value })}
-                      placeholder="Detailed room description..."
-                      className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg"
-                    />
-                  </div>
-
-                  <div className="sm:col-span-2">
-                    <label className="block text-xs font-semibold text-slate-700 mb-1">
-                      Room Amenities (Comma-separated)
-                    </label>
-                    <input
-                      type="text"
-                      value={roomAmenitiesInput}
-                      onChange={(e) => setRoomAmenitiesInput(e.target.value)}
-                      placeholder="e.g., High-Speed Wi-Fi, Work Desk, Rain Shower, Minibar"
-                      className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg"
-                    />
-                  </div>
-
-                  <div className="sm:col-span-2">
-                    <label className="block text-xs font-semibold text-slate-700 mb-1">
-                      Optional Enquiry / Booking Link
-                    </label>
-                    <input
-                      type="url"
-                      value={editingRoom.enquiry_url || ''}
-                      onChange={(e) => setEditingRoom({ ...editingRoom, enquiry_url: e.target.value })}
-                      placeholder="https://... (Leave blank to use default hotel contact/reservation link)"
-                      className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg"
-                    />
-                  </div>
-
-                  <div className="flex items-center gap-4 sm:col-span-2 pt-2">
-                    <label className="flex items-center gap-2 text-xs font-medium text-slate-700">
-                      <input
-                        type="checkbox"
-                        checked={Boolean(editingRoom.is_visible)}
-                        onChange={(e) => setEditingRoom({ ...editingRoom, is_visible: e.target.checked ? 1 : 0 })}
-                      />
-                      <span>Visible on Public Website</span>
-                    </label>
-                    <label className="flex items-center gap-2 text-xs font-medium text-slate-700">
-                      <input
-                        type="checkbox"
-                        checked={Boolean(editingRoom.is_featured)}
-                        onChange={(e) => setEditingRoom({ ...editingRoom, is_featured: e.target.checked ? 1 : 0 })}
-                      />
-                      <span>Featured on Homepage</span>
-                    </label>
-                  </div>
-                </div>
-
-                <div className="flex items-center justify-end gap-2 pt-4 border-t border-slate-200">
-                  <button
-                    type="button"
-                    onClick={() => setEditingRoom(null)}
-                    className="px-4 py-2 text-xs font-medium text-slate-600 hover:bg-slate-100 rounded-lg cursor-pointer"
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    disabled={saving}
-                    className="px-4 py-2 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg cursor-pointer"
-                  >
-                    {saving ? 'Saving...' : 'Save Room'}
-                  </button>
-                </div>
-              </form>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* ==================================================================
-          5.5 FACILITIES & AMENITIES
+          5.6 FACILITIES & AMENITIES
       ================================================================== */}
       {activeTab === 'facilities' && (
         <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-6">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-200">
             <div>
-              <h2 className="text-base font-bold text-slate-900">Hotel Facilities & Amenities</h2>
+              <h2 className="text-base font-bold text-slate-900">Brand Facilities & Guest Services</h2>
               <p className="text-xs text-slate-500">
-                Only facilities you add and enable here will be claimed on the public website.
+                Highlight facilities and services available across your hotel properties.
               </p>
             </div>
             <button
@@ -1728,7 +2063,7 @@ export const PublicWebsiteManagementView: React.FC<PublicWebsiteManagementViewPr
       )}
 
       {/* ==================================================================
-          5.6 PHOTO GALLERY
+          5.7 PHOTO GALLERY
       ================================================================== */}
       {activeTab === 'gallery' && (
         <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-6">
@@ -1736,7 +2071,7 @@ export const PublicWebsiteManagementView: React.FC<PublicWebsiteManagementViewPr
             <div>
               <h2 className="text-base font-bold text-slate-900">Photo Gallery Manager</h2>
               <p className="text-xs text-slate-500">
-                Use durable hosted image URLs (CDN, Cloudinary, S3, or public web URLs). Ephemeral local disk or large Base64 blobs are avoided.
+                Use durable hosted image URLs (CDN, Cloudinary, S3, or public web URLs).
               </p>
             </div>
             <button
@@ -1933,7 +2268,7 @@ export const PublicWebsiteManagementView: React.FC<PublicWebsiteManagementViewPr
       )}
 
       {/* ==================================================================
-          5.7 WEBSITE PAGES & NAVIGATION
+          5.8 WEBSITE PAGES & NAVIGATION
       ================================================================== */}
       {activeTab === 'pages' && (
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
@@ -2045,7 +2380,7 @@ export const PublicWebsiteManagementView: React.FC<PublicWebsiteManagementViewPr
       )}
 
       {/* ==================================================================
-          5.8 FREQUENTLY ASKED QUESTIONS (FAQ)
+          5.9 FREQUENTLY ASKED QUESTIONS (FAQ)
       ================================================================== */}
       {activeTab === 'faqs' && (
         <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-6">
@@ -2199,7 +2534,7 @@ export const PublicWebsiteManagementView: React.FC<PublicWebsiteManagementViewPr
       )}
 
       {/* ==================================================================
-          5.9 SEO & WEBSITE SETTINGS
+          5.10 SEO & WEBSITE SETTINGS
       ================================================================== */}
       {activeTab === 'seo' && (
         <form onSubmit={handleSaveSettings} className="bg-white border border-slate-200 rounded-xl p-6 space-y-6">
@@ -2227,7 +2562,7 @@ export const PublicWebsiteManagementView: React.FC<PublicWebsiteManagementViewPr
                 type="text"
                 value={settingsForm.seo_title}
                 onChange={(e) => setSettingsForm({ ...settingsForm, seo_title: e.target.value })}
-                placeholder="Defaults to Hotel Name if blank"
+                placeholder="Defaults to Brand Name if blank"
                 className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg"
               />
             </div>
@@ -2391,15 +2726,583 @@ export const PublicWebsiteManagementView: React.FC<PublicWebsiteManagementViewPr
         </div>
       )}
 
+      {/* ==================================================================
+          HOTEL EDITOR MODAL
+      ================================================================== */}
+      {editingHotel && (
+        <div className="fixed inset-0 z-50 bg-slate-950/60 flex items-center justify-center p-4">
+          <form
+            onSubmit={handleSaveHotel}
+            className="bg-white rounded-xl max-w-3xl w-full max-h-[90vh] overflow-y-auto border border-slate-200 p-6 space-y-5"
+          >
+            <div className="flex items-center justify-between border-b border-slate-200 pb-3">
+              <div>
+                <h3 className="text-base font-bold text-slate-900">
+                  {editingHotel.id ? `Edit Hotel: ${editingHotel.name}` : 'Add Public Hotel to Directory'}
+                </h3>
+                <p className="text-xs text-slate-500">
+                  This hotel will automatically receive its own dedicated page showcasing its photos, room types, and details.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingHotel(null)}
+                className="p-1 text-slate-400 hover:text-slate-700 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="sm:col-span-2">
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Hotel Name *</label>
+                <input
+                  type="text"
+                  required
+                  value={editingHotel.name || ''}
+                  onChange={(e) => setEditingHotel({ ...editingHotel, name: e.target.value })}
+                  placeholder="e.g., Grand Horizon Hotel Beijing"
+                  className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Star Rating</label>
+                <select
+                  value={editingHotel.star_rating || 5}
+                  onChange={(e) => setEditingHotel({ ...editingHotel, star_rating: Number(e.target.value) })}
+                  className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg"
+                >
+                  <option value={5}>5 Stars (★★★★★)</option>
+                  <option value={4}>4 Stars (★★★★)</option>
+                  <option value={3}>3 Stars (★★★)</option>
+                  <option value={2}>2 Stars (★★)</option>
+                  <option value={1}>1 Star (★)</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">City</label>
+                <input
+                  type="text"
+                  value={editingHotel.city || ''}
+                  onChange={(e) => setEditingHotel({ ...editingHotel, city: e.target.value })}
+                  placeholder="e.g., Beijing"
+                  className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Country</label>
+                <input
+                  type="text"
+                  value={editingHotel.country || ''}
+                  onChange={(e) => setEditingHotel({ ...editingHotel, country: e.target.value })}
+                  placeholder="e.g., China"
+                  className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Page Slug (Auto-generated if blank)
+                </label>
+                <input
+                  type="text"
+                  value={editingHotel.slug || ''}
+                  onChange={(e) => setEditingHotel({ ...editingHotel, slug: e.target.value })}
+                  placeholder="grand-horizon-beijing"
+                  className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg font-mono"
+                />
+              </div>
+
+              <div className="sm:col-span-3">
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Full Street Address</label>
+                <input
+                  type="text"
+                  value={editingHotel.address || ''}
+                  onChange={(e) => setEditingHotel({ ...editingHotel, address: e.target.value })}
+                  placeholder="Street address shown on the hotel card and hotel page"
+                  className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg"
+                />
+              </div>
+
+              <div className="sm:col-span-2">
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Main Cover Photo URL
+                </label>
+                <input
+                  type="url"
+                  value={editingHotel.featured_image_url || ''}
+                  onChange={(e) => setEditingHotel({ ...editingHotel, featured_image_url: e.target.value })}
+                  placeholder="https://.../hotel-exterior.jpg"
+                  className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Starting Price</label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    value={editingHotel.starting_price ?? ''}
+                    onChange={(e) =>
+                      setEditingHotel({
+                        ...editingHotel,
+                        starting_price: e.target.value === '' ? null : Number(e.target.value),
+                      })
+                    }
+                    placeholder="Auto from rooms"
+                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Currency</label>
+                  <input
+                    type="text"
+                    value={editingHotel.currency || 'USD'}
+                    onChange={(e) => setEditingHotel({ ...editingHotel, currency: e.target.value })}
+                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg"
+                  />
+                </div>
+              </div>
+
+              <div className="sm:col-span-3">
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Additional Hotel Gallery Photo URLs (One image URL per line)
+                </label>
+                <textarea
+                  rows={3}
+                  value={hotelGalleryInput}
+                  onChange={(e) => setHotelGalleryInput(e.target.value)}
+                  placeholder={'https://.../lobby.jpg\nhttps://.../restaurant.jpg\nhttps://.../pool.jpg'}
+                  className="w-full px-3.5 py-2 text-xs font-mono border border-slate-300 rounded-lg"
+                />
+              </div>
+
+              <div className="sm:col-span-3">
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Short Summary (Displayed on Hotel Directory Card)
+                </label>
+                <input
+                  type="text"
+                  value={editingHotel.short_description || ''}
+                  onChange={(e) => setEditingHotel({ ...editingHotel, short_description: e.target.value })}
+                  placeholder="1–2 sentence highlight of this hotel..."
+                  className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg"
+                />
+              </div>
+
+              <div className="sm:col-span-3">
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Full Hotel Overview & Description (Displayed on Dedicated Hotel Page)
+                </label>
+                <textarea
+                  rows={3}
+                  value={editingHotel.full_description || ''}
+                  onChange={(e) => setEditingHotel({ ...editingHotel, full_description: e.target.value })}
+                  placeholder="Detailed description of the hotel, surroundings, dining, and business facilities..."
+                  className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg"
+                />
+              </div>
+
+              <div className="sm:col-span-3">
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Hotel Amenities & Facilities (Comma-separated)
+                </label>
+                <input
+                  type="text"
+                  value={hotelAmenitiesInput}
+                  onChange={(e) => setHotelAmenitiesInput(e.target.value)}
+                  placeholder="Free High-Speed Wi-Fi, 24-Hour Front Desk, Restaurant, Airport Shuttle, Fitness Center"
+                  className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Hotel Phone</label>
+                <input
+                  type="text"
+                  value={editingHotel.contact_phone || ''}
+                  onChange={(e) => setEditingHotel({ ...editingHotel, contact_phone: e.target.value })}
+                  placeholder="Optional direct phone"
+                  className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Hotel Email</label>
+                <input
+                  type="email"
+                  value={editingHotel.contact_email || ''}
+                  onChange={(e) => setEditingHotel({ ...editingHotel, contact_email: e.target.value })}
+                  placeholder="Optional direct email"
+                  className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">WhatsApp Number</label>
+                <input
+                  type="text"
+                  value={editingHotel.whatsapp_number || ''}
+                  onChange={(e) => setEditingHotel({ ...editingHotel, whatsapp_number: e.target.value })}
+                  placeholder="Optional WhatsApp"
+                  className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Check-In Time</label>
+                <input
+                  type="text"
+                  value={editingHotel.check_in_time || '14:00'}
+                  onChange={(e) => setEditingHotel({ ...editingHotel, check_in_time: e.target.value })}
+                  className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Check-Out Time</label>
+                <input
+                  type="text"
+                  value={editingHotel.check_out_time || '12:00'}
+                  onChange={(e) => setEditingHotel({ ...editingHotel, check_out_time: e.target.value })}
+                  className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Google Maps Link</label>
+                <input
+                  type="url"
+                  value={editingHotel.google_maps_url || ''}
+                  onChange={(e) => setEditingHotel({ ...editingHotel, google_maps_url: e.target.value })}
+                  placeholder="https://maps.google.com/..."
+                  className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg"
+                />
+              </div>
+
+              <div className="flex items-center gap-5 sm:col-span-3 pt-2">
+                <label className="flex items-center gap-2 text-xs font-medium text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(editingHotel.is_visible)}
+                    onChange={(e) => setEditingHotel({ ...editingHotel, is_visible: e.target.checked ? 1 : 0 })}
+                  />
+                  <span>Visible on Public Website</span>
+                </label>
+                <label className="flex items-center gap-2 text-xs font-medium text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(editingHotel.is_featured)}
+                    onChange={(e) => setEditingHotel({ ...editingHotel, is_featured: e.target.checked ? 1 : 0 })}
+                  />
+                  <span>Featured Hotel Badge</span>
+                </label>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-4 border-t border-slate-200">
+              <button
+                type="button"
+                onClick={() => setEditingHotel(null)}
+                className="px-4 py-2 text-xs font-medium text-slate-600 hover:bg-slate-100 rounded-lg cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={saving}
+                className="px-4 py-2 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg cursor-pointer"
+              >
+                {saving ? 'Saving...' : 'Save Hotel'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
+      {/* ==================================================================
+          ROOM EDITOR MODAL (WITH HOTEL SELECTOR & MULTIPLE ROOM PICTURES)
+      ================================================================== */}
+      {editingRoom && (
+        <div className="fixed inset-0 z-50 bg-slate-950/60 flex items-center justify-center p-4">
+          <form
+            onSubmit={handleSaveRoom}
+            className="bg-white rounded-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto border border-slate-200 p-6 space-y-4"
+          >
+            <div className="flex items-center justify-between border-b border-slate-200 pb-3">
+              <div>
+                <h3 className="text-base font-bold text-slate-900">
+                  {editingRoom.id ? 'Edit Room Type & Room Pictures' : 'Add Room Type & Room Pictures'}
+                </h3>
+                <p className="text-xs text-slate-500">
+                  Showcase this room category with multiple room photos, bed configuration, and amenities.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingRoom(null)}
+                className="p-1 text-slate-400 hover:text-slate-700 cursor-pointer"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              {hotelsList.length > 0 && (
+                <div className="sm:col-span-2">
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Belongs to Hotel *
+                  </label>
+                  <select
+                    value={editingRoom.hotel_id ?? ''}
+                    onChange={(e) =>
+                      setEditingRoom({
+                        ...editingRoom,
+                        hotel_id: e.target.value === '' ? null : Number(e.target.value),
+                      })
+                    }
+                    className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg bg-white"
+                  >
+                    <option value="">-- Select Hotel --</option>
+                    {hotelsList.map((h) => (
+                      <option key={h.id} value={h.id}>
+                        {h.name} {h.city ? `(${h.city})` : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              <div className="sm:col-span-2">
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Room Type Name *</label>
+                <input
+                  type="text"
+                  required
+                  value={editingRoom.name || ''}
+                  onChange={(e) => setEditingRoom({ ...editingRoom, name: e.target.value })}
+                  placeholder="e.g., Deluxe King Room, Executive Twin Suite"
+                  className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Guest Capacity</label>
+                <input
+                  type="text"
+                  value={editingRoom.capacity || ''}
+                  onChange={(e) => setEditingRoom({ ...editingRoom, capacity: e.target.value })}
+                  placeholder="e.g., Up to 2 Guests"
+                  className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Bed Configuration</label>
+                <input
+                  type="text"
+                  value={editingRoom.bed_type || ''}
+                  onChange={(e) => setEditingRoom({ ...editingRoom, bed_type: e.target.value })}
+                  placeholder="e.g., 1 King Bed or 2 Twin Beds"
+                  className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Room Size</label>
+                <input
+                  type="text"
+                  value={editingRoom.room_size || ''}
+                  onChange={(e) => setEditingRoom({ ...editingRoom, room_size: e.target.value })}
+                  placeholder="e.g., 38 m²"
+                  className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Indicative Nightly Rate (Optional)
+                </label>
+                <input
+                  type="number"
+                  step="0.01"
+                  value={editingRoom.optional_price ?? ''}
+                  onChange={(e) =>
+                    setEditingRoom({
+                      ...editingRoom,
+                      optional_price: e.target.value === '' ? null : Number(e.target.value),
+                    })
+                  }
+                  placeholder="Leave blank for 'Rate on enquiry'"
+                  className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 sm:col-span-2">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Currency</label>
+                  <input
+                    type="text"
+                    value={editingRoom.currency || 'USD'}
+                    onChange={(e) => setEditingRoom({ ...editingRoom, currency: e.target.value })}
+                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Price Note</label>
+                  <input
+                    type="text"
+                    value={editingRoom.price_note || ''}
+                    onChange={(e) => setEditingRoom({ ...editingRoom, price_note: e.target.value })}
+                    placeholder="per night"
+                    className="w-full px-3 py-2 text-sm border border-slate-300 rounded-lg"
+                  />
+                </div>
+              </div>
+
+              {/* Room Pictures Section */}
+              <div className="sm:col-span-2 p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-3">
+                <label className="block text-xs font-bold text-slate-800">
+                  Main Room Picture URL
+                </label>
+                <input
+                  type="url"
+                  value={editingRoom.featured_image_url || ''}
+                  onChange={(e) => setEditingRoom({ ...editingRoom, featured_image_url: e.target.value })}
+                  placeholder="https://.../deluxe-room-main.jpg"
+                  className="w-full px-3.5 py-2 text-sm bg-white border border-slate-300 rounded-lg"
+                />
+
+                <label className="block text-xs font-bold text-slate-800 pt-1">
+                  Additional Room Pictures (One Image URL per line — Bedroom, Bathroom, View, etc.)
+                </label>
+                <textarea
+                  rows={3}
+                  value={roomGalleryInput}
+                  onChange={(e) => setRoomGalleryInput(e.target.value)}
+                  placeholder={'https://.../room-angle-2.jpg\nhttps://.../room-bathroom.jpg\nhttps://.../room-balcony.jpg'}
+                  className="w-full px-3.5 py-2 text-xs font-mono bg-white border border-slate-300 rounded-lg"
+                />
+
+                {/* Live Thumbnail Previews */}
+                {(() => {
+                  const previewUrls = Array.from(
+                    new Set(
+                      [
+                        editingRoom.featured_image_url?.trim(),
+                        ...roomGalleryInput
+                          .split('\n')
+                          .map((s) => s.trim())
+                          .filter(Boolean),
+                      ].filter(Boolean)
+                    )
+                  );
+                  if (previewUrls.length === 0) return null;
+                  return (
+                    <div className="pt-2">
+                      <span className="text-[11px] font-semibold text-slate-500 block mb-1.5">
+                        Room Photo Previews ({previewUrls.length}):
+                      </span>
+                      <div className="flex items-center gap-2 overflow-x-auto pb-1">
+                        {previewUrls.map((url, i) => (
+                          <div
+                            key={i}
+                            className="w-20 h-14 rounded-lg border border-slate-300 overflow-hidden shrink-0 bg-slate-200"
+                          >
+                            <img
+                              src={url}
+                              alt={`Preview ${i + 1}`}
+                              referrerPolicy="no-referrer"
+                              className="w-full h-full object-cover"
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+
+              <div className="sm:col-span-2">
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Short Room Summary</label>
+                <input
+                  type="text"
+                  value={editingRoom.short_description || ''}
+                  onChange={(e) => setEditingRoom({ ...editingRoom, short_description: e.target.value })}
+                  placeholder="1-2 sentence room summary for card view"
+                  className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg"
+                />
+              </div>
+
+              <div className="sm:col-span-2">
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Full Room Description</label>
+                <textarea
+                  rows={3}
+                  value={editingRoom.full_description || ''}
+                  onChange={(e) => setEditingRoom({ ...editingRoom, full_description: e.target.value })}
+                  placeholder="Detailed room description..."
+                  className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg"
+                />
+              </div>
+
+              <div className="sm:col-span-2">
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Room Amenities (Comma-separated)
+                </label>
+                <input
+                  type="text"
+                  value={roomAmenitiesInput}
+                  onChange={(e) => setRoomAmenitiesInput(e.target.value)}
+                  placeholder="e.g., High-Speed Wi-Fi, Work Desk, Rain Shower, Minibar"
+                  className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg"
+                />
+              </div>
+
+              <div className="flex items-center gap-4 sm:col-span-2 pt-2">
+                <label className="flex items-center gap-2 text-xs font-medium text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(editingRoom.is_visible)}
+                    onChange={(e) => setEditingRoom({ ...editingRoom, is_visible: e.target.checked ? 1 : 0 })}
+                  />
+                  <span>Visible on Hotel Page</span>
+                </label>
+                <label className="flex items-center gap-2 text-xs font-medium text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={Boolean(editingRoom.is_featured)}
+                    onChange={(e) => setEditingRoom({ ...editingRoom, is_featured: e.target.checked ? 1 : 0 })}
+                  />
+                  <span>Featured Room</span>
+                </label>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2 pt-4 border-t border-slate-200">
+              <button
+                type="button"
+                onClick={() => setEditingRoom(null)}
+                className="px-4 py-2 text-xs font-medium text-slate-600 hover:bg-slate-100 rounded-lg cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={saving}
+                className="px-4 py-2 text-xs font-semibold text-white bg-slate-900 hover:bg-slate-800 rounded-lg cursor-pointer"
+              >
+                {saving ? 'Saving...' : 'Save Room & Photos'}
+              </button>
+            </div>
+          </form>
+        </div>
+      )}
+
       {/* Publish Confirmation Modal */}
       {publishModalOpen && (
         <div className="fixed inset-0 z-50 bg-slate-950/60 flex items-center justify-center p-4">
           <div className="bg-white rounded-xl max-w-md w-full border border-slate-200 p-6 space-y-4">
             <div className="flex items-start justify-between">
               <div>
-                <h3 className="text-base font-bold text-slate-900">Publish Public Hotel Website</h3>
+                <h3 className="text-base font-bold text-slate-900">Publish Multi-Hotel Website</h3>
                 <p className="text-xs text-slate-500 mt-1">
-                  Creates an allowlisted public snapshot in MySQL and triggers your Netlify Build Hook.
+                  Creates an allowlisted public snapshot ({hotelsList.filter((h) => h.is_visible === 1).length} hotels, {cmsData.rooms.filter((r) => r.is_visible === 1).length} rooms) in MySQL and triggers your Netlify Build Hook.
                 </p>
               </div>
               <button
@@ -2418,7 +3321,7 @@ export const PublicWebsiteManagementView: React.FC<PublicWebsiteManagementViewPr
                 type="text"
                 value={publishNotes}
                 onChange={(e) => setPublishNotes(e.target.value)}
-                placeholder="e.g., Updated seasonal room descriptions and contact phone"
+                placeholder="e.g., Added partner hotels and updated room photos"
                 className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg"
               />
             </div>

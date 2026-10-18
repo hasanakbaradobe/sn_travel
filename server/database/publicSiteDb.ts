@@ -118,8 +118,41 @@ export interface PublicSitePage {
   updated_at: string;
 }
 
+export interface PublicSiteHotel {
+  id: number;
+  crm_hotel_id: number | null;
+  name: string;
+  slug: string;
+  city: string;
+  country: string;
+  address: string;
+  star_rating: number;
+  short_description: string;
+  full_description: string;
+  featured_image_url: string;
+  gallery_images: string[];
+  amenities: string[];
+  check_in_time: string;
+  check_out_time: string;
+  cancellation_policy: string;
+  contact_phone: string;
+  whatsapp_number: string;
+  contact_email: string;
+  google_maps_url: string;
+  google_maps_embed_url: string;
+  starting_price: number | null;
+  currency: string;
+  is_featured: number;
+  is_visible: number;
+  display_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface PublicSiteRoom {
   id: number;
+  hotel_id: number;
+  crm_room_id?: number | null;
   name: string;
   slug: string;
   short_description: string;
@@ -254,8 +287,59 @@ export interface PublicWebsiteSnapshot {
     show_in_footer: boolean;
     display_order: number;
   }>;
+  hotels: Array<{
+    id: number;
+    name: string;
+    slug: string;
+    city: string;
+    country: string;
+    address: string;
+    star_rating: number;
+    short_description: string;
+    full_description: string;
+    featured_image_url: string;
+    gallery_images: string[];
+    amenities: string[];
+    check_in_time: string;
+    check_out_time: string;
+    cancellation_policy: string;
+    contact_phone: string;
+    whatsapp_number: string;
+    contact_email: string;
+    google_maps_url: string;
+    google_maps_embed_url: string;
+    starting_price: number | null;
+    currency: string;
+    is_featured: boolean;
+    display_order: number;
+    rooms: Array<{
+      id: number;
+      hotel_id: number;
+      hotel_name?: string;
+      hotel_slug?: string;
+      name: string;
+      slug: string;
+      short_description: string;
+      full_description: string;
+      featured_image_url: string;
+      gallery_images: string[];
+      capacity: string;
+      bed_type: string;
+      room_size: string;
+      amenities: string[];
+      optional_price: number | null;
+      currency: string;
+      price_note: string;
+      enquiry_url: string;
+      is_featured: boolean;
+      display_order: number;
+    }>;
+  }>;
   rooms: Array<{
     id: number;
+    hotel_id: number;
+    hotel_name?: string;
+    hotel_slug?: string;
     name: string;
     slug: string;
     short_description: string;
@@ -336,6 +420,7 @@ export interface PublicSitePublicationLog {
 interface PublicSiteStore {
   settings: PublicSiteSettings;
   pages: PublicSitePage[];
+  hotels: PublicSiteHotel[];
   rooms: PublicSiteRoom[];
   facilities: PublicSiteFacility[];
   gallery: PublicSiteGalleryItem[];
@@ -343,6 +428,7 @@ interface PublicSiteStore {
   snapshots: PublicSiteSnapshotRecord[];
   publications: PublicSitePublicationLog[];
   nextIds: {
+    hotels: number;
     rooms: number;
     facilities: number;
     gallery: number;
@@ -621,6 +707,7 @@ function getInitialStore(): PublicSiteStore {
       updated_at: now,
     },
     pages: getDefaultPages(now),
+    hotels: [],
     rooms: [],
     facilities: [],
     gallery: [],
@@ -628,6 +715,7 @@ function getInitialStore(): PublicSiteStore {
     snapshots: [],
     publications: [],
     nextIds: {
+      hotels: 1,
       rooms: 1,
       facilities: 1,
       gallery: 1,
@@ -652,7 +740,10 @@ function loadStore(): PublicSiteStore {
         ...parsed,
         settings: { ...initial.settings, ...(parsed.settings || {}) },
         pages: Array.isArray(parsed.pages) && parsed.pages.length > 0 ? parsed.pages : initial.pages,
-        rooms: Array.isArray(parsed.rooms) ? parsed.rooms : [],
+        hotels: Array.isArray(parsed.hotels) ? parsed.hotels : [],
+        rooms: Array.isArray(parsed.rooms)
+          ? parsed.rooms.map((r: any) => ({ ...r, hotel_id: Number(r.hotel_id || 0), crm_room_id: r.crm_room_id ?? null }))
+          : [],
         facilities: Array.isArray(parsed.facilities) ? parsed.facilities : [],
         gallery: Array.isArray(parsed.gallery) ? parsed.gallery : [],
         faqs: Array.isArray(parsed.faqs) ? parsed.faqs : [],
@@ -776,8 +867,42 @@ async function ensureMySQLTablesAndSync(): Promise<void> {
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
           `),
           conn.query(`
+            CREATE TABLE IF NOT EXISTS public_site_hotels (
+              id INT AUTO_INCREMENT PRIMARY KEY,
+              crm_hotel_id INT DEFAULT NULL,
+              name VARCHAR(255) NOT NULL,
+              slug VARCHAR(255) NOT NULL,
+              city VARCHAR(120) DEFAULT '',
+              country VARCHAR(120) DEFAULT '',
+              address TEXT DEFAULT NULL,
+              star_rating INT NOT NULL DEFAULT 5,
+              short_description TEXT DEFAULT NULL,
+              full_description LONGTEXT DEFAULT NULL,
+              featured_image_url TEXT DEFAULT NULL,
+              gallery_images_json LONGTEXT DEFAULT NULL,
+              amenities_json LONGTEXT DEFAULT NULL,
+              check_in_time VARCHAR(100) DEFAULT '14:00',
+              check_out_time VARCHAR(100) DEFAULT '12:00',
+              cancellation_policy TEXT DEFAULT NULL,
+              contact_phone VARCHAR(100) DEFAULT '',
+              whatsapp_number VARCHAR(100) DEFAULT '',
+              contact_email VARCHAR(255) DEFAULT '',
+              google_maps_url TEXT DEFAULT NULL,
+              google_maps_embed_url TEXT DEFAULT NULL,
+              starting_price DECIMAL(10, 2) DEFAULT NULL,
+              currency VARCHAR(16) DEFAULT 'USD',
+              is_featured TINYINT(1) NOT NULL DEFAULT 1,
+              is_visible TINYINT(1) NOT NULL DEFAULT 1,
+              display_order INT NOT NULL DEFAULT 1,
+              created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+              updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+          `),
+          conn.query(`
             CREATE TABLE IF NOT EXISTS public_site_rooms (
               id INT AUTO_INCREMENT PRIMARY KEY,
+              hotel_id INT NOT NULL DEFAULT 0,
+              crm_room_id INT DEFAULT NULL,
               name VARCHAR(255) NOT NULL,
               slug VARCHAR(255) DEFAULT '',
               short_description TEXT DEFAULT NULL,
@@ -920,8 +1045,13 @@ async function ensureMySQLTablesAndSync(): Promise<void> {
           );
         }
 
+        // Ensure additive columns on public_site_rooms exist for older installations
+        await conn.query('ALTER TABLE public_site_rooms ADD COLUMN hotel_id INT NOT NULL DEFAULT 0 AFTER id').catch(() => {});
+        await conn.query('ALTER TABLE public_site_rooms ADD COLUMN crm_room_id INT DEFAULT NULL AFTER hotel_id').catch(() => {});
+
         const [
           [pageRows],
+          [hotelRows],
           [roomRows],
           [facilityRows],
           [galleryRows],
@@ -930,6 +1060,7 @@ async function ensureMySQLTablesAndSync(): Promise<void> {
           [pubRows],
         ]: any = await Promise.all([
           conn.query('SELECT * FROM public_site_pages ORDER BY display_order ASC'),
+          conn.query('SELECT * FROM public_site_hotels ORDER BY display_order ASC, id ASC'),
           conn.query('SELECT * FROM public_site_rooms ORDER BY display_order ASC, id ASC'),
           conn.query('SELECT * FROM public_site_facilities ORDER BY display_order ASC, id ASC'),
           conn.query('SELECT * FROM public_site_gallery ORDER BY display_order ASC, id ASC'),
@@ -972,9 +1103,45 @@ async function ensureMySQLTablesAndSync(): Promise<void> {
           }
         }
 
+        if (Array.isArray(hotelRows) && hotelRows.length > 0) {
+          store.hotels = hotelRows.map((h: any) => ({
+            id: Number(h.id),
+            crm_hotel_id: h.crm_hotel_id !== null && h.crm_hotel_id !== undefined ? Number(h.crm_hotel_id) : null,
+            name: h.name || '',
+            slug: h.slug || '',
+            city: h.city || '',
+            country: h.country || '',
+            address: h.address || '',
+            star_rating: Number(h.star_rating ?? 5),
+            short_description: h.short_description || '',
+            full_description: h.full_description || '',
+            featured_image_url: h.featured_image_url || '',
+            gallery_images: safeJsonParse(h.gallery_images_json, []),
+            amenities: safeJsonParse(h.amenities_json, []),
+            check_in_time: h.check_in_time || '14:00',
+            check_out_time: h.check_out_time || '12:00',
+            cancellation_policy: h.cancellation_policy || '',
+            contact_phone: h.contact_phone || '',
+            whatsapp_number: h.whatsapp_number || '',
+            contact_email: h.contact_email || '',
+            google_maps_url: h.google_maps_url || '',
+            google_maps_embed_url: h.google_maps_embed_url || '',
+            starting_price: h.starting_price !== null && h.starting_price !== undefined ? Number(h.starting_price) : null,
+            currency: h.currency || 'USD',
+            is_featured: Number(h.is_featured ?? 1),
+            is_visible: Number(h.is_visible ?? 1),
+            display_order: Number(h.display_order || 1),
+            created_at: h.created_at ? new Date(h.created_at).toISOString() : new Date().toISOString(),
+            updated_at: h.updated_at ? new Date(h.updated_at).toISOString() : new Date().toISOString(),
+          }));
+          store.nextIds.hotels = Math.max(store.nextIds.hotels, ...store.hotels.map(h => h.id + 1));
+        }
+
         if (Array.isArray(roomRows) && roomRows.length > 0) {
           store.rooms = roomRows.map((r: any) => ({
             id: Number(r.id),
+            hotel_id: Number(r.hotel_id ?? 0),
+            crm_room_id: r.crm_room_id !== null && r.crm_room_id !== undefined ? Number(r.crm_room_id) : null,
             name: r.name || '',
             slug: r.slug || '',
             short_description: r.short_description || '',
@@ -1121,6 +1288,10 @@ export function buildAllowlistedPublicSnapshot(
     .filter(p => p.is_visible === 1)
     .sort((a, b) => a.display_order - b.display_order);
 
+  const visibleHotels = [...(store.hotels || [])]
+    .filter(h => h.is_visible === 1)
+    .sort((a, b) => a.display_order - b.display_order);
+
   const visibleRooms = [...store.rooms]
     .filter(r => r.is_visible === 1)
     .sort((a, b) => a.display_order - b.display_order);
@@ -1140,9 +1311,94 @@ export function buildAllowlistedPublicSnapshot(
   const isConfigured = Boolean(
     s.hotel_name.trim() ||
     s.hero_heading.trim() ||
+    visibleHotels.length > 0 ||
     visibleRooms.length > 0 ||
     visibleFacilities.length > 0
   );
+
+  const mapSnapshotRoom = (r: PublicSiteRoom, parentHotel?: PublicSiteHotel) => ({
+    id: r.id,
+    hotel_id: Number(r.hotel_id || parentHotel?.id || 0),
+    hotel_name: parentHotel ? sanitizeText(parentHotel.name, 255) : undefined,
+    hotel_slug: parentHotel ? sanitizeText(parentHotel.slug, 255) : undefined,
+    name: sanitizeText(r.name, 255),
+    slug: sanitizeText(r.slug, 255),
+    short_description: sanitizeText(r.short_description, 1000),
+    full_description: sanitizeText(r.full_description, 8000),
+    featured_image_url: sanitizePublicUrl(r.featured_image_url),
+    gallery_images: (Array.isArray(r.gallery_images) ? r.gallery_images : [])
+      .map(u => sanitizePublicUrl(u))
+      .filter(Boolean),
+    capacity: sanitizeText(r.capacity, 120),
+    bed_type: sanitizeText(r.bed_type, 120),
+    room_size: sanitizeText(r.room_size, 80),
+    amenities: (Array.isArray(r.amenities) ? r.amenities : [])
+      .map(a => sanitizeText(a, 120))
+      .filter(Boolean),
+    optional_price: r.optional_price !== null && r.optional_price !== undefined && !isNaN(Number(r.optional_price))
+      ? Number(r.optional_price)
+      : null,
+    currency: sanitizeText(r.currency, 16) || 'USD',
+    price_note: sanitizeText(r.price_note, 120) || 'per night (indicative)',
+    enquiry_url: sanitizePublicUrl(r.enquiry_url),
+    is_featured: r.is_featured === 1,
+    display_order: Number(r.display_order || 1),
+  });
+
+  const hotelById = new Map<number, PublicSiteHotel>();
+  visibleHotels.forEach(h => hotelById.set(h.id, h));
+
+  const snapshotHotels = visibleHotels.map(h => {
+    const hotelRooms = visibleRooms
+      .filter(r => Number(r.hotel_id) === Number(h.id))
+      .map(r => mapSnapshotRoom(r, h));
+
+    // Calculate starting price from room types if not explicitly set on hotel
+    let startingPrice: number | null =
+      h.starting_price !== null && h.starting_price !== undefined && !isNaN(Number(h.starting_price))
+        ? Number(h.starting_price)
+        : null;
+    if (startingPrice === null && hotelRooms.length > 0) {
+      const prices = hotelRooms
+        .map(rm => rm.optional_price)
+        .filter((p): p is number => p !== null && p > 0);
+      if (prices.length > 0) {
+        startingPrice = Math.min(...prices);
+      }
+    }
+
+    return {
+      id: h.id,
+      name: sanitizeText(h.name, 255),
+      slug: sanitizeText(h.slug || h.name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''), 255),
+      city: sanitizeText(h.city, 120),
+      country: sanitizeText(h.country, 120),
+      address: sanitizeText(h.address, 500),
+      star_rating: Math.min(5, Math.max(1, Number(h.star_rating || 5))),
+      short_description: sanitizeText(h.short_description, 1000),
+      full_description: sanitizeText(h.full_description, 12000),
+      featured_image_url: sanitizePublicUrl(h.featured_image_url),
+      gallery_images: (Array.isArray(h.gallery_images) ? h.gallery_images : [])
+        .map(u => sanitizePublicUrl(u))
+        .filter(Boolean),
+      amenities: (Array.isArray(h.amenities) ? h.amenities : [])
+        .map(a => sanitizeText(a, 120))
+        .filter(Boolean),
+      check_in_time: sanitizeText(h.check_in_time, 100) || '14:00',
+      check_out_time: sanitizeText(h.check_out_time, 100) || '12:00',
+      cancellation_policy: sanitizeText(h.cancellation_policy, 3000),
+      contact_phone: sanitizeText(h.contact_phone || s.contact_phone, 100),
+      whatsapp_number: sanitizeText(h.whatsapp_number || s.whatsapp_number, 100),
+      contact_email: sanitizeText(h.contact_email || s.contact_email, 255),
+      google_maps_url: sanitizePublicUrl(h.google_maps_url),
+      google_maps_embed_url: sanitizePublicUrl(h.google_maps_embed_url),
+      starting_price: startingPrice,
+      currency: sanitizeText(h.currency, 16) || 'USD',
+      is_featured: h.is_featured === 1,
+      display_order: Number(h.display_order || 1),
+      rooms: hotelRooms,
+    };
+  });
 
   return {
     schema_version: '1.0',
@@ -1150,7 +1406,7 @@ export function buildAllowlistedPublicSnapshot(
     published_at: publishedAt,
     is_configured: isConfigured,
     hotel: {
-      name: sanitizeText(s.hotel_name, 255),
+      name: sanitizeText(s.hotel_name || 'Partner Hotel Collection', 255),
       tagline: sanitizeText(s.tagline, 255),
       short_description: sanitizeText(s.short_description, 2000),
       about_title: sanitizeText(s.about_title, 255),
@@ -1191,8 +1447,8 @@ export function buildAllowlistedPublicSnapshot(
       hero_heading: sanitizeText(s.hero_heading, 255),
       hero_subtitle: sanitizeText(s.hero_subtitle, 1000),
       hero_image_url: sanitizePublicUrl(s.hero_image_url),
-      hero_cta_text: sanitizeText(s.hero_cta_text, 100) || 'Explore Rooms',
-      hero_cta_link: sanitizePublicUrl(s.hero_cta_link) || '#rooms',
+      hero_cta_text: sanitizeText(s.hero_cta_text, 100) || 'Explore Hotels',
+      hero_cta_link: sanitizePublicUrl(s.hero_cta_link) || '#hotels',
       hero_secondary_cta_text: sanitizeText(s.hero_secondary_cta_text, 100) || 'Contact Us',
       hero_secondary_cta_link: sanitizePublicUrl(s.hero_secondary_cta_link) || '#contact',
       welcome_heading: sanitizeText(s.welcome_heading, 255),
@@ -1218,7 +1474,7 @@ export function buildAllowlistedPublicSnapshot(
         })),
     },
     seo: {
-      title: sanitizeText(s.seo_title || s.hotel_name, 255),
+      title: sanitizeText(s.seo_title || s.hotel_name || 'Partner Hotel Directory', 255),
       description: sanitizeText(s.seo_description || s.short_description, 500),
       og_title: sanitizeText(s.og_title || s.seo_title || s.hotel_name, 255),
       og_description: sanitizeText(s.og_description || s.seo_description || s.short_description, 500),
@@ -1241,31 +1497,8 @@ export function buildAllowlistedPublicSnapshot(
       show_in_footer: p.show_in_footer === 1,
       display_order: Number(p.display_order || 1),
     })),
-    rooms: visibleRooms.map(r => ({
-      id: r.id,
-      name: sanitizeText(r.name, 255),
-      slug: sanitizeText(r.slug, 255),
-      short_description: sanitizeText(r.short_description, 1000),
-      full_description: sanitizeText(r.full_description, 8000),
-      featured_image_url: sanitizePublicUrl(r.featured_image_url),
-      gallery_images: (Array.isArray(r.gallery_images) ? r.gallery_images : [])
-        .map(u => sanitizePublicUrl(u))
-        .filter(Boolean),
-      capacity: sanitizeText(r.capacity, 120),
-      bed_type: sanitizeText(r.bed_type, 120),
-      room_size: sanitizeText(r.room_size, 80),
-      amenities: (Array.isArray(r.amenities) ? r.amenities : [])
-        .map(a => sanitizeText(a, 120))
-        .filter(Boolean),
-      optional_price: r.optional_price !== null && r.optional_price !== undefined && !isNaN(Number(r.optional_price))
-        ? Number(r.optional_price)
-        : null,
-      currency: sanitizeText(r.currency, 16) || 'USD',
-      price_note: sanitizeText(r.price_note, 120) || 'per night (indicative)',
-      enquiry_url: sanitizePublicUrl(r.enquiry_url),
-      is_featured: r.is_featured === 1,
-      display_order: Number(r.display_order || 1),
-    })),
+    hotels: snapshotHotels,
+    rooms: visibleRooms.map(r => mapSnapshotRoom(r, hotelById.get(Number(r.hotel_id)))),
     facilities: visibleFacilities.map(f => ({
       id: f.id,
       name: sanitizeText(f.name, 255),
@@ -1319,12 +1552,28 @@ export const publicSiteDb = {
 
   getBootstrapData() {
     void ensureMySQLTablesAndSync();
+
+    // Auto-sync from CRM partner hotels if no public hotels exist yet and CRM has hotels
+    if (store.hotels.length === 0) {
+      try {
+        const crmHotels = dbService.getHotels(false) || [];
+        if (crmHotels.length > 0) {
+          void this.syncFromCrmHotels(1);
+        }
+      } catch {}
+    }
+
     const latestPub = store.publications.length > 0 ? store.publications[0] : null;
     const latestSnapshot = store.snapshots.length > 0 ? store.snapshots[0] : null;
+    let crmHotelsCount = 0;
+    try {
+      crmHotelsCount = (dbService.getHotels(false) || []).length;
+    } catch {}
 
     return {
       settings: store.settings,
       pages: [...store.pages].sort((a, b) => a.display_order - b.display_order),
+      hotels: [...(store.hotels || [])].sort((a, b) => a.display_order - b.display_order),
       rooms: [...store.rooms].sort((a, b) => a.display_order - b.display_order),
       facilities: [...store.facilities].sort((a, b) => a.display_order - b.display_order),
       gallery: [...store.gallery].sort((a, b) => a.display_order - b.display_order),
@@ -1341,6 +1590,7 @@ export const publicSiteDb = {
           }
         : null,
       env_status: this.getEnvironmentConfigStatus(),
+      crm_hotels_count: crmHotelsCount,
     };
   },
 
@@ -1569,6 +1819,334 @@ export const publicSiteDb = {
   },
 
   // --------------------------------------------------------------------------
+  // Multi-Hotel Directory Management & CRM Partner Hotel Sync
+  // --------------------------------------------------------------------------
+  async createHotel(data: Partial<PublicSiteHotel>, operatorId: number): Promise<PublicSiteHotel> {
+    await ensureMySQLTablesAndSync();
+    if (!store.hotels) store.hotels = [];
+    const now = new Date().toISOString();
+    const maxId = store.hotels.reduce((m, h) => Math.max(m, h.id), 0);
+    const id = Math.max(store.nextIds.hotels || 1, maxId + 1);
+    store.nextIds.hotels = id + 1;
+
+    const name = sanitizeText(data.name, 255);
+    if (!name) throw new Error('Hotel name is required');
+
+    let baseSlug = sanitizeText(
+      data.slug || name.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''),
+      255
+    ) || `hotel-${id}`;
+    // Ensure slug uniqueness
+    if (store.hotels.some(h => h.slug === baseSlug)) {
+      baseSlug = `${baseSlug}-${id}`;
+    }
+
+    const hotel: PublicSiteHotel = {
+      id,
+      crm_hotel_id: data.crm_hotel_id ? Number(data.crm_hotel_id) : null,
+      name,
+      slug: baseSlug,
+      city: sanitizeText(data.city, 120),
+      country: sanitizeText(data.country, 120),
+      address: sanitizeText(data.address, 500),
+      star_rating: Math.min(5, Math.max(1, Number(data.star_rating || 5))),
+      short_description: sanitizeText(data.short_description, 1000),
+      full_description: sanitizeText(data.full_description, 12000),
+      featured_image_url: sanitizePublicUrl(data.featured_image_url),
+      gallery_images: Array.isArray(data.gallery_images)
+        ? data.gallery_images.map(u => sanitizePublicUrl(u)).filter(Boolean)
+        : [],
+      amenities: Array.isArray(data.amenities)
+        ? data.amenities.map(a => sanitizeText(a, 120)).filter(Boolean)
+        : ['Free High-Speed Wi-Fi', '24-Hour Front Desk', 'Air Conditioning', 'Daily Housekeeping'],
+      check_in_time: sanitizeText(data.check_in_time, 100) || '14:00',
+      check_out_time: sanitizeText(data.check_out_time, 100) || '12:00',
+      cancellation_policy: sanitizeText(data.cancellation_policy, 3000),
+      contact_phone: sanitizeText(data.contact_phone, 100),
+      whatsapp_number: sanitizeText(data.whatsapp_number, 100),
+      contact_email: sanitizeText(data.contact_email, 255),
+      google_maps_url: sanitizePublicUrl(data.google_maps_url),
+      google_maps_embed_url: sanitizePublicUrl(data.google_maps_embed_url),
+      starting_price:
+        data.starting_price !== undefined && data.starting_price !== null && String(data.starting_price).trim() !== ''
+          ? Number(data.starting_price)
+          : null,
+      currency: sanitizeText(data.currency, 16) || 'USD',
+      is_featured: data.is_featured !== undefined ? (data.is_featured ? 1 : 0) : 1,
+      is_visible: data.is_visible !== undefined ? (data.is_visible ? 1 : 0) : 1,
+      display_order: data.display_order !== undefined ? Number(data.display_order) : store.hotels.length + 1,
+      created_at: now,
+      updated_at: now,
+    };
+
+    store.hotels.push(hotel);
+    await this.markDraftChanged(operatorId);
+
+    const { pool, isConnected } = getMySQLPool();
+    if (pool && isConnected) {
+      await pool.query(
+        `INSERT INTO public_site_hotels (
+          id, crm_hotel_id, name, slug, city, country, address, star_rating,
+          short_description, full_description, featured_image_url, gallery_images_json,
+          amenities_json, check_in_time, check_out_time, cancellation_policy,
+          contact_phone, whatsapp_number, contact_email, google_maps_url, google_maps_embed_url,
+          starting_price, currency, is_featured, is_visible, display_order
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          hotel.id, hotel.crm_hotel_id, hotel.name, hotel.slug, hotel.city, hotel.country,
+          hotel.address, hotel.star_rating, hotel.short_description, hotel.full_description,
+          hotel.featured_image_url, JSON.stringify(hotel.gallery_images),
+          JSON.stringify(hotel.amenities), hotel.check_in_time, hotel.check_out_time,
+          hotel.cancellation_policy, hotel.contact_phone, hotel.whatsapp_number,
+          hotel.contact_email, hotel.google_maps_url, hotel.google_maps_embed_url,
+          hotel.starting_price, hotel.currency, hotel.is_featured, hotel.is_visible, hotel.display_order,
+        ]
+      ).catch((e: any) => console.warn('[PublicSiteCMS] Failed to insert hotel in MySQL:', e.message));
+    }
+
+    return hotel;
+  },
+
+  async updateHotel(id: number, data: Partial<PublicSiteHotel>, operatorId: number): Promise<PublicSiteHotel | null> {
+    await ensureMySQLTablesAndSync();
+    const hotel = (store.hotels || []).find(h => h.id === id);
+    if (!hotel) return null;
+
+    if (data.name !== undefined) hotel.name = sanitizeText(data.name, 255);
+    if (data.slug !== undefined) {
+      const cleanSlug = sanitizeText(
+        data.slug.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''),
+        255
+      );
+      if (cleanSlug) hotel.slug = cleanSlug;
+    }
+    if (data.city !== undefined) hotel.city = sanitizeText(data.city, 120);
+    if (data.country !== undefined) hotel.country = sanitizeText(data.country, 120);
+    if (data.address !== undefined) hotel.address = sanitizeText(data.address, 500);
+    if (data.star_rating !== undefined) hotel.star_rating = Math.min(5, Math.max(1, Number(data.star_rating || 5)));
+    if (data.short_description !== undefined) hotel.short_description = sanitizeText(data.short_description, 1000);
+    if (data.full_description !== undefined) hotel.full_description = sanitizeText(data.full_description, 12000);
+    if (data.featured_image_url !== undefined) hotel.featured_image_url = sanitizePublicUrl(data.featured_image_url);
+    if (Array.isArray(data.gallery_images)) {
+      hotel.gallery_images = data.gallery_images.map(u => sanitizePublicUrl(u)).filter(Boolean);
+    }
+    if (Array.isArray(data.amenities)) {
+      hotel.amenities = data.amenities.map(a => sanitizeText(a, 120)).filter(Boolean);
+    }
+    if (data.check_in_time !== undefined) hotel.check_in_time = sanitizeText(data.check_in_time, 100);
+    if (data.check_out_time !== undefined) hotel.check_out_time = sanitizeText(data.check_out_time, 100);
+    if (data.cancellation_policy !== undefined) hotel.cancellation_policy = sanitizeText(data.cancellation_policy, 3000);
+    if (data.contact_phone !== undefined) hotel.contact_phone = sanitizeText(data.contact_phone, 100);
+    if (data.whatsapp_number !== undefined) hotel.whatsapp_number = sanitizeText(data.whatsapp_number, 100);
+    if (data.contact_email !== undefined) hotel.contact_email = sanitizeText(data.contact_email, 255);
+    if (data.google_maps_url !== undefined) hotel.google_maps_url = sanitizePublicUrl(data.google_maps_url);
+    if (data.google_maps_embed_url !== undefined) hotel.google_maps_embed_url = sanitizePublicUrl(data.google_maps_embed_url);
+    if (data.starting_price !== undefined) {
+      hotel.starting_price =
+        data.starting_price !== null && String(data.starting_price).trim() !== ''
+          ? Number(data.starting_price)
+          : null;
+    }
+    if (data.currency !== undefined) hotel.currency = sanitizeText(data.currency, 16) || 'USD';
+    if (data.is_featured !== undefined) hotel.is_featured = data.is_featured ? 1 : 0;
+    if (data.is_visible !== undefined) hotel.is_visible = data.is_visible ? 1 : 0;
+    if (data.display_order !== undefined) hotel.display_order = Number(data.display_order);
+    hotel.updated_at = new Date().toISOString();
+
+    await this.markDraftChanged(operatorId);
+
+    const { pool, isConnected } = getMySQLPool();
+    if (pool && isConnected) {
+      await pool.query(
+        `UPDATE public_site_hotels SET
+          name = ?, slug = ?, city = ?, country = ?, address = ?, star_rating = ?,
+          short_description = ?, full_description = ?, featured_image_url = ?,
+          gallery_images_json = ?, amenities_json = ?, check_in_time = ?, check_out_time = ?,
+          cancellation_policy = ?, contact_phone = ?, whatsapp_number = ?, contact_email = ?,
+          google_maps_url = ?, google_maps_embed_url = ?, starting_price = ?, currency = ?,
+          is_featured = ?, is_visible = ?, display_order = ?
+        WHERE id = ?`,
+        [
+          hotel.name, hotel.slug, hotel.city, hotel.country, hotel.address, hotel.star_rating,
+          hotel.short_description, hotel.full_description, hotel.featured_image_url,
+          JSON.stringify(hotel.gallery_images), JSON.stringify(hotel.amenities),
+          hotel.check_in_time, hotel.check_out_time, hotel.cancellation_policy,
+          hotel.contact_phone, hotel.whatsapp_number, hotel.contact_email,
+          hotel.google_maps_url, hotel.google_maps_embed_url,
+          hotel.starting_price, hotel.currency, hotel.is_featured, hotel.is_visible,
+          hotel.display_order, hotel.id,
+        ]
+      ).catch((e: any) => console.warn('[PublicSiteCMS] Failed to update hotel in MySQL:', e.message));
+    }
+
+    return hotel;
+  },
+
+  async reorderHotels(orderedIds: number[], operatorId: number): Promise<PublicSiteHotel[]> {
+    await ensureMySQLTablesAndSync();
+    orderedIds.forEach((id, idx) => {
+      const h = (store.hotels || []).find(item => item.id === Number(id));
+      if (h) h.display_order = idx + 1;
+    });
+    await this.markDraftChanged(operatorId);
+
+    const { pool, isConnected } = getMySQLPool();
+    if (pool && isConnected) {
+      for (const h of store.hotels || []) {
+        await pool.query('UPDATE public_site_hotels SET display_order = ? WHERE id = ?', [h.display_order, h.id]).catch(() => {});
+      }
+    }
+    return [...(store.hotels || [])].sort((a, b) => a.display_order - b.display_order);
+  },
+
+  async deleteHotel(id: number, operatorId: number): Promise<boolean> {
+    await ensureMySQLTablesAndSync();
+    const idx = (store.hotels || []).findIndex(h => h.id === id);
+    if (idx === -1) return false;
+    store.hotels.splice(idx, 1);
+    // Also remove rooms belonging to this hotel
+    store.rooms = (store.rooms || []).filter(r => Number(r.hotel_id) !== Number(id));
+    await this.markDraftChanged(operatorId);
+
+    const { pool, isConnected } = getMySQLPool();
+    if (pool && isConnected) {
+      await pool.query('DELETE FROM public_site_rooms WHERE hotel_id = ?', [id]).catch(() => {});
+      await pool.query('DELETE FROM public_site_hotels WHERE id = ?', [id]).catch(() => {});
+    }
+    return true;
+  },
+
+  /**
+   * 1-Click Sync from CRM Partner Hotels (`hotels` and `hotel_rooms` tables)
+   * Imports new hotels & rooms and updates blank metadata without overwriting custom photos/descriptions.
+   */
+  async syncFromCrmHotels(operatorId: number): Promise<{
+    hotels_added: number;
+    hotels_updated: number;
+    rooms_added: number;
+    total_public_hotels: number;
+  }> {
+    await ensureMySQLTablesAndSync();
+    if (!store.hotels) store.hotels = [];
+    if (!store.rooms) store.rooms = [];
+
+    const crmHotels = dbService.getHotels(false) || [];
+    let hotelsAdded = 0;
+    let hotelsUpdated = 0;
+    let roomsAdded = 0;
+
+    for (const crmHotel of crmHotels) {
+      let pubHotel = store.hotels.find(
+        h =>
+          (h.crm_hotel_id && Number(h.crm_hotel_id) === Number(crmHotel.id)) ||
+          h.name.trim().toLowerCase() === crmHotel.name.trim().toLowerCase()
+      );
+
+      if (!pubHotel) {
+        pubHotel = await this.createHotel(
+          {
+            crm_hotel_id: crmHotel.id,
+            name: crmHotel.name,
+            city: crmHotel.city || '',
+            address: crmHotel.address || '',
+            star_rating: crmHotel.star_rating || 5,
+            short_description: crmHotel.notes || `${crmHotel.star_rating || 5}-Star partner hotel in ${crmHotel.city || 'prime city center'}.`,
+            full_description:
+              crmHotel.notes ||
+              `${crmHotel.name} offers comfortable rooms, attentive guest service, and convenient access in ${crmHotel.city || 'the city'}. Browse our room types below and contact us directly for reservations.`,
+            contact_phone: crmHotel.phone || store.settings.contact_phone || '',
+            contact_email: crmHotel.email || store.settings.contact_email || '',
+            whatsapp_number: store.settings.whatsapp_number || crmHotel.phone || '',
+            is_visible: crmHotel.is_active === 1 ? 1 : 0,
+            is_featured: 1,
+          },
+          operatorId
+        );
+        hotelsAdded++;
+      } else {
+        let changed = false;
+        if (!pubHotel.crm_hotel_id) {
+          pubHotel.crm_hotel_id = crmHotel.id;
+          changed = true;
+        }
+        if (!pubHotel.city && crmHotel.city) {
+          pubHotel.city = crmHotel.city;
+          changed = true;
+        }
+        if (!pubHotel.address && crmHotel.address) {
+          pubHotel.address = crmHotel.address;
+          changed = true;
+        }
+        if (!pubHotel.contact_phone && crmHotel.phone) {
+          pubHotel.contact_phone = crmHotel.phone;
+          changed = true;
+        }
+        if (!pubHotel.contact_email && crmHotel.email) {
+          pubHotel.contact_email = crmHotel.email;
+          changed = true;
+        }
+        if (changed) {
+          await this.updateHotel(pubHotel.id, pubHotel, operatorId);
+          hotelsUpdated++;
+        }
+      }
+
+      // Sync rooms for this hotel
+      const crmRooms = dbService.getHotelRooms(crmHotel.id, false) || [];
+      for (const crmRoom of crmRooms) {
+        const existingRoom = store.rooms.find(
+          r =>
+            Number(r.hotel_id) === Number(pubHotel!.id) &&
+            ((r.crm_room_id && Number(r.crm_room_id) === Number(crmRoom.id)) ||
+              r.name.trim().toLowerCase() === crmRoom.name.trim().toLowerCase())
+        );
+
+        if (!existingRoom) {
+          await this.createRoom(
+            {
+              hotel_id: pubHotel.id,
+              crm_room_id: crmRoom.id,
+              name: crmRoom.name,
+              short_description: crmRoom.description || `Spacious ${crmRoom.name} at ${pubHotel.name}.`,
+              full_description:
+                crmRoom.description ||
+                `Enjoy a relaxing stay in our ${crmRoom.name} at ${pubHotel.name}, featuring modern furnishings, comfortable bedding, and full guest amenities.`,
+              capacity: `${crmRoom.capacity || 2} Guests`,
+              bed_type: (crmRoom.capacity || 2) >= 2 ? 'King or Twin Beds' : '1 Queen Bed',
+              room_size: '35 m²',
+              amenities: ['Free Wi-Fi', 'Air Conditioning', 'En-Suite Bathroom', 'Flat-Screen TV', 'Work Desk'],
+              optional_price: crmRoom.price_per_night ?? null,
+              currency: crmRoom.currency || 'USD',
+              price_note: 'per night',
+              is_featured: 1,
+              is_visible: crmRoom.is_active === 1 ? 1 : 0,
+            },
+            operatorId
+          );
+          roomsAdded++;
+        }
+      }
+    }
+
+    // Also attach any orphaned rooms (hotel_id === 0) to the first hotel if one exists
+    if (store.hotels.length > 0) {
+      const firstHotelId = store.hotels[0].id;
+      for (const rm of store.rooms) {
+        if (!rm.hotel_id || Number(rm.hotel_id) === 0) {
+          await this.updateRoom(rm.id, { hotel_id: firstHotelId }, operatorId);
+        }
+      }
+    }
+
+    return {
+      hotels_added: hotelsAdded,
+      hotels_updated: hotelsUpdated,
+      rooms_added: roomsAdded,
+      total_public_hotels: store.hotels.length,
+    };
+  },
+
+  // --------------------------------------------------------------------------
   // Rooms & Accommodation Management (Public Information Only)
   // --------------------------------------------------------------------------
   async createRoom(data: Partial<PublicSiteRoom>, operatorId: number): Promise<PublicSiteRoom> {
@@ -1586,8 +2164,13 @@ export const publicSiteDb = {
       255
     );
 
+    const defaultHotelId = store.hotels && store.hotels.length > 0 ? store.hotels[0].id : 0;
+    const hotelId = data.hotel_id !== undefined && data.hotel_id !== null ? Number(data.hotel_id) : defaultHotelId;
+
     const room: PublicSiteRoom = {
       id,
+      hotel_id: hotelId,
+      crm_room_id: data.crm_room_id ? Number(data.crm_room_id) : null,
       name,
       slug,
       short_description: sanitizeText(data.short_description, 1000),
@@ -1623,12 +2206,12 @@ export const publicSiteDb = {
     if (pool && isConnected) {
       await pool.query(
         `INSERT INTO public_site_rooms (
-          id, name, slug, short_description, full_description, featured_image_url,
+          id, hotel_id, crm_room_id, name, slug, short_description, full_description, featured_image_url,
           gallery_images_json, capacity, bed_type, room_size, amenities_json,
           optional_price, currency, price_note, enquiry_url, is_featured, is_visible, display_order
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
-          room.id, room.name, room.slug, room.short_description, room.full_description,
+          room.id, room.hotel_id, room.crm_room_id || null, room.name, room.slug, room.short_description, room.full_description,
           room.featured_image_url, JSON.stringify(room.gallery_images), room.capacity,
           room.bed_type, room.room_size, JSON.stringify(room.amenities),
           room.optional_price, room.currency, room.price_note, room.enquiry_url,
@@ -1645,6 +2228,7 @@ export const publicSiteDb = {
     const room = store.rooms.find(r => r.id === id);
     if (!room) return null;
 
+    if (data.hotel_id !== undefined) room.hotel_id = Number(data.hotel_id);
     if (data.name !== undefined) room.name = sanitizeText(data.name, 255);
     if (data.slug !== undefined) room.slug = sanitizeText(data.slug, 255);
     if (data.short_description !== undefined) room.short_description = sanitizeText(data.short_description, 1000);
@@ -1679,13 +2263,13 @@ export const publicSiteDb = {
     if (pool && isConnected) {
       await pool.query(
         `UPDATE public_site_rooms SET
-          name = ?, slug = ?, short_description = ?, full_description = ?, featured_image_url = ?,
+          hotel_id = ?, name = ?, slug = ?, short_description = ?, full_description = ?, featured_image_url = ?,
           gallery_images_json = ?, capacity = ?, bed_type = ?, room_size = ?, amenities_json = ?,
           optional_price = ?, currency = ?, price_note = ?, enquiry_url = ?,
           is_featured = ?, is_visible = ?, display_order = ?
         WHERE id = ?`,
         [
-          room.name, room.slug, room.short_description, room.full_description, room.featured_image_url,
+          room.hotel_id, room.name, room.slug, room.short_description, room.full_description, room.featured_image_url,
           JSON.stringify(room.gallery_images), room.capacity, room.bed_type, room.room_size,
           JSON.stringify(room.amenities), room.optional_price, room.currency, room.price_note,
           room.enquiry_url, room.is_featured, room.is_visible, room.display_order, room.id,
@@ -2060,9 +2644,13 @@ export const publicSiteDb = {
   }> {
     await ensureMySQLTablesAndSync();
 
-    // 1. Validate minimum required draft fields
+    // 1. Ensure portal brand name is populated (or default to Partner Hotel Collection)
     if (!store.settings.hotel_name || !store.settings.hotel_name.trim()) {
-      throw new Error('Hotel Name is required before publishing. Please enter your Hotel Name in General Hotel Information.');
+      if (store.hotels && store.hotels.length > 0) {
+        store.settings.hotel_name = 'SN Travels — Partner Hotel Collection';
+      } else {
+        throw new Error('Please add at least one Hotel in "Hotels & Room Types" or set your Website Brand Name in General & Branding before publishing.');
+      }
     }
 
     const now = new Date().toISOString();

@@ -1,10 +1,10 @@
 {
   "schema_version": "1.0",
-  "published_version": 0,
-  "published_at": "2026-01-01T00:00:00.000Z",
-  "is_configured": false,
+  "published_version": 1,
+  "published_at": "2026-10-18T20:26:08.113Z",
+  "is_configured": true,
   "hotel": {
-    "name": "",
+    "name": "Somthing",
     "tagline": "",
     "short_description": "",
     "about_title": "",
@@ -22,7 +22,16 @@
     "postal_code": "",
     "google_maps_url": "",
     "google_maps_embed_url": "",
-    "social_links": {},
+    "social_links": {
+      "facebook": "",
+      "instagram": "",
+      "twitter": "",
+      "linkedin": "",
+      "youtube": "",
+      "tiktok": "",
+      "wechat": "",
+      "tripadvisor": ""
+    },
     "reservation_url": "",
     "reservation_button_text": "Enquire Now",
     "check_in_time": "",
@@ -43,48 +52,271 @@
     "welcome_heading": "",
     "welcome_body": "",
     "sections": [
-      { "id": "hero", "label": "Hero Banner", "enabled": true, "order": 1 },
-      { "id": "welcome", "label": "Welcome Introduction", "enabled": true, "order": 2 },
-      { "id": "featured_rooms", "label": "Rooms & Accommodation", "enabled": true, "order": 3 },
-      { "id": "facilities", "label": "Highlighted Facilities", "enabled": true, "order": 4 },
-      { "id": "gallery", "label": "Photo Gallery Preview", "enabled": true, "order": 5 },
-      { "id": "about", "label": "About the Hotel", "enabled": true, "order": 6 },
-      { "id": "location", "label": "Location & Directions", "enabled": true, "order": 7 },
-      { "id": "faq", "label": "Frequently Asked Questions", "enabled": true, "order": 8 },
-      { "id": "contact", "label": "Contact & Enquiry", "enabled": true, "order": 9 }
+      {
+        "id": "hero",
+        "label": "Hero Banner",
+        "enabled": true,
+        "order": 1
+      },
+      {
+        "id": "welcome",
+        "label": "Welcome Introduction",
+        "enabled": true,
+        "order": 2
+      },
+      {
+        "id": "featured_rooms",
+        "label": "Rooms & Accommodation",
+        "enabled": true,
+        "order": 3
+      },
+      {
+        "id": "facilities",
+        "label": "Highlighted Facilities",
+        "enabled": true,
+        "order": 4
+      },
+      {
+        "id": "gallery",
+        "label": "Photo Gallery Preview",
+        "enabled": true,
+        "order": 5
+      },
+      {
+        "id": "about",
+        "label": "About the Hotel",
+        "enabled": true,
+        "order": 6
+      },
+      {
+        "id": "location",
+        "label": "Location & Directions",
+        "enabled": true,
+        "order": 7
+      },
+      {
+        "id": "faq",
+        "label": "Frequently Asked Questions",
+        "enabled": true,
+        "order": 8
+      },
+      {
+        "id": "contact",
+        "label": "Contact & Enquiry",
+        "enabled": true,
+        "order": 9
+      }
     ]
   },
   "navigation": {
     "header_links": [
-      { "label": "Home", "href": "#home", "visible": true },
-      { "label": "Rooms", "href": "#rooms", "visible": true },
-      { "label": "Facilities", "href": "#facilities", "visible": true },
-      { "label": "Gallery", "href": "#gallery", "visible": true },
-      { "label": "Location", "href": "#location", "visible": true },
-      { "label": "FAQ", "href": "#faq", "visible": true },
-      { "label": "Contact", "href": "#contact", "visible": true }
+      {
+        "label": "Home",
+        "href": "#home",
+        "visible": true
+      },
+      {
+        "label": "Rooms",
+        "href": "#rooms",
+        "visible": true
+      },
+      {
+        "label": "Facilities",
+        "href": "#facilities",
+        "visible": true
+      },
+      {
+        "label": "Gallery",
+        "href": "#gallery",
+        "visible": true
+      },
+      {
+        "label": "Location",
+        "href": "#location",
+        "visible": true
+      },
+      {
+        "label": "FAQ",
+        "href": "#faq",
+        "visible": true
+      },
+      {
+        "label": "Contact",
+        "href": "#contact",
+        "visible": true
+      }
     ],
     "footer_links": [
-      { "label": "Home", "href": "#home", "visible": true },
-      { "label": "Rooms", "href": "#rooms", "visible": true },
-      { "label": "Facilities", "href": "#facilities", "visible": true },
-      { "label": "Gallery", "href": "#gallery", "visible": true },
-      { "label": "Location", "href": "#location", "visible": true },
-      { "label": "FAQ", "href": "#faq", "visible": true },
-      { "label": "Contact", "href": "#contact", "visible": true }
+      {
+        "label": "Home",
+        "href": "#home",
+        "visible": true
+      },
+      {
+        "label": "Rooms",
+        "href": "#rooms",
+        "visible": true
+      },
+      {
+        "label": "Facilities",
+        "href": "#facilities",
+        "visible": true
+      },
+      {
+        "label": "Gallery",
+        "href": "#gallery",
+        "visible": true
+      },
+      {
+        "label": "Location",
+        "href": "#location",
+        "visible": true
+      },
+      {
+        "label": "FAQ",
+        "href": "#faq",
+        "visible": true
+      },
+      {
+        "label": "Contact",
+        "href": "#contact",
+        "visible": true
+      }
     ]
   },
   "seo": {
-    "title": "Official Hotel Website",
-    "description": "Official hotel information, room types, facilities, and direct contact details.",
-    "og_title": "",
+    "title": "Somthing",
+    "description": "",
+    "og_title": "Somthing",
     "og_description": "",
     "og_image_url": "",
     "canonical_domain": "",
     "robots_indexing": "index,follow",
     "sitemap_enabled": true
   },
-  "pages": [],
+  "pages": [
+    {
+      "slug": "home",
+      "title": "Home",
+      "heading": "",
+      "subheading": "",
+      "hero_image_url": "",
+      "content_body": "",
+      "structured_data": {},
+      "seo_title": "",
+      "seo_description": "",
+      "show_in_nav": true,
+      "show_in_footer": true,
+      "display_order": 1
+    },
+    {
+      "slug": "about",
+      "title": "About",
+      "heading": "About Our Hotel",
+      "subheading": "",
+      "hero_image_url": "",
+      "content_body": "",
+      "structured_data": {
+        "highlights": []
+      },
+      "seo_title": "",
+      "seo_description": "",
+      "show_in_nav": true,
+      "show_in_footer": true,
+      "display_order": 2
+    },
+    {
+      "slug": "rooms",
+      "title": "Rooms & Suites",
+      "heading": "Rooms & Accommodation",
+      "subheading": "",
+      "hero_image_url": "",
+      "content_body": "",
+      "structured_data": {
+        "disclaimer": "Displayed room rates are optional and indicative only. Contact us directly to confirm availability."
+      },
+      "seo_title": "",
+      "seo_description": "",
+      "show_in_nav": true,
+      "show_in_footer": true,
+      "display_order": 3
+    },
+    {
+      "slug": "facilities",
+      "title": "Facilities",
+      "heading": "Facilities & Guest Services",
+      "subheading": "",
+      "hero_image_url": "",
+      "content_body": "",
+      "structured_data": {},
+      "seo_title": "",
+      "seo_description": "",
+      "show_in_nav": true,
+      "show_in_footer": true,
+      "display_order": 4
+    },
+    {
+      "slug": "gallery",
+      "title": "Gallery",
+      "heading": "Photo Gallery",
+      "subheading": "",
+      "hero_image_url": "",
+      "content_body": "",
+      "structured_data": {},
+      "seo_title": "",
+      "seo_description": "",
+      "show_in_nav": true,
+      "show_in_footer": true,
+      "display_order": 5
+    },
+    {
+      "slug": "location",
+      "title": "Location",
+      "heading": "Location & Getting Here",
+      "subheading": "",
+      "hero_image_url": "",
+      "content_body": "",
+      "structured_data": {
+        "directions_note": ""
+      },
+      "seo_title": "",
+      "seo_description": "",
+      "show_in_nav": true,
+      "show_in_footer": true,
+      "display_order": 6
+    },
+    {
+      "slug": "contact",
+      "title": "Contact",
+      "heading": "Contact & Enquiries",
+      "subheading": "",
+      "hero_image_url": "",
+      "content_body": "",
+      "structured_data": {
+        "reception_hours": ""
+      },
+      "seo_title": "",
+      "seo_description": "",
+      "show_in_nav": true,
+      "show_in_footer": true,
+      "display_order": 7
+    },
+    {
+      "slug": "faq",
+      "title": "FAQ",
+      "heading": "Frequently Asked Questions",
+      "subheading": "",
+      "hero_image_url": "",
+      "content_body": "",
+      "structured_data": {},
+      "seo_title": "",
+      "seo_description": "",
+      "show_in_nav": true,
+      "show_in_footer": true,
+      "display_order": 8
+    }
+  ],
+  "hotels": [],
   "rooms": [],
   "facilities": [],
   "gallery": [],

@@ -88,9 +88,46 @@ CREATE TABLE IF NOT EXISTS `public_site_pages` (
   INDEX `idx_public_pages_order` (`display_order`, `is_visible`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- 2b. Public Hotel Directory & Dedicated Hotel Pages
+CREATE TABLE IF NOT EXISTS `public_site_hotels` (
+  `id` INT AUTO_INCREMENT PRIMARY KEY,
+  `crm_hotel_id` INT DEFAULT NULL,
+  `name` VARCHAR(255) NOT NULL,
+  `slug` VARCHAR(255) NOT NULL,
+  `city` VARCHAR(120) DEFAULT '',
+  `country` VARCHAR(120) DEFAULT '',
+  `address` TEXT DEFAULT NULL,
+  `star_rating` INT NOT NULL DEFAULT 5,
+  `short_description` TEXT DEFAULT NULL,
+  `full_description` LONGTEXT DEFAULT NULL,
+  `featured_image_url` TEXT DEFAULT NULL,
+  `gallery_images_json` LONGTEXT DEFAULT NULL,
+  `amenities_json` LONGTEXT DEFAULT NULL,
+  `check_in_time` VARCHAR(100) DEFAULT '14:00',
+  `check_out_time` VARCHAR(100) DEFAULT '12:00',
+  `cancellation_policy` TEXT DEFAULT NULL,
+  `contact_phone` VARCHAR(100) DEFAULT '',
+  `contact_email` VARCHAR(255) DEFAULT '',
+  `whatsapp_number` VARCHAR(100) DEFAULT '',
+  `google_maps_url` TEXT DEFAULT NULL,
+  `google_maps_embed_url` TEXT DEFAULT NULL,
+  `booking_url` TEXT DEFAULT NULL,
+  `starting_price` DECIMAL(10, 2) DEFAULT NULL,
+  `currency` VARCHAR(16) DEFAULT 'USD',
+  `is_featured` TINYINT(1) NOT NULL DEFAULT 1,
+  `is_visible` TINYINT(1) NOT NULL DEFAULT 1,
+  `display_order` INT NOT NULL DEFAULT 1,
+  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  INDEX `idx_public_hotels_order` (`display_order`, `is_visible`),
+  INDEX `idx_public_hotels_slug` (`slug`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 -- 3. Public Room & Accommodation Types (Isolated from confidential client bookings)
 CREATE TABLE IF NOT EXISTS `public_site_rooms` (
   `id` INT AUTO_INCREMENT PRIMARY KEY,
+  `hotel_id` INT DEFAULT NULL,
+  `crm_room_id` INT DEFAULT NULL,
   `name` VARCHAR(255) NOT NULL,
   `slug` VARCHAR(255) DEFAULT '',
   `short_description` TEXT DEFAULT NULL,
@@ -110,7 +147,8 @@ CREATE TABLE IF NOT EXISTS `public_site_rooms` (
   `display_order` INT NOT NULL DEFAULT 1,
   `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  INDEX `idx_public_rooms_order` (`display_order`, `is_visible`)
+  INDEX `idx_public_rooms_order` (`display_order`, `is_visible`),
+  INDEX `idx_public_rooms_hotel` (`hotel_id`, `display_order`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 -- 4. Public Hotel Facilities & Amenities

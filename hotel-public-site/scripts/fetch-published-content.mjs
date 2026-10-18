@@ -94,6 +94,9 @@ function validateSnapshot(snapshot) {
   if (!Array.isArray(snapshot.rooms) || !Array.isArray(snapshot.facilities) || !Array.isArray(snapshot.gallery) || !Array.isArray(snapshot.faqs)) {
     throw new Error('Snapshot is missing required array collections (rooms, facilities, gallery, or faqs).');
   }
+  if (!Array.isArray(snapshot.hotels)) {
+    snapshot.hotels = [];
+  }
 
   // Ensure no private CRM keys ever exist in the payload
   const forbiddenKeys = ['clients', 'passport_number', 'applications', 'invoices', 'users', 'password_hash', 'token'];
@@ -131,6 +134,9 @@ function writeSeoStaticFiles(snapshot) {
       const lastMod = (snapshot.published_at || new Date().toISOString()).slice(0, 10);
       const urls = [
         `${canonical}/`,
+        ...(Array.isArray(snapshot.hotels)
+          ? snapshot.hotels.filter((h) => h && h.slug).map((h) => `${canonical}/#hotel/${h.slug}`)
+          : []),
       ];
       const sitemapXml = `<?xml version="1.0" encoding="UTF-8"?>
 <urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">

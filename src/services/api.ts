@@ -34,6 +34,7 @@ import {
   PublicSiteBootstrapResponse,
   PublicSiteSettings,
   PublicSitePage,
+  PublicSiteHotel,
   PublicSiteRoom,
   PublicSiteFacility,
   PublicSiteGalleryItem,
@@ -1045,6 +1046,44 @@ class ApiService {
     return this.request<PublicSitePage>(`/public-site/admin/pages/${encodeURIComponent(slug)}`, {
       method: 'PUT',
       body: JSON.stringify(data),
+    });
+  }
+
+  async syncPublicSiteHotelsFromCrm(): Promise<{
+    hotels_added: number;
+    hotels_updated: number;
+    rooms_added: number;
+    total_public_hotels: number;
+  }> {
+    return this.request('/public-site/admin/hotels/sync-from-crm', {
+      method: 'POST',
+    });
+  }
+
+  async createPublicSiteHotel(data: Partial<PublicSiteHotel>): Promise<PublicSiteHotel> {
+    return this.request<PublicSiteHotel>('/public-site/admin/hotels', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updatePublicSiteHotel(id: number, data: Partial<PublicSiteHotel>): Promise<PublicSiteHotel> {
+    return this.request<PublicSiteHotel>(`/public-site/admin/hotels/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async reorderPublicSiteHotels(orderedIds: number[]): Promise<PublicSiteHotel[]> {
+    return this.request<PublicSiteHotel[]>('/public-site/admin/hotels-reorder', {
+      method: 'PUT',
+      body: JSON.stringify({ orderedIds }),
+    });
+  }
+
+  async deletePublicSiteHotel(id: number): Promise<{ success: boolean; message: string }> {
+    return this.request<{ success: boolean; message: string }>(`/public-site/admin/hotels/${id}`, {
+      method: 'DELETE',
     });
   }
 

@@ -630,8 +630,42 @@ export interface PublicSitePage {
   updated_at: string;
 }
 
+export interface PublicSiteHotel {
+  id: number;
+  crm_hotel_id: number | null;
+  name: string;
+  slug: string;
+  city: string;
+  country: string;
+  address: string;
+  star_rating: number;
+  short_description: string;
+  full_description: string;
+  featured_image_url: string;
+  gallery_images: string[];
+  amenities: string[];
+  check_in_time: string;
+  check_out_time: string;
+  cancellation_policy: string;
+  contact_phone: string;
+  whatsapp_number: string;
+  contact_email: string;
+  google_maps_url: string;
+  google_maps_embed_url: string;
+  booking_url?: string;
+  starting_price: number | null;
+  currency: string;
+  is_featured: number;
+  is_visible: number;
+  display_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface PublicSiteRoom {
   id: number;
+  hotel_id: number;
+  crm_room_id?: number | null;
   name: string;
   slug: string;
   short_description: string;
@@ -712,6 +746,57 @@ export interface PublicSitePublicationLog {
   updated_at: string;
 }
 
+export interface PublicSnapshotRoom {
+  id: number;
+  hotel_id: number;
+  hotel_name?: string;
+  hotel_slug?: string;
+  name: string;
+  slug: string;
+  short_description: string;
+  full_description: string;
+  featured_image_url: string;
+  gallery_images: string[];
+  capacity: string;
+  bed_type: string;
+  room_size: string;
+  amenities: string[];
+  optional_price: number | null;
+  currency: string;
+  price_note: string;
+  enquiry_url: string;
+  is_featured: boolean;
+  display_order: number;
+}
+
+export interface PublicSnapshotHotel {
+  id: number;
+  name: string;
+  slug: string;
+  city: string;
+  country: string;
+  address: string;
+  star_rating: number;
+  short_description: string;
+  full_description: string;
+  featured_image_url: string;
+  gallery_images: string[];
+  amenities: string[];
+  check_in_time: string;
+  check_out_time: string;
+  cancellation_policy: string;
+  contact_phone: string;
+  whatsapp_number: string;
+  contact_email: string;
+  google_maps_url: string;
+  google_maps_embed_url: string;
+  starting_price: number | null;
+  currency: string;
+  is_featured: boolean;
+  display_order: number;
+  rooms: PublicSnapshotRoom[];
+}
+
 export interface PublicWebsiteSnapshot {
   schema_version: '1.0';
   published_version: number;
@@ -786,25 +871,8 @@ export interface PublicWebsiteSnapshot {
     show_in_footer: boolean;
     display_order: number;
   }>;
-  rooms: Array<{
-    id: number;
-    name: string;
-    slug: string;
-    short_description: string;
-    full_description: string;
-    featured_image_url: string;
-    gallery_images: string[];
-    capacity: string;
-    bed_type: string;
-    room_size: string;
-    amenities: string[];
-    optional_price: number | null;
-    currency: string;
-    price_note: string;
-    enquiry_url: string;
-    is_featured: boolean;
-    display_order: number;
-  }>;
+  hotels: PublicSnapshotHotel[];
+  rooms: PublicSnapshotRoom[];
   facilities: Array<{
     id: number;
     name: string;
@@ -837,6 +905,7 @@ export interface PublicWebsiteSnapshot {
 export interface PublicSiteBootstrapResponse {
   settings: PublicSiteSettings;
   pages: PublicSitePage[];
+  hotels: PublicSiteHotel[];
   rooms: PublicSiteRoom[];
   facilities: PublicSiteFacility[];
   gallery: PublicSiteGalleryItem[];
@@ -855,6 +924,8 @@ export interface PublicSiteBootstrapResponse {
     export_token_configured: boolean;
     netlify_status_api_configured: boolean;
   };
+  crm_hotels_count?: number;
 }
+
 
 
