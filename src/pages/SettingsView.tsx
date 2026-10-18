@@ -124,6 +124,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [invBankDetails, setInvBankDetails] = useState('');
   const [invPaymentNotes, setInvPaymentNotes] = useState('');
   const [invTerms, setInvTerms] = useState('');
+  const [invSignatureEnabled, setInvSignatureEnabled] = useState<number>(1);
+  const [invSignatureName, setInvSignatureName] = useState('Sarah Nadeem');
+  const [invSignatureDesignation, setInvSignatureDesignation] = useState('Managing Director');
+  const [invSignatureImageUrl, setInvSignatureImageUrl] = useState('');
+  const [invSignatureStyle, setInvSignatureStyle] = useState<'script' | 'image' | 'line_only'>('script');
   const [invCurrency, setInvCurrency] = useState('MYR');
   const [invPrefix, setInvPrefix] = useState('INV-2026-');
   const [invNextNumber, setInvNextNumber] = useState(1001);
@@ -412,8 +417,13 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         setInvBankDetails(invS.bank_details || '');
         setInvPaymentNotes(invS.payment_notes || '');
         setInvTerms(invS.terms_and_conditions || '');
+        setInvSignatureEnabled(invS.signature_enabled !== undefined ? Number(invS.signature_enabled) : 1);
+        setInvSignatureName(invS.signature_name !== undefined ? invS.signature_name : 'Sarah Nadeem');
+        setInvSignatureDesignation(invS.signature_designation !== undefined ? invS.signature_designation : 'Managing Director');
+        setInvSignatureImageUrl(invS.signature_image_url || '');
+        setInvSignatureStyle(invS.signature_style || 'script');
         setInvCurrency(invS.default_currency || 'MYR');
-        setInvPrefix(invS.invoice_prefix || 'INV-2026-',);
+        setInvPrefix(invS.invoice_prefix || 'INV-2026-');
         setInvNextNumber(invS.next_number || 1001);
       }
       if (Array.isArray(catItems)) {
@@ -459,6 +469,11 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         bank_details: invBankDetails.trim(),
         payment_notes: invPaymentNotes.trim(),
         terms_and_conditions: invTerms.trim(),
+        signature_enabled: invSignatureEnabled,
+        signature_name: invSignatureName.trim(),
+        signature_designation: invSignatureDesignation.trim(),
+        signature_image_url: invSignatureImageUrl.trim() || null,
+        signature_style: invSignatureStyle,
         default_currency: invCurrency.trim() || 'MYR',
         invoice_prefix: invPrefix.trim() || 'INV-2026-',
         next_number: Number(invNextNumber) || 1001,
@@ -2301,7 +2316,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
                 <div className="sm:col-span-2">
                   <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Standard Terms &amp; Conditions (Footer)
+                    Standard Terms &amp; Conditions (Left Side of Footer)
                   </label>
                   <textarea
                     rows={3}
@@ -2310,6 +2325,195 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     placeholder="1. Embassy fees are subject to official consular policies.&#10;2. Invoices must be cleared before document submission or passport release."
                     className="w-full text-xs bg-white border border-slate-300 rounded-xl p-3 text-slate-800 focus:ring-2 focus:ring-sky-500 leading-relaxed"
                   />
+                </div>
+
+                {/* Authorized Signature Configuration (Right Side of Terms & Conditions) */}
+                <div className="sm:col-span-2 bg-slate-50 border border-slate-200 rounded-xl p-4 sm:p-5 space-y-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-slate-200/80">
+                    <div>
+                      <h4 className="text-xs font-bold text-slate-900 flex items-center gap-2">
+                        <span>Invoice Signature Block (Right Side of Terms &amp; Conditions)</span>
+                        <span className="text-[10px] bg-sky-100 text-sky-800 border border-sky-200 px-2 py-0.5 rounded-full font-semibold">
+                          Footer Right
+                        </span>
+                      </h4>
+                      <p className="text-[11px] text-slate-500 mt-0.5">
+                        Configure the signature line, custom name, and designation displayed on the right side of the Terms &amp; Conditions section on every invoice.
+                      </p>
+                    </div>
+
+                    <button
+                      type="button"
+                      onClick={() => setInvSignatureEnabled(prev => (prev === 1 ? 0 : 1))}
+                      className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold border transition cursor-pointer self-start sm:self-auto ${
+                        invSignatureEnabled === 1
+                          ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                          : 'bg-slate-200/70 text-slate-600 border-slate-300'
+                      }`}
+                    >
+                      {invSignatureEnabled === 1 ? (
+                        <>
+                          <ToggleRight className="w-4 h-4 text-emerald-600" />
+                          <span>Signature Enabled</span>
+                        </>
+                      ) : (
+                        <>
+                          <ToggleLeft className="w-4 h-4 text-slate-500" />
+                          <span>Signature Hidden</span>
+                        </>
+                      )}
+                    </button>
+                  </div>
+
+                  {invSignatureEnabled === 1 && (
+                    <div className="space-y-4">
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-700 mb-1">
+                            Signatory Name (Under Line)
+                          </label>
+                          <input
+                            type="text"
+                            value={invSignatureName}
+                            onChange={(e) => setInvSignatureName(e.target.value)}
+                            placeholder="e.g. Sarah Nadeem"
+                            className="w-full text-xs bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 text-slate-800 font-semibold focus:ring-2 focus:ring-sky-500"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-700 mb-1">
+                            Designation / Title (Under Name)
+                          </label>
+                          <input
+                            type="text"
+                            value={invSignatureDesignation}
+                            onChange={(e) => setInvSignatureDesignation(e.target.value)}
+                            placeholder="e.g. Managing Director"
+                            className="w-full text-xs bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 text-slate-800 focus:ring-2 focus:ring-sky-500"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-700 mb-1">
+                            Signature Above Line
+                          </label>
+                          <select
+                            value={invSignatureStyle}
+                            onChange={(e) => setInvSignatureStyle(e.target.value as 'script' | 'image' | 'line_only')}
+                            className="w-full text-xs bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 font-semibold text-slate-800 focus:ring-2 focus:ring-sky-500"
+                          >
+                            <option value="script">Handwritten Signature + Line</option>
+                            <option value="line_only">Blank Line Only (Name &amp; Designation)</option>
+                            <option value="image">Upload / Link Signature Image</option>
+                          </select>
+                        </div>
+                      </div>
+
+                      {invSignatureStyle === 'image' && (
+                        <div className="bg-white border border-slate-200 rounded-xl p-3.5 space-y-2">
+                          <label className="block text-xs font-semibold text-slate-700">
+                            Signature Image (Upload Transparent PNG or Paste Image / Google Drive Link)
+                          </label>
+                          <div className="flex flex-col sm:flex-row gap-2">
+                            <input
+                              type="text"
+                              value={invSignatureImageUrl.startsWith('data:') ? '' : invSignatureImageUrl}
+                              onChange={(e) => setInvSignatureImageUrl(e.target.value)}
+                              placeholder={
+                                invSignatureImageUrl.startsWith('data:')
+                                  ? 'Custom signature image uploaded (paste URL to replace)'
+                                  : 'Paste signature image URL or Google Drive link'
+                              }
+                              className="flex-1 text-xs bg-slate-50 border border-slate-300 rounded-xl px-3 py-2 font-mono text-slate-800 focus:bg-white focus:ring-2 focus:ring-sky-500"
+                            />
+                            <label className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 bg-sky-50 hover:bg-sky-100 text-sky-800 border border-sky-200 rounded-xl text-xs font-semibold cursor-pointer transition shrink-0">
+                              <Upload className="w-3.5 h-3.5 text-sky-700" />
+                              <span>Upload Signature</span>
+                              <input
+                                type="file"
+                                accept="image/*"
+                                className="hidden"
+                                onChange={(e) => {
+                                  const file = e.target.files?.[0];
+                                  if (!file) return;
+                                  const reader = new FileReader();
+                                  reader.onload = () => {
+                                    if (typeof reader.result === 'string') {
+                                      setInvSignatureImageUrl(reader.result);
+                                    }
+                                  };
+                                  reader.readAsDataURL(file);
+                                  e.target.value = '';
+                                }}
+                              />
+                            </label>
+                            {invSignatureImageUrl && (
+                              <button
+                                type="button"
+                                onClick={() => setInvSignatureImageUrl('')}
+                                className="px-3 py-2 text-xs font-semibold text-rose-600 hover:bg-rose-50 border border-rose-200 rounded-xl transition cursor-pointer"
+                              >
+                                Clear
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Live Invoice Footer Preview (Terms & Conditions Left + Signature Right) */}
+                      <div className="bg-white border border-slate-200 rounded-xl p-4 sm:p-5 space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] font-bold uppercase tracking-wider text-sky-800 bg-sky-50 px-2 py-0.5 rounded border border-sky-200">
+                            Live Invoice Footer Preview
+                          </span>
+                        </div>
+                        <div className="pt-3 border-t border-slate-200/80 flex flex-col sm:flex-row justify-between items-start sm:items-end gap-6">
+                          <div className="flex-1 min-w-0 text-[10.5px] text-slate-500 space-y-1">
+                            <span className="font-bold text-[#0B2A5B] uppercase tracking-wider block text-[10px]">
+                              Terms &amp; Conditions
+                            </span>
+                            <p className="whitespace-pre-wrap break-words leading-relaxed">
+                              {invTerms || '1. Embassy visa processing and biometric slots are subject to consular verification.\n2. Invoices must be cleared before document submission or passport delivery.'}
+                            </p>
+                          </div>
+
+                          <div className="w-52 shrink-0 text-center flex flex-col items-center self-end sm:self-auto">
+                            <div className="h-11 flex items-end justify-center pb-1 w-full">
+                              {invSignatureStyle === 'image' && invSignatureImageUrl ? (
+                                <img
+                                  src={getInvoiceLogoCandidates(invSignatureImageUrl)[0] || invSignatureImageUrl}
+                                  alt="Signature"
+                                  className="max-h-10 max-w-[160px] object-contain"
+                                />
+                              ) : invSignatureStyle === 'script' ? (
+                                <span
+                                  className="text-xl text-[#0B2A5B] italic font-serif select-none tracking-wide"
+                                  style={{ fontFamily: "'Brush Script MT', 'Segoe Script', 'Snell Roundhand', 'Apple Chancery', cursive" }}
+                                >
+                                  {invSignatureName.trim() || 'Authorized Signatory'}
+                                </span>
+                              ) : null}
+                            </div>
+                            <div className="w-full border-t-[1.5px] border-slate-800 pt-1.5">
+                              {invSignatureName.trim() && (
+                                <div className="text-xs font-bold text-slate-900 leading-tight">
+                                  {invSignatureName.trim()}
+                                </div>
+                              )}
+                              {invSignatureDesignation.trim() && (
+                                <div className="text-[11px] font-medium text-slate-600 mt-0.5 leading-tight">
+                                  {invSignatureDesignation.trim().startsWith('(') && invSignatureDesignation.trim().endsWith(')')
+                                    ? invSignatureDesignation.trim()
+                                    : `(${invSignatureDesignation.trim()})`}
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
 

@@ -93,6 +93,11 @@ async function probeMySQLConnection(force = false): Promise<boolean> {
               bank_details TEXT DEFAULT NULL,
               payment_notes TEXT DEFAULT NULL,
               terms_and_conditions TEXT DEFAULT NULL,
+              signature_enabled TINYINT(1) NOT NULL DEFAULT 1,
+              signature_name VARCHAR(150) DEFAULT 'Sarah Nadeem',
+              signature_designation VARCHAR(150) DEFAULT 'Managing Director',
+              signature_image_url LONGTEXT DEFAULT NULL,
+              signature_style VARCHAR(20) DEFAULT 'script',
               default_currency VARCHAR(10) NOT NULL DEFAULT 'MYR',
               invoice_prefix VARCHAR(20) NOT NULL DEFAULT 'INV-2026-',
               next_number INT NOT NULL DEFAULT 1001,
@@ -203,14 +208,24 @@ async function probeMySQLConnection(force = false): Promise<boolean> {
             conn.query("SELECT setting_value FROM settings WHERE setting_key = 'default_currency_myr_set' LIMIT 1").catch(() => [[]]),
           ]);
 
+          // Ensure new signature columns exist on existing MySQL invoice_settings table
+          await Promise.allSettled([
+            conn.query("ALTER TABLE invoice_settings ADD COLUMN signature_enabled TINYINT(1) NOT NULL DEFAULT 1").catch(() => {}),
+            conn.query("ALTER TABLE invoice_settings ADD COLUMN signature_name VARCHAR(150) DEFAULT 'Sarah Nadeem'").catch(() => {}),
+            conn.query("ALTER TABLE invoice_settings ADD COLUMN signature_designation VARCHAR(150) DEFAULT 'Managing Director'").catch(() => {}),
+            conn.query("ALTER TABLE invoice_settings ADD COLUMN signature_image_url LONGTEXT DEFAULT NULL").catch(() => {}),
+            conn.query("ALTER TABLE invoice_settings ADD COLUMN signature_style VARCHAR(20) DEFAULT 'script'").catch(() => {}),
+          ]);
+
           if (invSetRows && invSetRows[0] && Number(invSetRows[0].cnt) === 0) {
             const initSet = getInitialData().invoice_settings;
             await conn.query(
               `INSERT IGNORE INTO invoice_settings (
                 id, company_name, company_tagline, logo_url, phone, whatsapp, email, website,
                 address, tax_number, bank_details, payment_notes, terms_and_conditions,
+                signature_enabled, signature_name, signature_designation, signature_image_url, signature_style,
                 default_currency, invoice_prefix, next_number
-              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
               [
                 1,
                 initSet.company_name,
@@ -225,6 +240,11 @@ async function probeMySQLConnection(force = false): Promise<boolean> {
                 initSet.bank_details,
                 initSet.payment_notes,
                 initSet.terms_and_conditions,
+                initSet.signature_enabled ?? 1,
+                initSet.signature_name || 'Sarah Nadeem',
+                initSet.signature_designation || 'Managing Director',
+                initSet.signature_image_url || null,
+                initSet.signature_style || 'script',
                 initSet.default_currency,
                 initSet.invoice_prefix,
                 initSet.next_number,
@@ -607,6 +627,11 @@ interface InvoiceSettings {
   bank_details?: string;
   payment_notes?: string;
   terms_and_conditions?: string;
+  signature_enabled?: number;
+  signature_name?: string;
+  signature_designation?: string;
+  signature_image_url?: string | null;
+  signature_style?: 'script' | 'image' | 'line_only';
   default_currency: string;
   invoice_prefix: string;
   next_number: number;
@@ -822,6 +847,11 @@ function getInitialData(): StoreData {
       bank_details: 'Bank: Emirates NBD\nAccount Title: SN Travels Agency LLC\nIBAN: AE24 0260 0000 0000 1234 56\nSWIFT: ENBDDBAXXX',
       payment_notes: 'Please reference your Invoice number when transferring funds. Payment due upon presentation.',
       terms_and_conditions: '1. Embassy visa processing and biometric slots are subject to consular verification.\n2. Invoices must be cleared before document submission or passport delivery.\n3. Official receipt issued upon payment confirmation.',
+      signature_enabled: 1,
+      signature_name: 'Sarah Nadeem',
+      signature_designation: 'Managing Director',
+      signature_image_url: null,
+      signature_style: 'script',
       default_currency: 'MYR',
       invoice_prefix: 'INV-2026-',
       next_number: 1004,
@@ -979,12 +1009,21 @@ function loadStore(): StoreData {
       if (!parsed.invoice_settings) {
         parsed.invoice_settings = getInitialData().invoice_settings;
         needsSave = true;
-      } else if (
-        !parsed.invoice_settings.logo_url ||
-        parsed.invoice_settings.logo_url.includes('photo-1569154941061')
-      ) {
-        parsed.invoice_settings.logo_url = 'https://lh3.googleusercontent.com/d/1wJCY1RJCq0hASsYGGRnScbXDOW9YdPsM';
-        needsSave = true;
+      } else {
+        if (
+          !parsed.invoice_settings.logo_url ||
+          parsed.invoice_settings.logo_url.includes('photo-1569154941061')
+        ) {
+          parsed.invoice_settings.logo_url = 'https://lh3.googleusercontent.com/d/1wJCY1RJCq0hASsYGGRnScbXDOW9YdPsM';
+          needsSave = true;
+        }
+        if (parsed.invoice_settings.signature_enabled === undefined) {
+          parsed.invoice_settings.signature_enabled = 1;
+          parsed.invoice_settings.signature_name = parsed.invoice_settings.signature_name || 'Sarah Nadeem';
+          parsed.invoice_settings.signature_designation = parsed.invoice_settings.signature_designation || 'Managing Director';
+          parsed.invoice_settings.signature_style = parsed.invoice_settings.signature_style || 'script';
+          needsSave = true;
+        }
       }
       if (!parsed.invoice_catalog_items || parsed.invoice_catalog_items.length === 0) {
         parsed.invoice_catalog_items = getInitialData().invoice_catalog_items;
@@ -1328,7 +1367,13 @@ async function syncFromMySQL(force = false): Promise<void> {
 
       if (Array.isArray(invS) && invS.length > 0) {
         store.invoice_settings = {
+          ...store.invoice_settings,
           ...invS[0],
+          signature_enabled: invS[0].signature_enabled !== undefined ? Number(invS[0].signature_enabled) : (store.invoice_settings?.signature_enabled ?? 1),
+          signature_name: invS[0].signature_name ?? store.invoice_settings?.signature_name ?? 'Sarah Nadeem',
+          signature_designation: invS[0].signature_designation ?? store.invoice_settings?.signature_designation ?? 'Managing Director',
+          signature_image_url: invS[0].signature_image_url ?? store.invoice_settings?.signature_image_url ?? null,
+          signature_style: invS[0].signature_style || store.invoice_settings?.signature_style || 'script',
           next_number: Number(invS[0].next_number) || 1001,
         };
       }
@@ -5004,8 +5049,13 @@ export const dbService = {
     if (pool && isConnectedToMySQL) {
       try {
         await pool.query(
-          `INSERT INTO invoice_settings (id, company_name, company_tagline, logo_url, phone, whatsapp, email, website, address, tax_number, bank_details, payment_notes, terms_and_conditions, default_currency, invoice_prefix, next_number)
-           VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `INSERT INTO invoice_settings (
+             id, company_name, company_tagline, logo_url, phone, whatsapp, email, website,
+             address, tax_number, bank_details, payment_notes, terms_and_conditions,
+             signature_enabled, signature_name, signature_designation, signature_image_url, signature_style,
+             default_currency, invoice_prefix, next_number
+           )
+           VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
            ON DUPLICATE KEY UPDATE
              company_name = VALUES(company_name),
              company_tagline = VALUES(company_tagline),
@@ -5019,6 +5069,11 @@ export const dbService = {
              bank_details = VALUES(bank_details),
              payment_notes = VALUES(payment_notes),
              terms_and_conditions = VALUES(terms_and_conditions),
+             signature_enabled = VALUES(signature_enabled),
+             signature_name = VALUES(signature_name),
+             signature_designation = VALUES(signature_designation),
+             signature_image_url = VALUES(signature_image_url),
+             signature_style = VALUES(signature_style),
              default_currency = VALUES(default_currency),
              invoice_prefix = VALUES(invoice_prefix),
              next_number = VALUES(next_number)`,
@@ -5035,6 +5090,11 @@ export const dbService = {
             updated.bank_details || '',
             updated.payment_notes || '',
             updated.terms_and_conditions || '',
+            updated.signature_enabled !== undefined ? Number(updated.signature_enabled) : 1,
+            updated.signature_name ?? 'Sarah Nadeem',
+            updated.signature_designation ?? 'Managing Director',
+            updated.signature_image_url || null,
+            updated.signature_style || 'script',
             updated.default_currency || 'MYR',
             updated.invoice_prefix || 'INV-2026-',
             updated.next_number || 1001,

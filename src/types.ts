@@ -507,6 +507,11 @@ export interface InvoiceSettings {
   bank_details?: string;
   payment_notes?: string;
   terms_and_conditions?: string;
+  signature_enabled?: number;
+  signature_name?: string;
+  signature_designation?: string;
+  signature_image_url?: string | null;
+  signature_style?: 'script' | 'image' | 'line_only';
   default_currency: string;
   invoice_prefix: string;
   next_number: number;

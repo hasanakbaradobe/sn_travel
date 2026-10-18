@@ -163,7 +163,9 @@ export const InvoiceDetailModal: React.FC<InvoiceDetailModalProps> = ({
         }
 
         if (!inlinedDataUrl) {
-          for (const candidateUrl of logoCandidates) {
+          const rawUrl = clonedImg.getAttribute('data-raw-url') || clonedImg.getAttribute('src') || '';
+          const imgCandidates = getInvoiceLogoCandidates(rawUrl);
+          for (const candidateUrl of (imgCandidates.length > 0 ? imgCandidates : logoCandidates)) {
             const loaded = await loadLogoDataUrl(candidateUrl);
             if (loaded?.dataUrl) {
               inlinedDataUrl = loaded.dataUrl;
@@ -795,15 +797,70 @@ export const InvoiceDetailModal: React.FC<InvoiceDetailModalProps> = ({
                 </div>
               </div>
 
-              {/* Terms and Conditions & Minimal Brand Footer */}
-              {settings?.terms_and_conditions && (
-                <div className="pt-6 border-t border-slate-200/80 text-[10.5px] text-slate-500 space-y-1.5">
-                  <span className="font-bold text-[#0B2A5B] uppercase tracking-wider block text-[10px]">
-                    Terms & Conditions
-                  </span>
-                  <p className="whitespace-pre-wrap break-words leading-relaxed">
-                    {settings.terms_and_conditions}
-                  </p>
+              {/* Terms and Conditions (Left) & Authorized Signature Block (Right) */}
+              {(settings?.terms_and_conditions || (settings?.signature_enabled ?? 1) === 1) && (
+                <div className="pt-6 border-t border-slate-200/80 flex flex-col sm:flex-row justify-between items-start sm:items-end gap-8">
+                  {/* Left: Terms & Conditions */}
+                  <div className="flex-1 min-w-0 text-[10.5px] text-slate-500 space-y-1.5">
+                    {settings?.terms_and_conditions && (
+                      <>
+                        <span className="font-bold text-[#0B2A5B] uppercase tracking-wider block text-[10px]">
+                          Terms &amp; Conditions
+                        </span>
+                        <p className="whitespace-pre-wrap break-words leading-relaxed">
+                          {settings.terms_and_conditions}
+                        </p>
+                      </>
+                    )}
+                  </div>
+
+                  {/* Right: Signature Block (Line + Signatory Name + Designation) */}
+                  {(settings?.signature_enabled ?? 1) === 1 && (
+                    <div className="w-52 sm:w-56 shrink-0 text-center flex flex-col items-center self-end sm:self-auto">
+                      {/* Area above signature line */}
+                      <div className="h-11 flex items-end justify-center pb-1 w-full">
+                        {settings?.signature_style === 'image' && settings?.signature_image_url ? (
+                          <img
+                            src={getInvoiceLogoCandidates(settings.signature_image_url)[0] || settings.signature_image_url}
+                            data-raw-url={settings.signature_image_url}
+                            crossOrigin="anonymous"
+                            alt={settings?.signature_name || 'Authorized Signature'}
+                            className="max-h-10 max-w-[170px] object-contain"
+                          />
+                        ) : (settings?.signature_style || 'script') === 'script' ? (
+                          <span
+                            className="text-xl text-[#0B2A5B] italic font-serif select-none tracking-wide"
+                            style={{
+                              fontFamily: "'Brush Script MT', 'Segoe Script', 'Snell Roundhand', 'Apple Chancery', cursive",
+                            }}
+                          >
+                            {(settings?.signature_name ?? 'Sarah Nadeem').trim() || 'Authorized Signatory'}
+                          </span>
+                        ) : null}
+                      </div>
+
+                      {/* Signature Horizontal Line & Controlled Text Below */}
+                      <div className="w-full border-t-[1.5px] border-slate-800 pt-1.5">
+                        {(settings?.signature_name ?? 'Sarah Nadeem').trim() && (
+                          <div className="text-xs font-bold text-slate-900 leading-tight">
+                            {(settings?.signature_name ?? 'Sarah Nadeem').trim()}
+                          </div>
+                        )}
+                        {(settings?.signature_designation ?? 'Managing Director').trim() && (() => {
+                          const rawDesig = (settings?.signature_designation ?? 'Managing Director').trim();
+                          const formattedDesig =
+                            rawDesig.startsWith('(') && rawDesig.endsWith(')')
+                              ? rawDesig
+                              : `(${rawDesig})`;
+                          return (
+                            <div className="text-[11px] font-medium text-slate-600 mt-0.5 leading-tight">
+                              {formattedDesig}
+                            </div>
+                          );
+                        })()}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 
