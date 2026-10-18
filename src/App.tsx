@@ -23,6 +23,7 @@ const ClientProfileView = React.lazy(() => import('./pages/ClientProfileView').t
 const ApplicationsView = React.lazy(() => import('./pages/ApplicationsView').then(m => ({ default: m.ApplicationsView })));
 const HotelsView = React.lazy(() => import('./pages/HotelsView').then(m => ({ default: m.HotelsView })));
 const FollowUpsView = React.lazy(() => import('./pages/FollowUpsView').then(m => ({ default: m.FollowUpsView })));
+const InvoicesView = React.lazy(() => import('./pages/InvoicesView').then(m => ({ default: m.InvoicesView })));
 const CalendarView = React.lazy(() => import('./pages/CalendarView').then(m => ({ default: m.CalendarView })));
 const TasksView = React.lazy(() => import('./pages/TasksView').then(m => ({ default: m.TasksView })));
 const SettingsView = React.lazy(() => import('./pages/SettingsView').then(m => ({ default: m.SettingsView })));
@@ -75,7 +76,7 @@ const ViewLoadingSkeleton: React.FC = () => (
 export default function App() {
   // Navigation & View State
   const [currentTab, setCurrentTab] = useState<NavTab>('dashboard');
-  const [settingsTab, setSettingsTab] = useState<'fields' | 'visatypes' | 'countries' | 'hotels' | 'users' | 'cleanup' | 'security'>('fields');
+  const [settingsTab, setSettingsTab] = useState<'fields' | 'visatypes' | 'countries' | 'hotels' | 'invoices' | 'users' | 'cleanup' | 'security'>('fields');
   const [selectedClientId, setSelectedClientId] = useState<number | null>(null);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [globalSearch, setGlobalSearch] = useState('');
@@ -351,6 +352,8 @@ export default function App() {
     }
     if (clean === 'applications') return { tab: 'applications' };
     if (clean === 'hotels') return { tab: 'hotels' };
+    if (clean === 'followups') return { tab: 'followups' };
+    if (clean === 'invoices') return { tab: 'invoices' };
     if (clean === 'calendar') return { tab: 'calendar' };
     if (clean === 'tasks') return { tab: 'tasks' };
     if (clean === 'settings') return { tab: 'settings' };
@@ -921,6 +924,15 @@ export default function App() {
                   setNewAppModalOpen(true);
                 }}
                 onRefreshData={() => refreshAllData(true)}
+              />
+            )}
+
+            {/* Invoices View — Customer Billing & Invoices */}
+            {currentTab === 'invoices' && (
+              <InvoicesView
+                currentUser={currentUser}
+                clients={clients}
+                onSelectClient={(cid) => handleOpenClient(cid)}
               />
             )}
 

@@ -41,6 +41,8 @@ import {
   ExternalLink,
   CheckCircle2,
   MessageSquare,
+  Receipt,
+  Upload,
 } from 'lucide-react';
 import { api } from '../services/api';
 import {
@@ -56,15 +58,18 @@ import {
   PurgeTargets,
   PurgePreviewResult,
   PurgeExecuteResult,
+  InvoiceSettings,
+  InvoiceCatalogItem,
 } from '../types';
+import { getInvoiceLogoCandidates } from '../utils/imageUrl';
 import { ConfirmDeleteModal } from '../components/ConfirmDeleteModal';
 
 interface SettingsViewProps {
   currentUser: User | null;
   dbStatus: DatabaseStatus | null;
   onOpenDbModal?: () => void;
-  initialTab?: 'fields' | 'visatypes' | 'countries' | 'hotels' | 'users' | 'cleanup' | 'security';
-  onTabChange?: (tab: 'fields' | 'visatypes' | 'countries' | 'hotels' | 'users' | 'cleanup' | 'security') => void;
+  initialTab?: 'fields' | 'visatypes' | 'countries' | 'hotels' | 'invoices' | 'users' | 'cleanup' | 'security';
+  onTabChange?: (tab: 'fields' | 'visatypes' | 'countries' | 'hotels' | 'invoices' | 'users' | 'cleanup' | 'security') => void;
   onHotelsUpdated?: () => void;
   onDataPurged?: () => void;
 }
@@ -79,7 +84,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   onDataPurged,
 }) => {
   const isSuperAdmin = currentUser?.role === 'super_admin';
-  const [activeTab, setActiveTab] = useState<'fields' | 'visatypes' | 'countries' | 'hotels' | 'users' | 'cleanup' | 'security'>(
+  const [activeTab, setActiveTab] = useState<'fields' | 'visatypes' | 'countries' | 'hotels' | 'invoices' | 'users' | 'cleanup' | 'security'>(
     initialTab === ('database' as any) ? 'fields' : initialTab
   );
 
@@ -91,12 +96,57 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     }
   }, [initialTab]);
 
-  const handleSelectTab = (tab: 'fields' | 'visatypes' | 'countries' | 'hotels' | 'users' | 'cleanup' | 'security') => {
+  const handleSelectTab = (tab: 'fields' | 'visatypes' | 'countries' | 'hotels' | 'invoices' | 'users' | 'cleanup' | 'security') => {
     setActiveTab(tab);
     if (onTabChange) {
       onTabChange(tab);
     }
   };
+
+  // Invoice Settings & Configurable Catalog State
+  const [invoiceSettings, setInvoiceSettings] = useState<InvoiceSettings | null>(null);
+  const [loadingInvoiceSettings, setLoadingInvoiceSettings] = useState(false);
+  const [savingInvoiceSettings, setSavingInvoiceSettings] = useState(false);
+  const [invoiceSettingsSuccess, setInvoiceSettingsSuccess] = useState(false);
+
+  // Form fields for invoice settings
+  const [invCompanyName, setInvCompanyName] = useState('SN Travels Agency');
+  const [invCompanyTagline, setInvCompanyTagline] = useState('China Visa & Travel Processing Specialists');
+  const [invLogoUrl, setInvLogoUrl] = useState('');
+  const [invLogoCandidateIdx, setInvLogoCandidateIdx] = useState(0);
+  const [invLogoFailed, setInvLogoFailed] = useState(false);
+  const [invPhone, setInvPhone] = useState('+971 4 399 2200');
+  const [invWhatsapp, setInvWhatsapp] = useState('+971 50 123 4567');
+  const [invEmail, setInvEmail] = useState('visa@sn-travelsagency.com');
+  const [invWebsite, setInvWebsite] = useState('sn-travelsagency.com');
+  const [invAddress, setInvAddress] = useState('Office 402, Al Hudaiba Awards Building, 2nd December St, Dubai, UAE');
+  const [invTaxNumber, setInvTaxNumber] = useState('TRN-100482910400003');
+  const [invBankDetails, setInvBankDetails] = useState('');
+  const [invPaymentNotes, setInvPaymentNotes] = useState('');
+  const [invTerms, setInvTerms] = useState('');
+  const [invCurrency, setInvCurrency] = useState('MYR');
+  const [invPrefix, setInvPrefix] = useState('INV-2026-');
+  const [invNextNumber, setInvNextNumber] = useState(1001);
+
+  // Catalog items (preset fields that staff choose on invoice)
+  const [catalogItems, setCatalogItems] = useState<InvoiceCatalogItem[]>([]);
+  const [loadingCatalog, setLoadingCatalog] = useState(false);
+  const [fieldModalOpen, setFieldModalOpen] = useState(false);
+  const [editingCatalogItem, setEditingCatalogItem] = useState<InvoiceCatalogItem | null>(null);
+  const [catalogItemToDelete, setCatalogItemToDelete] = useState<InvoiceCatalogItem | null>(null);
+  const [catalogDeleteModalOpen, setCatalogDeleteModalOpen] = useState(false);
+  const [deletingCatalogItem, setDeletingCatalogItem] = useState(false);
+
+  // Field modal form fields
+  const [catalogName, setCatalogName] = useState('');
+  const [catalogCategory, setCatalogCategory] = useState('Visa Services');
+  const [catalogUnitPrice, setCatalogUnitPrice] = useState<number>(0);
+  const [catalogDesc, setCatalogDesc] = useState('');
+  const [catalogIsActive, setCatalogIsActive] = useState(1);
+  const [catalogDisplayOrder, setCatalogDisplayOrder] = useState<number>(1);
+  const [reorderingCatalog, setReorderingCatalog] = useState(false);
+  const [savingCatalogItem, setSavingCatalogItem] = useState(false);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
 
   // Custom Fields State
   const [customFields, setCustomFields] = useState<CustomField[]>([]);
@@ -334,18 +384,41 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const loadData = async () => {
     try {
       setLoadingFields(true);
-      const [flds, vts, ctrs, usrs, htls] = await Promise.all([
+      const [flds, vts, ctrs, usrs, htls, invS, catItems] = await Promise.all([
         api.getCustomFields(false),
         api.getVisaTypes(false),
         api.getCountries(false),
         api.getUsers(),
         api.getHotels(false),
+        api.getInvoiceSettings().catch(() => null),
+        api.getInvoiceCatalog(false).catch(() => []),
       ]);
       setCustomFields(flds);
       setVisaTypes(vts);
       setCountries(ctrs);
       setUsers(usrs);
       setHotels(htls);
+      if (invS) {
+        setInvoiceSettings(invS);
+        setInvCompanyName(invS.company_name || 'SN Travels Agency');
+        setInvCompanyTagline(invS.company_tagline || '');
+        setInvLogoUrl(invS.logo_url || '');
+        setInvPhone(invS.phone || '');
+        setInvWhatsapp(invS.whatsapp || '');
+        setInvEmail(invS.email || '');
+        setInvWebsite(invS.website || '');
+        setInvAddress(invS.address || '');
+        setInvTaxNumber(invS.tax_number || '');
+        setInvBankDetails(invS.bank_details || '');
+        setInvPaymentNotes(invS.payment_notes || '');
+        setInvTerms(invS.terms_and_conditions || '');
+        setInvCurrency(invS.default_currency || 'MYR');
+        setInvPrefix(invS.invoice_prefix || 'INV-2026-',);
+        setInvNextNumber(invS.next_number || 1001);
+      }
+      if (Array.isArray(catItems)) {
+        setCatalogItems(catItems);
+      }
       // Auto-expand first hotel by default
       if (htls.length > 0 && expandedHotelIds.length === 0) {
         setExpandedHotelIds([htls[0].id]);
@@ -364,6 +437,200 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const showFeedback = (msg: string) => {
     setFeedbackMsg(msg);
     setTimeout(() => setFeedbackMsg(null), 3000);
+  };
+
+  // Invoice & Branding Handlers
+  const handleSaveInvoiceSettings = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSavingInvoiceSettings(true);
+    setInvoiceSettingsSuccess(false);
+
+    try {
+      const updated = await api.updateInvoiceSettings({
+        company_name: invCompanyName.trim(),
+        company_tagline: invCompanyTagline.trim(),
+        logo_url: invLogoUrl.trim() || null,
+        phone: invPhone.trim(),
+        whatsapp: invWhatsapp.trim(),
+        email: invEmail.trim(),
+        website: invWebsite.trim(),
+        address: invAddress.trim(),
+        tax_number: invTaxNumber.trim() || null,
+        bank_details: invBankDetails.trim(),
+        payment_notes: invPaymentNotes.trim(),
+        terms_and_conditions: invTerms.trim(),
+        default_currency: invCurrency.trim() || 'MYR',
+        invoice_prefix: invPrefix.trim() || 'INV-2026-',
+        next_number: Number(invNextNumber) || 1001,
+      });
+
+      setInvoiceSettings(updated);
+      setInvoiceSettingsSuccess(true);
+      showFeedback('Company invoice branding & details saved successfully');
+      setTimeout(() => setInvoiceSettingsSuccess(false), 4000);
+    } catch (err: any) {
+      alert(err.message || 'Failed to save invoice settings');
+    } finally {
+      setSavingInvoiceSettings(false);
+    }
+  };
+
+  const handleOpenAddCatalogItem = () => {
+    setEditingCatalogItem(null);
+    setCatalogName('');
+    setCatalogCategory('Visa Services');
+    setCatalogUnitPrice(0);
+    setCatalogDesc('');
+    setCatalogIsActive(1);
+    setCatalogDisplayOrder(catalogItems.length + 1);
+    setCatalogError(null);
+    setFieldModalOpen(true);
+  };
+
+  const handleOpenEditCatalogItem = (item: InvoiceCatalogItem) => {
+    setEditingCatalogItem(item);
+    setCatalogName(item.name);
+    setCatalogCategory(item.category || 'Visa Services');
+    setCatalogUnitPrice(Number(item.default_unit_price) || 0);
+    setCatalogDesc(item.description || '');
+    setCatalogIsActive(item.is_active);
+    const currentIdx = catalogItems.findIndex(i => i.id === item.id);
+    setCatalogDisplayOrder(currentIdx >= 0 ? currentIdx + 1 : item.display_order || 1);
+    setCatalogError(null);
+    setFieldModalOpen(true);
+  };
+
+  const handleReorderCatalogList = async (newOrderedItems: InvoiceCatalogItem[], feedbackLabel?: string) => {
+    const normalized = newOrderedItems.map((it, idx) => ({
+      ...it,
+      display_order: idx + 1,
+    }));
+    setCatalogItems(normalized);
+    setReorderingCatalog(true);
+    try {
+      const updatedList = await api.reorderInvoiceCatalog(normalized.map(it => it.id));
+      if (Array.isArray(updatedList)) {
+        setCatalogItems(updatedList);
+      }
+      if (feedbackLabel) {
+        showFeedback(feedbackLabel);
+      }
+    } catch (err) {
+      console.error('Failed to reorder catalog items:', err);
+    } finally {
+      setReorderingCatalog(false);
+    }
+  };
+
+  const handleMoveCatalogItem = async (index: number, direction: 'up' | 'down') => {
+    const targetIndex = direction === 'up' ? index - 1 : index + 1;
+    if (targetIndex < 0 || targetIndex >= catalogItems.length) return;
+    const updated = [...catalogItems];
+    const [moved] = updated.splice(index, 1);
+    updated.splice(targetIndex, 0, moved);
+    await handleReorderCatalogList(
+      updated,
+      `Moved "${moved.name}" to position #${targetIndex + 1} in Quick Add`
+    );
+  };
+
+  const handleMoveCatalogItemToPosition = async (itemId: number, newOneBasedPos: number) => {
+    const currentIndex = catalogItems.findIndex(i => i.id === itemId);
+    if (currentIndex === -1) return;
+    const targetIndex = Math.max(0, Math.min(catalogItems.length - 1, newOneBasedPos - 1));
+    if (currentIndex === targetIndex) return;
+    const updated = [...catalogItems];
+    const [moved] = updated.splice(currentIndex, 1);
+    updated.splice(targetIndex, 0, moved);
+    await handleReorderCatalogList(
+      updated,
+      targetIndex === 0
+        ? `"${moved.name}" is now #1 First in the Invoice Quick Add list`
+        : `Moved "${moved.name}" to position #${targetIndex + 1} in Quick Add`
+    );
+  };
+
+  const handleSaveCatalogItem = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!catalogName.trim()) {
+      setCatalogError('Field/Service name is required');
+      return;
+    }
+
+    setSavingCatalogItem(true);
+    setCatalogError(null);
+
+    try {
+      const desiredPos = Math.max(1, Number(catalogDisplayOrder) || 1);
+      if (editingCatalogItem) {
+        const updated = await api.updateInvoiceCatalogItem(editingCatalogItem.id, {
+          name: catalogName.trim(),
+          category: catalogCategory,
+          default_unit_price: Number(catalogUnitPrice) || 0,
+          description: catalogDesc.trim() || null,
+          is_active: catalogIsActive,
+          display_order: desiredPos,
+        });
+        const listWithUpdated = catalogItems.map(i => (i.id === updated.id ? updated : i));
+        const currentIdx = listWithUpdated.findIndex(i => i.id === updated.id);
+        const targetIdx = Math.max(0, Math.min(listWithUpdated.length - 1, desiredPos - 1));
+        if (currentIdx !== -1 && currentIdx !== targetIdx) {
+          const reordered = [...listWithUpdated];
+          const [moved] = reordered.splice(currentIdx, 1);
+          reordered.splice(targetIdx, 0, moved);
+          await handleReorderCatalogList(reordered);
+        } else {
+          setCatalogItems(listWithUpdated);
+        }
+        showFeedback(`Updated invoice field "${updated.name}"`);
+      } else {
+        const created = await api.createInvoiceCatalogItem({
+          name: catalogName.trim(),
+          category: catalogCategory,
+          default_unit_price: Number(catalogUnitPrice) || 0,
+          description: catalogDesc.trim() || undefined,
+          is_active: catalogIsActive,
+          display_order: desiredPos,
+        });
+        const nextList = [...catalogItems];
+        const targetIdx = Math.max(0, Math.min(nextList.length, desiredPos - 1));
+        nextList.splice(targetIdx, 0, created);
+        await handleReorderCatalogList(nextList);
+        showFeedback(`Added new invoice field "${created.name}" at position #${targetIdx + 1}`);
+      }
+      setFieldModalOpen(false);
+    } catch (err: any) {
+      setCatalogError(err.message || 'Failed to save invoice field');
+    } finally {
+      setSavingCatalogItem(false);
+    }
+  };
+
+  const handleToggleCatalogItemActive = async (item: InvoiceCatalogItem) => {
+    try {
+      const updated = await api.updateInvoiceCatalogItem(item.id, {
+        is_active: item.is_active === 1 ? 0 : 1,
+      });
+      setCatalogItems(prev => prev.map(i => (i.id === updated.id ? updated : i)));
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleDeleteCatalogItemConfirm = async () => {
+    if (!catalogItemToDelete) return;
+    setDeletingCatalogItem(true);
+    try {
+      await api.deleteInvoiceCatalogItem(catalogItemToDelete.id);
+      setCatalogItems(prev => prev.filter(i => i.id !== catalogItemToDelete.id));
+      setCatalogDeleteModalOpen(false);
+      setCatalogItemToDelete(null);
+      showFeedback('Invoice field preset deleted');
+    } catch (err: any) {
+      alert(err.message || 'Failed to delete field preset');
+    } finally {
+      setDeletingCatalogItem(false);
+    }
   };
 
   // Custom field actions
@@ -1023,6 +1290,21 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           <span>Hotels & Room Types</span>
           <span className="text-[10px] bg-slate-100 px-1.5 py-0.2 rounded-full font-bold">
             {hotels.length}
+          </span>
+        </button>
+
+        <button
+          onClick={() => handleSelectTab('invoices')}
+          className={`pb-3 px-3.5 border-b-2 transition whitespace-nowrap flex items-center gap-1.5 ${
+            activeTab === 'invoices'
+              ? 'border-sky-700 text-sky-800 font-bold'
+              : 'border-transparent text-slate-500 hover:text-slate-800'
+          }`}
+        >
+          <Receipt className="w-3.5 h-3.5 text-sky-700" />
+          <span>Invoice & Branding</span>
+          <span className="text-[10px] bg-sky-50 text-sky-800 border border-sky-200 px-1.5 py-0.2 rounded-full font-bold">
+            {catalogItems.length}
           </span>
         </button>
 
@@ -1707,6 +1989,774 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           )}
         </div>
       )}
+
+      {/* Tab: Invoices & Branding Settings */}
+      {activeTab === 'invoices' && (
+        <div className="space-y-8">
+          {/* Section 1: Company Branding & Details */}
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-xs p-5 sm:p-7 space-y-6">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-200 pb-4">
+              <div>
+                <h3 className="font-bold text-base text-slate-900 flex items-center gap-2">
+                  <Receipt className="w-5 h-5 text-sky-700" />
+                  <span>Company Branding & Invoice Configuration</span>
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Update agency name, logo via Google link, phone, address, and bank transfer details displayed on all customer invoices.
+                </p>
+              </div>
+
+              {invoiceSettingsSuccess && (
+                <div className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-xl text-xs font-bold animate-in fade-in">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                  <span>Invoice Settings Saved!</span>
+                </div>
+              )}
+            </div>
+
+            <form onSubmit={handleSaveInvoiceSettings} className="space-y-6">
+              {/* Logo URL with Google Drive Support, File Upload & Live Preview */}
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <label className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                    <span>Company Logo (Google Drive Link, Image URL, or Upload)</span>
+                  </label>
+                  <span className="text-[10px] text-sky-800 bg-sky-100 font-semibold px-2 py-0.5 rounded-full border border-sky-200">
+                    Google Drive link &amp; direct upload supported
+                  </span>
+                </div>
+
+                <div className="flex flex-col sm:flex-row gap-2.5">
+                  <input
+                    type="text"
+                    value={invLogoUrl.startsWith('data:') ? '' : invLogoUrl}
+                    onChange={(e) => {
+                      setInvLogoUrl(e.target.value);
+                      setInvLogoCandidateIdx(0);
+                      setInvLogoFailed(false);
+                    }}
+                    placeholder={
+                      invLogoUrl.startsWith('data:')
+                        ? 'Custom logo image uploaded (paste a URL here to replace)'
+                        : 'Paste Google Drive share link (e.g. https://drive.google.com/file/d/XYZ/view) or image URL'
+                    }
+                    className="flex-1 text-xs bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 font-mono text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-sky-500"
+                  />
+
+                  <label className="inline-flex items-center justify-center gap-1.5 px-3.5 py-2.5 bg-white hover:bg-slate-100 text-slate-700 border border-slate-300 rounded-xl text-xs font-semibold cursor-pointer transition shrink-0">
+                    <Upload className="w-3.5 h-3.5 text-sky-700" />
+                    <span>Upload Logo</span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      onChange={(e) => {
+                        const file = e.target.files?.[0];
+                        if (!file) return;
+                        const reader = new FileReader();
+                        reader.onload = () => {
+                          if (typeof reader.result === 'string') {
+                            setInvLogoUrl(reader.result);
+                            setInvLogoCandidateIdx(0);
+                            setInvLogoFailed(false);
+                          }
+                        };
+                        reader.readAsDataURL(file);
+                        e.target.value = '';
+                      }}
+                    />
+                  </label>
+
+                  {invLogoUrl.trim() && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setInvLogoUrl('');
+                        setInvLogoCandidateIdx(0);
+                        setInvLogoFailed(false);
+                      }}
+                      className="px-3 py-2.5 text-xs font-semibold text-rose-600 hover:bg-rose-50 border border-rose-200 rounded-xl transition shrink-0 cursor-pointer"
+                    >
+                      Remove
+                    </button>
+                  )}
+                </div>
+
+                <p className="text-[11px] text-slate-500 leading-relaxed">
+                  Tip: Paste any Google Drive image share link (make sure sharing is set to <strong>&quot;Anyone with the link can view&quot;</strong>) or upload your agency logo directly.
+                </p>
+
+                {/* Real-time Logo Preview */}
+                {invLogoUrl.trim() && (() => {
+                  const candidates = getInvoiceLogoCandidates(invLogoUrl);
+                  const previewSrc = !invLogoFailed && candidates.length > 0 ? candidates[invLogoCandidateIdx] : '';
+                  return (
+                    <div className="pt-2 border-t border-slate-200/80 flex items-center gap-4">
+                      <div className="w-24 h-16 bg-white border border-slate-200 rounded-lg flex items-center justify-center p-1.5 overflow-hidden shadow-xs shrink-0">
+                        {previewSrc ? (
+                          <img
+                            src={previewSrc}
+                            alt="Logo Preview"
+                            className="max-h-full max-w-full object-contain"
+                            onError={() => {
+                              if (invLogoCandidateIdx + 1 < candidates.length) {
+                                setInvLogoCandidateIdx(prev => prev + 1);
+                              } else {
+                                setInvLogoFailed(true);
+                              }
+                            }}
+                          />
+                        ) : (
+                          <span className="text-[10px] font-bold text-rose-600 text-center px-1">
+                            Unreachable URL
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-xs space-y-0.5">
+                        <span className="font-bold text-slate-800 flex items-center gap-1">
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
+                          Live Logo Preview
+                        </span>
+                        <span className="text-[11px] text-slate-500 block">
+                          This logo will appear at the top header of all printed and PDF customer invoices.
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+
+              {/* Company Identity Fields */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Company / Agency Name <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={invCompanyName}
+                    onChange={(e) => setInvCompanyName(e.target.value)}
+                    placeholder="e.g. SN Travels Agency"
+                    className="w-full text-xs bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 text-slate-800 focus:ring-2 focus:ring-sky-500 font-semibold"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Tagline / Subheading
+                  </label>
+                  <input
+                    type="text"
+                    value={invCompanyTagline}
+                    onChange={(e) => setInvCompanyTagline(e.target.value)}
+                    placeholder="e.g. China Visa & Travel Processing Specialists"
+                    className="w-full text-xs bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 text-slate-800 focus:ring-2 focus:ring-sky-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Official Phone Number
+                  </label>
+                  <input
+                    type="text"
+                    value={invPhone}
+                    onChange={(e) => setInvPhone(e.target.value)}
+                    placeholder="e.g. +971 4 399 2200"
+                    className="w-full text-xs bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 text-slate-800 focus:ring-2 focus:ring-sky-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    WhatsApp Number
+                  </label>
+                  <input
+                    type="text"
+                    value={invWhatsapp}
+                    onChange={(e) => setInvWhatsapp(e.target.value)}
+                    placeholder="e.g. +971 50 123 4567"
+                    className="w-full text-xs bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 text-slate-800 focus:ring-2 focus:ring-sky-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Official Email Address
+                  </label>
+                  <input
+                    type="email"
+                    value={invEmail}
+                    onChange={(e) => setInvEmail(e.target.value)}
+                    placeholder="e.g. visa@sn-travelsagency.com"
+                    className="w-full text-xs bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 text-slate-800 focus:ring-2 focus:ring-sky-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Website URL
+                  </label>
+                  <input
+                    type="text"
+                    value={invWebsite}
+                    onChange={(e) => setInvWebsite(e.target.value)}
+                    placeholder="e.g. sn-travelsagency.com"
+                    className="w-full text-xs bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 text-slate-800 focus:ring-2 focus:ring-sky-500"
+                  />
+                </div>
+              </div>
+
+              {/* Office Address */}
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Office / Business Address
+                </label>
+                <input
+                  type="text"
+                  value={invAddress}
+                  onChange={(e) => setInvAddress(e.target.value)}
+                  placeholder="e.g. Office 402, Al Hudaiba Awards Building, 2nd December St, Dubai, UAE"
+                  className="w-full text-xs bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 text-slate-800 focus:ring-2 focus:ring-sky-500"
+                />
+              </div>
+
+              {/* Currency, Invoice Prefix, Next Number */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 bg-slate-50 p-4 rounded-xl border border-slate-200">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Default Billing Currency
+                  </label>
+                  <select
+                    value={invCurrency}
+                    onChange={(e) => setInvCurrency(e.target.value)}
+                    className="w-full text-xs bg-white border border-slate-300 rounded-xl px-3.5 py-2 font-bold text-slate-800 focus:ring-2 focus:ring-sky-500"
+                  >
+                    <option value="MYR">RM (Malaysian Ringgit)</option>
+                    <option value="USD">USD ($ - US Dollar)</option>
+                    <option value="AED">AED (د.إ - UAE Dirham)</option>
+                    <option value="EUR">EUR (€ - Euro)</option>
+                    <option value="GBP">GBP (£ - British Pound)</option>
+                    <option value="CNY">CNY (¥ - Chinese Yuan)</option>
+                    <option value="BDT">BDT (৳ - Bangladeshi Taka)</option>
+                    <option value="PKR">PKR (₨ - Pakistani Rupee)</option>
+                    <option value="INR">INR (₹ - Indian Rupee)</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Invoice Prefix
+                  </label>
+                  <input
+                    type="text"
+                    value={invPrefix}
+                    onChange={(e) => setInvPrefix(e.target.value)}
+                    placeholder="INV-2026-"
+                    className="w-full text-xs bg-white border border-slate-300 rounded-xl px-3.5 py-2 font-mono text-slate-800 focus:ring-2 focus:ring-sky-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Next Sequence Number
+                  </label>
+                  <input
+                    type="number"
+                    value={invNextNumber}
+                    onChange={(e) => setInvNextNumber(parseInt(e.target.value, 10) || 1001)}
+                    className="w-full text-xs bg-white border border-slate-300 rounded-xl px-3.5 py-2 font-mono text-slate-800 focus:ring-2 focus:ring-sky-500"
+                  />
+                </div>
+              </div>
+
+              {/* Bank Details, Notes & Terms */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Bank Transfer Details
+                  </label>
+                  <textarea
+                    rows={4}
+                    value={invBankDetails}
+                    onChange={(e) => setInvBankDetails(e.target.value)}
+                    placeholder="Bank: Emirates NBD&#10;Account Title: SN Travels Agency LLC&#10;IBAN: AE24 0260 0000 0000 1234 56&#10;SWIFT: ENBDDBAXXX"
+                    className="w-full text-xs bg-white border border-slate-300 rounded-xl p-3 font-mono text-slate-800 focus:ring-2 focus:ring-sky-500 leading-relaxed"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Payment Instructions / Remittance Notes
+                  </label>
+                  <textarea
+                    rows={4}
+                    value={invPaymentNotes}
+                    onChange={(e) => setInvPaymentNotes(e.target.value)}
+                    placeholder="Please quote your Invoice # as reference. Payment due upon presentation."
+                    className="w-full text-xs bg-white border border-slate-300 rounded-xl p-3 text-slate-800 focus:ring-2 focus:ring-sky-500 leading-relaxed"
+                  />
+                </div>
+
+                <div className="sm:col-span-2">
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Standard Terms &amp; Conditions (Footer)
+                  </label>
+                  <textarea
+                    rows={3}
+                    value={invTerms}
+                    onChange={(e) => setInvTerms(e.target.value)}
+                    placeholder="1. Embassy fees are subject to official consular policies.&#10;2. Invoices must be cleared before document submission or passport release."
+                    className="w-full text-xs bg-white border border-slate-300 rounded-xl p-3 text-slate-800 focus:ring-2 focus:ring-sky-500 leading-relaxed"
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-3 pt-2">
+                <button
+                  type="submit"
+                  disabled={savingInvoiceSettings}
+                  className="px-6 py-2.5 text-xs font-bold text-white bg-sky-700 hover:bg-sky-800 rounded-xl shadow-xs flex items-center gap-2 transition disabled:opacity-50 cursor-pointer"
+                >
+                  {savingInvoiceSettings ? (
+                    <>
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Saving Settings...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Check className="w-4 h-4" />
+                      <span>Save Invoice &amp; Branding Details</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+
+          {/* Section 2: Configurable Invoice Fields & Catalog */}
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-xs p-5 sm:p-7 space-y-6">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-200 pb-4">
+              <div>
+                <h3 className="font-bold text-base text-slate-900 flex items-center gap-2">
+                  <Layers className="w-5 h-5 text-sky-700" />
+                  <span>Configurable Invoice Fields &amp; Services ({catalogItems.length})</span>
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Manage the preset service line items, fee categories, and default rates that staff can select from when creating customer invoices.
+                </p>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleOpenAddCatalogItem}
+                className="inline-flex items-center gap-2 px-4 py-2 text-xs font-bold text-white bg-sky-700 hover:bg-sky-800 rounded-xl shadow-xs transition cursor-pointer"
+              >
+                <Plus className="w-4 h-4" />
+                <span>Add Invoice Field / Service</span>
+              </button>
+            </div>
+
+            {/* Live Quick Add Order Preview & Reorder Bar */}
+            {catalogItems.filter(i => i.is_active === 1).length > 0 && (
+              <div className="bg-sky-50/60 border border-sky-200/80 rounded-xl p-4 space-y-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] font-bold text-sky-950 uppercase tracking-wider">
+                      Live Invoice &quot;Quick Add&quot; Order Preview
+                    </span>
+                    <span className="text-[10px] bg-sky-100 text-sky-800 px-2 py-0.5 rounded-full font-semibold border border-sky-200">
+                      #1 appears first when creating an invoice
+                    </span>
+                  </div>
+                  {reorderingCatalog && (
+                    <span className="inline-flex items-center gap-1 text-[11px] text-sky-700 font-semibold">
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                      Saving order...
+                    </span>
+                  )}
+                </div>
+
+                <div className="flex flex-wrap gap-2 pt-0.5">
+                  {catalogItems
+                    .filter(i => i.is_active === 1)
+                    .map((item, activeIdx) => {
+                      const fullIdx = catalogItems.findIndex(c => c.id === item.id);
+                      const isFirst = fullIdx === 0;
+                      const isLast = fullIdx === catalogItems.length - 1;
+                      return (
+                        <div
+                          key={item.id}
+                          className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium border transition ${
+                            activeIdx === 0
+                              ? 'bg-sky-900 text-white border-sky-900 shadow-xs'
+                              : 'bg-white text-slate-700 border-slate-200'
+                          }`}
+                        >
+                          <span
+                            className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded ${
+                              activeIdx === 0
+                                ? 'bg-amber-400 text-slate-950'
+                                : 'bg-slate-100 text-slate-600'
+                            }`}
+                          >
+                            #{activeIdx + 1}
+                          </span>
+                          <span className="font-semibold">{item.name}</span>
+                          <span className="font-mono text-[10px] opacity-75">
+                            ({!invCurrency || invCurrency === 'MYR' ? 'RM' : invCurrency}{' '}
+                            {Number(item.default_unit_price).toFixed(0)})
+                          </span>
+                          <div className="flex items-center gap-0.5 ml-1 pl-1 border-l border-current/15">
+                            <button
+                              type="button"
+                              disabled={isFirst || reorderingCatalog}
+                              onClick={() => handleMoveCatalogItem(fullIdx, 'up')}
+                              title="Move earlier in Quick Add list"
+                              className="p-0.5 hover:opacity-100 opacity-75 disabled:opacity-25 cursor-pointer"
+                            >
+                              <ArrowUp className="w-3 h-3 -rotate-90" />
+                            </button>
+                            <button
+                              type="button"
+                              disabled={isLast || reorderingCatalog}
+                              onClick={() => handleMoveCatalogItem(fullIdx, 'down')}
+                              title="Move later in Quick Add list"
+                              className="p-0.5 hover:opacity-100 opacity-75 disabled:opacity-25 cursor-pointer"
+                            >
+                              <ArrowDown className="w-3 h-3 -rotate-90" />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                </div>
+              </div>
+            )}
+
+            {/* Catalog Items Table */}
+            <div className="overflow-x-auto border border-slate-200 rounded-xl">
+              <table className="w-full text-left text-xs">
+                <thead>
+                  <tr className="bg-slate-50 border-b border-slate-200 text-slate-500 font-bold uppercase tracking-wider text-[10px]">
+                    <th className="py-3 px-4 w-44">Quick Add Order</th>
+                    <th className="py-3 px-4">Field / Service Name</th>
+                    <th className="py-3 px-4">Category</th>
+                    <th className="py-3 px-4 text-right">Default Rate</th>
+                    <th className="py-3 px-4 text-center">Status</th>
+                    <th className="py-3 px-4 text-right">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {catalogItems.length === 0 ? (
+                    <tr>
+                      <td colSpan={6} className="py-8 text-center text-slate-400">
+                        No invoice preset fields configured. Click "Add Invoice Field / Service" to create one.
+                      </td>
+                    </tr>
+                  ) : (
+                    catalogItems.map((item, idx) => (
+                      <tr
+                        key={item.id}
+                        className={`hover:bg-slate-50/70 transition ${
+                          idx === 0 ? 'bg-sky-50/30' : ''
+                        }`}
+                      >
+                        {/* Order Control Column */}
+                        <td className="py-3 px-4">
+                          <div className="flex items-center gap-1.5">
+                            <select
+                              value={idx + 1}
+                              disabled={reorderingCatalog}
+                              onChange={(e) =>
+                                handleMoveCatalogItemToPosition(item.id, Number(e.target.value))
+                              }
+                              title="Select Quick Add position"
+                              className={`text-xs font-mono font-bold rounded-lg px-2 py-1 border cursor-pointer focus:ring-2 focus:ring-sky-500 ${
+                                idx === 0
+                                  ? 'bg-sky-900 text-white border-sky-900'
+                                  : 'bg-white text-slate-700 border-slate-200 hover:border-slate-300'
+                              }`}
+                            >
+                              {catalogItems.map((_, posIdx) => (
+                                <option
+                                  key={posIdx + 1}
+                                  value={posIdx + 1}
+                                  className="bg-white text-slate-800"
+                                >
+                                  #{posIdx + 1} {posIdx === 0 ? '(First)' : ''}
+                                </option>
+                              ))}
+                            </select>
+
+                            <div className="inline-flex items-center border border-slate-200 rounded-lg bg-white overflow-hidden">
+                              <button
+                                type="button"
+                                disabled={idx === 0 || reorderingCatalog}
+                                onClick={() => handleMoveCatalogItem(idx, 'up')}
+                                title="Move Up"
+                                className="p-1 text-slate-500 hover:text-sky-700 hover:bg-sky-50 disabled:opacity-30 disabled:pointer-events-none transition cursor-pointer"
+                              >
+                                <ArrowUp className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                type="button"
+                                disabled={idx === catalogItems.length - 1 || reorderingCatalog}
+                                onClick={() => handleMoveCatalogItem(idx, 'down')}
+                                title="Move Down"
+                                className="p-1 text-slate-500 hover:text-sky-700 hover:bg-sky-50 disabled:opacity-30 disabled:pointer-events-none transition border-l border-slate-100 cursor-pointer"
+                              >
+                                <ArrowDown className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+
+                            {idx > 0 && (
+                              <button
+                                type="button"
+                                disabled={reorderingCatalog}
+                                onClick={() => handleMoveCatalogItemToPosition(item.id, 1)}
+                                title="Make this service #1 First in Quick Add"
+                                className="px-2 py-1 text-[10px] font-bold text-sky-700 hover:text-white bg-sky-50 hover:bg-sky-700 border border-sky-200 rounded-lg transition cursor-pointer whitespace-nowrap"
+                              >
+                                Set 1st
+                              </button>
+                            )}
+                          </div>
+                        </td>
+
+                        <td className="py-3 px-4">
+                          <div className="flex items-center gap-2">
+                            <span className="font-bold text-slate-900 block">{item.name}</span>
+                            {idx === 0 && (
+                              <span className="text-[10px] font-bold uppercase tracking-wider bg-amber-100 text-amber-800 border border-amber-200 px-1.5 py-0.5 rounded">
+                                1st in Quick Add
+                              </span>
+                            )}
+                          </div>
+                          {item.description && (
+                            <span className="text-[11px] text-slate-500 line-clamp-1">
+                              {item.description}
+                            </span>
+                          )}
+                        </td>
+
+                        <td className="py-3 px-4">
+                          <span className="inline-block text-[10px] font-semibold text-sky-800 bg-sky-50 px-2 py-0.5 rounded-full border border-sky-200">
+                            {item.category || 'General'}
+                          </span>
+                        </td>
+
+                        <td className="py-3 px-4 text-right font-mono font-bold text-slate-900">
+                          {(!invCurrency || invCurrency === 'MYR' ? 'RM' : invCurrency)} {Number(item.default_unit_price).toFixed(2)}
+                        </td>
+
+                        <td className="py-3 px-4 text-center">
+                          <button
+                            type="button"
+                            onClick={() => handleToggleCatalogItemActive(item)}
+                            className={`text-[10px] font-bold px-2 py-0.5 rounded-full border transition cursor-pointer ${
+                              item.is_active === 1
+                                ? 'bg-emerald-50 text-emerald-800 border-emerald-200 hover:bg-emerald-100'
+                                : 'bg-slate-100 text-slate-500 border-slate-200 hover:bg-slate-200'
+                            }`}
+                          >
+                            {item.is_active === 1 ? 'Active' : 'Disabled'}
+                          </button>
+                        </td>
+
+                        <td className="py-3 px-4 text-right">
+                          <div className="flex items-center justify-end gap-1">
+                            <button
+                              type="button"
+                              onClick={() => handleOpenEditCatalogItem(item)}
+                              title="Edit Field"
+                              className="p-1.5 text-slate-500 hover:text-sky-700 hover:bg-sky-50 rounded-lg transition"
+                            >
+                              <Edit2 className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setCatalogItemToDelete(item);
+                                setCatalogDeleteModalOpen(true);
+                              }}
+                              title="Delete Field"
+                              className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Add / Edit Invoice Field Preset */}
+      {fieldModalOpen && (
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 animate-in fade-in">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-lg overflow-hidden">
+            <div className="px-6 py-4 bg-sky-900 text-white flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <Layers className="w-5 h-5 text-sky-400" />
+                <h3 className="font-bold text-sm">
+                  {editingCatalogItem ? 'Edit Invoice Field / Service' : 'Add New Invoice Field / Service'}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setFieldModalOpen(false)}
+                className="p-1 text-slate-300 hover:text-white rounded-lg transition"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveCatalogItem} className="p-6 space-y-4">
+              {catalogError && (
+                <div className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-800 flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                  <span>{catalogError}</span>
+                </div>
+              )}
+
+              <div>
+                <label className="block text-xs font-bold text-slate-700 mb-1">
+                  Field / Service Name <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={catalogName}
+                  onChange={(e) => setCatalogName(e.target.value)}
+                  placeholder="e.g. China Commercial Trade Visa (M) Processing Fee"
+                  className="w-full text-xs bg-white border border-slate-300 rounded-xl px-3.5 py-2.5 text-slate-800 focus:ring-2 focus:ring-sky-500 font-semibold"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Category
+                  </label>
+                  <select
+                    value={catalogCategory}
+                    onChange={(e) => setCatalogCategory(e.target.value)}
+                    className="w-full text-xs bg-white border border-slate-300 rounded-xl px-3 py-2 text-slate-800 focus:ring-2 focus:ring-sky-500 font-medium"
+                  >
+                    <option value="Visa Services">Visa Services</option>
+                    <option value="Government Fees">Government Fees</option>
+                    <option value="Express Services">Express Services</option>
+                    <option value="Travel &amp; Accommodation">Travel &amp; Accommodation</option>
+                    <option value="Document Services">Document Services</option>
+                    <option value="Logistics">Logistics</option>
+                    <option value="Consultation">Consultation</option>
+                    <option value="Other">Other</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Default Rate ({!invCurrency || invCurrency === 'MYR' ? 'RM' : invCurrency})
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={catalogUnitPrice}
+                    onChange={(e) => setCatalogUnitPrice(parseFloat(e.target.value) || 0)}
+                    className="w-full text-xs bg-white border border-slate-300 rounded-xl px-3.5 py-2 font-mono text-slate-800 focus:ring-2 focus:ring-sky-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Quick Add Order #
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    max={Math.max(1, catalogItems.length + (editingCatalogItem ? 0 : 1))}
+                    value={catalogDisplayOrder}
+                    onChange={(e) => setCatalogDisplayOrder(Math.max(1, parseInt(e.target.value, 10) || 1))}
+                    className="w-full text-xs bg-white border border-slate-300 rounded-xl px-3.5 py-2 font-mono font-bold text-slate-800 focus:ring-2 focus:ring-sky-500"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Description / Details (Auto-populates on invoice)
+                </label>
+                <textarea
+                  rows={2}
+                  value={catalogDesc}
+                  onChange={(e) => setCatalogDesc(e.target.value)}
+                  placeholder="e.g. Documentation review, PU invitation validation, appointment scheduling..."
+                  className="w-full text-xs bg-white border border-slate-300 rounded-xl p-3 text-slate-800 focus:ring-2 focus:ring-sky-500"
+                />
+              </div>
+
+              <div className="flex items-center gap-2 pt-1">
+                <input
+                  type="checkbox"
+                  id="catalogIsActive"
+                  checked={catalogIsActive === 1}
+                  onChange={(e) => setCatalogIsActive(e.target.checked ? 1 : 0)}
+                  className="w-4 h-4 text-sky-600 rounded-sm border-slate-300 focus:ring-sky-500"
+                />
+                <label htmlFor="catalogIsActive" className="text-xs font-semibold text-slate-700 select-none cursor-pointer">
+                  Active (appears in invoice Quick Add list)
+                </label>
+              </div>
+
+              <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-slate-200">
+                <button
+                  type="button"
+                  onClick={() => setFieldModalOpen(false)}
+                  className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 rounded-xl transition"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={savingCatalogItem}
+                  className="px-5 py-2 text-xs font-bold text-white bg-sky-700 hover:bg-sky-800 rounded-xl shadow-xs transition disabled:opacity-50 flex items-center gap-2"
+                >
+                  {savingCatalogItem ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                      <span>Saving...</span>
+                    </>
+                  ) : (
+                    <span>{editingCatalogItem ? 'Save Changes' : 'Create Preset Field'}</span>
+                  )}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Catalog Item Confirmation Modal */}
+      <ConfirmDeleteModal
+        isOpen={catalogDeleteModalOpen}
+        title="Delete Invoice Field Preset"
+        message={`Are you sure you want to delete the invoice field preset "${catalogItemToDelete?.name}"? It will no longer appear as a preset option on new invoices.`}
+        confirmLabel="Delete Field"
+        onConfirm={handleDeleteCatalogItemConfirm}
+        onCancel={() => {
+          setCatalogDeleteModalOpen(false);
+          setCatalogItemToDelete(null);
+        }}
+        isLoading={deletingCatalogItem}
+      />
 
       {/* Tab: Users (Super Admin) */}
       {activeTab === 'users' && isSuperAdmin && (

@@ -85,6 +85,7 @@ export interface ClientProfileDetails extends Client {
   tasks: Array<Task & { assigned_user_name: string | null }>;
   hotel_bookings?: Array<HotelBooking>;
   follow_ups?: Array<FollowUp>;
+  invoices?: Array<Invoice>;
   comments: Array<Comment>;
   activity: Array<ActivityLog>;
 }
@@ -429,5 +430,86 @@ export interface PaginationInfo {
 export interface PaginatedResponse<T> {
   data: T[];
   pagination: PaginationInfo;
+}
+
+// --------------------------------------------------------------------------
+// Invoicing System Interfaces
+// --------------------------------------------------------------------------
+
+export type InvoiceStatus = 'Pending' | 'Paid' | 'Partial' | 'Cancelled';
+export type PaymentMethod = 'Cash' | 'Bank Transfer' | 'Credit Card' | 'WeChat Pay' | 'Alipay' | 'Other';
+
+export interface InvoiceItem {
+  id?: number;
+  invoice_id?: number;
+  catalog_item_id?: number | null;
+  description: string;
+  quantity: number;
+  unit_price: number;
+  total: number;
+}
+
+export interface Invoice {
+  id: number;
+  invoice_number: string;
+  client_id: number;
+  client_name?: string;
+  client_photo_url?: string | null;
+  client_passport?: string;
+  client_phone?: string;
+  client_email?: string;
+  client_address?: string;
+  client_country?: string;
+  client_code?: string;
+  issue_date: string;
+  due_date?: string | null;
+  status: InvoiceStatus;
+  payment_method?: PaymentMethod | null;
+  currency: string;
+  subtotal: number;
+  discount: number;
+  tax_rate: number;
+  tax_amount: number;
+  total_amount: number;
+  paid_amount: number;
+  balance_due: number;
+  notes?: string | null;
+  items: InvoiceItem[];
+  created_by_user_id?: number | null;
+  created_by_user_name?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface InvoiceCatalogItem {
+  id: number;
+  name: string;
+  description?: string | null;
+  default_unit_price: number;
+  category?: string | null;
+  is_active: number;
+  display_order: number;
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface InvoiceSettings {
+  id?: number;
+  company_name: string;
+  company_tagline?: string;
+  logo_url?: string;
+  phone?: string;
+  whatsapp?: string;
+  email?: string;
+  website?: string;
+  address?: string;
+  tax_number?: string;
+  bank_details?: string;
+  payment_notes?: string;
+  terms_and_conditions?: string;
+  default_currency: string;
+  invoice_prefix: string;
+  next_number: number;
+  updated_at?: string;
 }
 

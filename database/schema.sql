@@ -364,4 +364,96 @@ CREATE TABLE `settings` (
   `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+-- --------------------------------------------------------
+-- Table: invoice_settings (Company branding, Google Drive logo link, address, bank details)
+-- --------------------------------------------------------
+DROP TABLE IF EXISTS `invoice_settings`;
+CREATE TABLE `invoice_settings` (
+  `id` INT AUTO_INCREMENT PRIMARY KEY,
+  `company_name` VARCHAR(255) NOT NULL DEFAULT 'SN Travels Agency',
+  `company_tagline` VARCHAR(255) DEFAULT 'China Visa & Travel Processing Specialists',
+  `logo_url` TEXT DEFAULT NULL,
+  `phone` VARCHAR(50) DEFAULT '+971 4 123 4567',
+  `whatsapp` VARCHAR(50) DEFAULT '+971 50 123 4567',
+  `email` VARCHAR(191) DEFAULT 'info@sn-travelsagency.com',
+  `website` VARCHAR(191) DEFAULT 'sn-travelsagency.com',
+  `address` TEXT DEFAULT 'Office 402, Al Hudaiba Awards Building, 2nd December St, Dubai, UAE',
+  `tax_number` VARCHAR(100) DEFAULT NULL,
+  `bank_details` TEXT DEFAULT 'Bank: Emirates NBD\nAccount Title: SN Travels Agency LLC\nIBAN: AE00 0000 0000 0000 0000 00\nSWIFT: ENBDDBAXXX',
+  `payment_notes` TEXT DEFAULT 'Please include your Invoice # as payment reference. Payment due within 7 days of invoice issue date.',
+  `terms_and_conditions` TEXT DEFAULT '1. All embassy visa processing charges are subject to official government guidelines.\n2. Invoices must be settled prior to passport delivery or collection.\n3. Official receipt issued upon payment confirmation.',
+  `default_currency` VARCHAR(10) NOT NULL DEFAULT 'MYR',
+  `invoice_prefix` VARCHAR(20) NOT NULL DEFAULT 'INV-2026-',
+  `next_number` INT NOT NULL DEFAULT 1001,
+  `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+-- Table: invoice_catalog_items (Configurable fields/fees managed in Settings)
+-- --------------------------------------------------------
+DROP TABLE IF EXISTS `invoice_catalog_items`;
+CREATE TABLE `invoice_catalog_items` (
+  `id` INT AUTO_INCREMENT PRIMARY KEY,
+  `name` VARCHAR(200) NOT NULL,
+  `description` TEXT DEFAULT NULL,
+  `default_unit_price` DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+  `category` VARCHAR(100) DEFAULT 'Visa Services',
+  `is_active` TINYINT(1) NOT NULL DEFAULT 1,
+  `display_order` INT NOT NULL DEFAULT 0,
+  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  INDEX `idx_catalog_active` (`is_active`),
+  INDEX `idx_catalog_order` (`display_order`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+-- Table: invoices (Customer Invoices)
+-- --------------------------------------------------------
+DROP TABLE IF EXISTS `invoices`;
+CREATE TABLE `invoices` (
+  `id` INT AUTO_INCREMENT PRIMARY KEY,
+  `invoice_number` VARCHAR(50) NOT NULL UNIQUE,
+  `client_id` INT NOT NULL,
+  `issue_date` DATE NOT NULL,
+  `due_date` DATE DEFAULT NULL,
+  `status` ENUM('Pending', 'Paid', 'Partial', 'Cancelled') NOT NULL DEFAULT 'Pending',
+  `payment_method` ENUM('Cash', 'Bank Transfer', 'Credit Card', 'WeChat Pay', 'Alipay', 'Other') DEFAULT NULL,
+  `currency` VARCHAR(10) NOT NULL DEFAULT 'MYR',
+  `subtotal` DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  `discount` DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  `tax_rate` DECIMAL(5,2) NOT NULL DEFAULT 0.00,
+  `tax_amount` DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  `total_amount` DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  `paid_amount` DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  `balance_due` DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  `notes` TEXT DEFAULT NULL,
+  `created_by_user_id` INT DEFAULT NULL,
+  `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  INDEX `idx_invoices_client` (`client_id`),
+  INDEX `idx_invoices_number` (`invoice_number`),
+  INDEX `idx_invoices_status` (`status`),
+  INDEX `idx_invoices_date` (`issue_date`),
+  INDEX `idx_invoices_client_status` (`client_id`, `status`),
+  FOREIGN KEY (`client_id`) REFERENCES `clients` (`id`) ON DELETE CASCADE,
+  FOREIGN KEY (`created_by_user_id`) REFERENCES `users` (`id`) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- --------------------------------------------------------
+-- Table: invoice_items (Individual line items per invoice)
+-- --------------------------------------------------------
+DROP TABLE IF EXISTS `invoice_items`;
+CREATE TABLE `invoice_items` (
+  `id` INT AUTO_INCREMENT PRIMARY KEY,
+  `invoice_id` INT NOT NULL,
+  `catalog_item_id` INT DEFAULT NULL,
+  `description` VARCHAR(255) NOT NULL,
+  `quantity` INT NOT NULL DEFAULT 1,
+  `unit_price` DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  `total` DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+  INDEX `idx_inv_items_invoice` (`invoice_id`),
+  FOREIGN KEY (`invoice_id`) REFERENCES `invoices` (`id`) ON DELETE CASCADE,
+  FOREIGN KEY (`catalog_item_id`) REFERENCES `invoice_catalog_items` (`id`) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 SET FOREIGN_KEY_CHECKS = 1;

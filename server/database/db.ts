@@ -91,6 +91,151 @@ async function probeMySQLConnection() {
     try { await conn.query('CREATE INDEX idx_fu_due_status ON follow_ups(due_date, status)'); } catch {}
     try { await conn.query('CREATE INDEX idx_fu_task ON follow_ups(task_id)'); } catch {}
 
+    // Ensure invoice_settings, invoice_catalog_items, invoices, and invoice_items exist in MySQL
+    try {
+      await conn.query(`
+        CREATE TABLE IF NOT EXISTS invoice_settings (
+          id INT AUTO_INCREMENT PRIMARY KEY,
+          company_name VARCHAR(255) NOT NULL DEFAULT 'SN Travels Agency',
+          company_tagline VARCHAR(255) DEFAULT 'China Visa & Travel Processing Specialists',
+          logo_url TEXT DEFAULT NULL,
+          phone VARCHAR(50) DEFAULT '+971 4 399 2200',
+          whatsapp VARCHAR(50) DEFAULT '+971 50 123 4567',
+          email VARCHAR(191) DEFAULT 'visa@sn-travelsagency.com',
+          website VARCHAR(191) DEFAULT 'sn-travelsagency.com',
+          address TEXT DEFAULT 'Office 402, Al Hudaiba Awards Building, 2nd December St, Dubai, UAE',
+          tax_number VARCHAR(100) DEFAULT NULL,
+          bank_details TEXT DEFAULT NULL,
+          payment_notes TEXT DEFAULT NULL,
+          terms_and_conditions TEXT DEFAULT NULL,
+          default_currency VARCHAR(10) NOT NULL DEFAULT 'MYR',
+          invoice_prefix VARCHAR(20) NOT NULL DEFAULT 'INV-2026-',
+          next_number INT NOT NULL DEFAULT 1001,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+      `);
+      await conn.query(`
+        CREATE TABLE IF NOT EXISTS invoice_catalog_items (
+          id INT AUTO_INCREMENT PRIMARY KEY,
+          name VARCHAR(200) NOT NULL,
+          description TEXT DEFAULT NULL,
+          default_unit_price DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+          category VARCHAR(100) DEFAULT 'Visa Services',
+          is_active TINYINT(1) NOT NULL DEFAULT 1,
+          display_order INT NOT NULL DEFAULT 0,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+          INDEX idx_catalog_active (is_active),
+          INDEX idx_catalog_order (display_order)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+      `);
+      await conn.query(`
+        CREATE TABLE IF NOT EXISTS invoices (
+          id INT AUTO_INCREMENT PRIMARY KEY,
+          invoice_number VARCHAR(50) NOT NULL UNIQUE,
+          client_id INT NOT NULL,
+          issue_date DATE NOT NULL,
+          due_date DATE DEFAULT NULL,
+          status ENUM('Pending', 'Paid', 'Partial', 'Cancelled') NOT NULL DEFAULT 'Pending',
+          payment_method ENUM('Cash', 'Bank Transfer', 'Credit Card', 'WeChat Pay', 'Alipay', 'Other') DEFAULT NULL,
+          currency VARCHAR(10) NOT NULL DEFAULT 'MYR',
+          subtotal DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+          discount DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+          tax_rate DECIMAL(5,2) NOT NULL DEFAULT 0.00,
+          tax_amount DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+          total_amount DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+          paid_amount DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+          balance_due DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+          notes TEXT DEFAULT NULL,
+          created_by_user_id INT DEFAULT NULL,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+          INDEX idx_invoices_client (client_id),
+          INDEX idx_invoices_number (invoice_number),
+          INDEX idx_invoices_status (status),
+          INDEX idx_invoices_date (issue_date)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+      `);
+      await conn.query(`
+        CREATE TABLE IF NOT EXISTS invoice_items (
+          id INT AUTO_INCREMENT PRIMARY KEY,
+          invoice_id INT NOT NULL,
+          catalog_item_id INT DEFAULT NULL,
+          description VARCHAR(255) NOT NULL,
+          quantity INT NOT NULL DEFAULT 1,
+          unit_price DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+          total DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+          INDEX idx_inv_items_invoice (invoice_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+      `);
+      // Ensure initial invoice_settings row exists in MySQL
+      const [invSetRows]: any = await conn.query('SELECT COUNT(*) as cnt FROM invoice_settings');
+      if (invSetRows && invSetRows[0] && Number(invSetRows[0].cnt) === 0) {
+        const initSet = getInitialData().invoice_settings;
+        await conn.query(
+          `INSERT IGNORE INTO invoice_settings (
+            id, company_name, company_tagline, logo_url, phone, whatsapp, email, website,
+            address, tax_number, bank_details, payment_notes, terms_and_conditions,
+            default_currency, invoice_prefix, next_number
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            1,
+            initSet.company_name,
+            initSet.company_tagline,
+            initSet.logo_url,
+            initSet.phone,
+            initSet.whatsapp,
+            initSet.email,
+            initSet.website,
+            initSet.address,
+            initSet.tax_number,
+            initSet.bank_details,
+            initSet.payment_notes,
+            initSet.terms_and_conditions,
+            initSet.default_currency,
+            initSet.invoice_prefix,
+            initSet.next_number,
+          ]
+        );
+      }
+
+      // Seed initial invoice_catalog_items in MySQL once if table is empty and not previously seeded
+      const [catCountRows]: any = await conn.query('SELECT COUNT(*) as cnt FROM invoice_catalog_items');
+      const [seededRows]: any = await conn.query("SELECT setting_value FROM settings WHERE setting_key = 'invoice_catalog_seeded' LIMIT 1");
+      const alreadySeeded = Array.isArray(seededRows) && seededRows.length > 0;
+      if (catCountRows && catCountRows[0] && Number(catCountRows[0].cnt) === 0 && !alreadySeeded) {
+        const itemsToSeed = (store && Array.isArray(store.invoice_catalog_items) && store.invoice_catalog_items.length > 0)
+          ? store.invoice_catalog_items
+          : getInitialData().invoice_catalog_items;
+        for (const it of itemsToSeed) {
+          await conn.query(
+            `INSERT IGNORE INTO invoice_catalog_items (id, name, description, default_unit_price, category, is_active, display_order)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            [it.id, it.name, it.description, Number(it.default_unit_price) || 0, it.category || 'Visa Services', it.is_active ?? 1, it.display_order || 0]
+          );
+        }
+        await conn.query(
+          "INSERT INTO settings (setting_key, setting_value) VALUES ('invoice_catalog_seeded', '1') ON DUPLICATE KEY UPDATE setting_value = '1'"
+        );
+      }
+
+      // One-time migration to set MYR as default currency in MySQL if not yet applied
+      const [myrMigRows]: any = await conn.query("SELECT setting_value FROM settings WHERE setting_key = 'default_currency_myr_set' LIMIT 1");
+      if (!Array.isArray(myrMigRows) || myrMigRows.length === 0) {
+        await conn.query("UPDATE invoice_settings SET default_currency = 'MYR' WHERE default_currency = 'USD'");
+        await conn.query("UPDATE invoices SET currency = 'MYR' WHERE currency = 'USD'");
+        await conn.query(
+          "INSERT INTO settings (setting_key, setting_value) VALUES ('default_currency_myr_set', '1') ON DUPLICATE KEY UPDATE setting_value = '1'"
+        );
+      }
+    } catch (e: any) {
+      console.warn('[MySQL] Could not ensure invoice tables:', e.message);
+    }
+    try { await conn.query('CREATE INDEX idx_invoices_client ON invoices(client_id)'); } catch {}
+    try { await conn.query('CREATE INDEX idx_invoices_status ON invoices(status)'); } catch {}
+    try { await conn.query('CREATE INDEX idx_invoices_date ON invoices(issue_date)'); } catch {}
+    try { await conn.query('CREATE INDEX idx_inv_items_inv ON invoice_items(invoice_id)'); } catch {}
+
     conn.release();
     await syncFromMySQL(true);
     return true;
@@ -359,6 +504,70 @@ interface Setting {
   updated_at: string;
 }
 
+interface InvoiceCatalogItem {
+  id: number;
+  name: string;
+  description?: string | null;
+  default_unit_price: number;
+  category?: string | null;
+  is_active: number;
+  display_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+interface InvoiceItem {
+  id: number;
+  invoice_id: number;
+  catalog_item_id?: number | null;
+  description: string;
+  quantity: number;
+  unit_price: number;
+  total: number;
+}
+
+interface Invoice {
+  id: number;
+  invoice_number: string;
+  client_id: number;
+  issue_date: string;
+  due_date?: string | null;
+  status: 'Pending' | 'Paid' | 'Partial' | 'Cancelled';
+  payment_method?: 'Cash' | 'Bank Transfer' | 'Credit Card' | 'WeChat Pay' | 'Alipay' | 'Other' | null;
+  currency: string;
+  subtotal: number;
+  discount: number;
+  tax_rate: number;
+  tax_amount: number;
+  total_amount: number;
+  paid_amount: number;
+  balance_due: number;
+  notes?: string | null;
+  created_by_user_id?: number | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface InvoiceSettings {
+  id?: number;
+  company_name: string;
+  company_tagline?: string;
+  logo_url?: string;
+  phone?: string;
+  whatsapp?: string;
+  email?: string;
+  website?: string;
+  address?: string;
+  tax_number?: string;
+  bank_details?: string;
+  payment_notes?: string;
+  terms_and_conditions?: string;
+  default_currency: string;
+  invoice_prefix: string;
+  next_number: number;
+  updated_at?: string;
+}
+
 interface StoreData {
   users: User[];
   countries: Country[];
@@ -376,6 +585,10 @@ interface StoreData {
   hotel_bookings: HotelBooking[];
   follow_ups: FollowUp[];
   settings: Setting[];
+  invoice_settings: InvoiceSettings;
+  invoice_catalog_items: InvoiceCatalogItem[];
+  invoices: Invoice[];
+  invoice_items: InvoiceItem[];
   nextIds: { [table: string]: number };
 }
 
@@ -550,6 +763,109 @@ function getInitialData(): StoreData {
       { id: 2, setting_key: 'secret_login_enabled', setting_value: '1', updated_at: now },
       { id: 3, setting_key: 'secret_login_key', setting_value: 'sn-secure-staff-2026', updated_at: now },
     ],
+    invoice_settings: {
+      id: 1,
+      company_name: 'SN Travels Agency',
+      company_tagline: 'China Visa & Travel Processing Specialists',
+      logo_url: 'https://lh3.googleusercontent.com/d/1wJCY1RJCq0hASsYGGRnScbXDOW9YdPsM',
+      phone: '+971 4 399 2200',
+      whatsapp: '+971 50 123 4567',
+      email: 'visa@sn-travelsagency.com',
+      website: 'sn-travelsagency.com',
+      address: 'Office 402, Al Hudaiba Awards Building, 2nd December St, Dubai, UAE',
+      tax_number: 'TRN-100482910400003',
+      bank_details: 'Bank: Emirates NBD\nAccount Title: SN Travels Agency LLC\nIBAN: AE24 0260 0000 0000 1234 56\nSWIFT: ENBDDBAXXX',
+      payment_notes: 'Please reference your Invoice number when transferring funds. Payment due upon presentation.',
+      terms_and_conditions: '1. Embassy visa processing and biometric slots are subject to consular verification.\n2. Invoices must be cleared before document submission or passport delivery.\n3. Official receipt issued upon payment confirmation.',
+      default_currency: 'MYR',
+      invoice_prefix: 'INV-2026-',
+      next_number: 1004,
+      updated_at: now,
+    },
+    invoice_catalog_items: [
+      { id: 1, name: 'China Commercial Trade Visa (M) - 1 Year Multi-Entry', description: 'Includes documentation audit, PU invitation review, appointment scheduling, and consular VIP submission', default_unit_price: 350, category: 'Visa Services', is_active: 1, display_order: 1, created_at: now, updated_at: now },
+      { id: 2, name: 'China Tourist Visa (L) Standard Processing', description: 'Tourist visa filing, itinerary validation, travel hotel verification, and consular courier dispatch', default_unit_price: 180, category: 'Visa Services', is_active: 1, display_order: 2, created_at: now, updated_at: now },
+      { id: 3, name: 'Official Embassy Consular Visa Fee', description: 'Official government visa stamping charges (Non-refundable consular fee)', default_unit_price: 140, category: 'Government Fees', is_active: 1, display_order: 3, created_at: now, updated_at: now },
+      { id: 4, name: 'Express Consular Priority VIP Handling', description: 'Next-day fast-track processing and priority consular submission lane', default_unit_price: 85, category: 'Express Services', is_active: 1, display_order: 4, created_at: now, updated_at: now },
+      { id: 5, name: 'China Student Visa (X1/X2) Package', description: 'Full review of JW202/DQ form, university admission notice verification, and medical record check', default_unit_price: 220, category: 'Visa Services', is_active: 1, display_order: 5, created_at: now, updated_at: now },
+      { id: 6, name: 'Hotel Reservation & Voucher Booking', description: 'Official confirmed hotel voucher for embassy submission and travel itinerary proof', default_unit_price: 60, category: 'Travel & Accommodation', is_active: 1, display_order: 6, created_at: now, updated_at: now },
+      { id: 7, name: 'Document Legalization & Chinese Translation', description: 'Certified translation into Simplified Chinese by accredited legal translator', default_unit_price: 45, category: 'Document Services', is_active: 1, display_order: 7, created_at: now, updated_at: now },
+      { id: 8, name: 'Secure Passport Return Courier Delivery', description: 'Insured premium diplomatic courier return delivery to client doorstep', default_unit_price: 25, category: 'Logistics', is_active: 1, display_order: 8, created_at: now, updated_at: now },
+    ],
+    invoices: [
+      {
+        id: 1,
+        invoice_number: 'INV-2026-1001',
+        client_id: 1,
+        issue_date: yesterday,
+        due_date: tomorrow,
+        status: 'Paid',
+        payment_method: 'Bank Transfer',
+        currency: 'MYR',
+        subtotal: 490,
+        discount: 0,
+        tax_rate: 5,
+        tax_amount: 24.5,
+        total_amount: 514.5,
+        paid_amount: 514.5,
+        balance_due: 0,
+        notes: 'Client paid in full via Emirates NBD transfer.',
+        created_by_user_id: 1,
+        created_at: now,
+        updated_at: now,
+      },
+      {
+        id: 2,
+        invoice_number: 'INV-2026-1002',
+        client_id: 2,
+        issue_date: today,
+        due_date: inTwoDays,
+        status: 'Partial',
+        payment_method: 'Credit Card',
+        currency: 'MYR',
+        subtotal: 240,
+        discount: 0,
+        tax_rate: 5,
+        tax_amount: 12,
+        total_amount: 252,
+        paid_amount: 150,
+        balance_due: 102,
+        notes: 'Initial deposit received. Balance due upon passport collection.',
+        created_by_user_id: 2,
+        created_at: now,
+        updated_at: now,
+      },
+      {
+        id: 3,
+        invoice_number: 'INV-2026-1003',
+        client_id: 3,
+        issue_date: today,
+        due_date: tomorrow,
+        status: 'Pending',
+        payment_method: 'Bank Transfer',
+        currency: 'MYR',
+        subtotal: 380,
+        discount: 20,
+        tax_rate: 5,
+        tax_amount: 18,
+        total_amount: 378,
+        paid_amount: 0,
+        balance_due: 378,
+        notes: 'F visa processing and express translation package. Invoice emailed to client.',
+        created_by_user_id: 1,
+        created_at: now,
+        updated_at: now,
+      },
+    ],
+    invoice_items: [
+      { id: 1, invoice_id: 1, catalog_item_id: 1, description: 'China Commercial Trade Visa (M) - 1 Year Multi-Entry', quantity: 1, unit_price: 350, total: 350 },
+      { id: 2, invoice_id: 1, catalog_item_id: 3, description: 'Official Embassy Consular Visa Fee', quantity: 1, unit_price: 140, total: 140 },
+      { id: 3, invoice_id: 2, catalog_item_id: 2, description: 'China Tourist Visa (L) Standard Processing', quantity: 1, unit_price: 180, total: 180 },
+      { id: 4, invoice_id: 2, catalog_item_id: 6, description: 'Hotel Reservation & Voucher Booking', quantity: 1, unit_price: 60, total: 60 },
+      { id: 5, invoice_id: 3, catalog_item_id: 5, description: 'China Student Visa (X1/X2) Package', quantity: 1, unit_price: 220, total: 220 },
+      { id: 6, invoice_id: 3, catalog_item_id: 3, description: 'Official Embassy Consular Visa Fee', quantity: 1, unit_price: 140, total: 140 },
+      { id: 7, invoice_id: 3, catalog_item_id: 8, description: 'Secure Passport Return Courier Delivery', quantity: 1, unit_price: 20, total: 20 },
+    ],
     nextIds: {
       users: 4,
       countries: 21,
@@ -567,6 +883,9 @@ function getInitialData(): StoreData {
       hotel_bookings: 1,
       follow_ups: 1,
       settings: 4,
+      invoice_catalog_items: 9,
+      invoices: 4,
+      invoice_items: 8,
     },
   };
 }
@@ -610,6 +929,50 @@ function loadStore(): StoreData {
         parsed.settings = init.settings;
         parsed.nextIds = parsed.nextIds || {};
         parsed.nextIds.settings = init.nextIds.settings;
+        needsSave = true;
+      }
+      if (!parsed.invoice_settings) {
+        parsed.invoice_settings = getInitialData().invoice_settings;
+        needsSave = true;
+      } else if (
+        !parsed.invoice_settings.logo_url ||
+        parsed.invoice_settings.logo_url.includes('photo-1569154941061')
+      ) {
+        parsed.invoice_settings.logo_url = 'https://lh3.googleusercontent.com/d/1wJCY1RJCq0hASsYGGRnScbXDOW9YdPsM';
+        needsSave = true;
+      }
+      if (!parsed.invoice_catalog_items || parsed.invoice_catalog_items.length === 0) {
+        parsed.invoice_catalog_items = getInitialData().invoice_catalog_items;
+        parsed.nextIds = parsed.nextIds || {};
+        parsed.nextIds.invoice_catalog_items = 9;
+        needsSave = true;
+      }
+      if (!parsed.invoices) {
+        parsed.invoices = getInitialData().invoices;
+        parsed.invoice_items = getInitialData().invoice_items;
+        parsed.nextIds = parsed.nextIds || {};
+        parsed.nextIds.invoices = 4;
+        parsed.nextIds.invoice_items = 8;
+        needsSave = true;
+      }
+      const hasMyrMigration = (parsed.settings || []).some((s: any) => s.setting_key === 'default_currency_myr_set');
+      if (!hasMyrMigration) {
+        if (parsed.invoice_settings && parsed.invoice_settings.default_currency === 'USD') {
+          parsed.invoice_settings.default_currency = 'MYR';
+        }
+        if (Array.isArray(parsed.invoices)) {
+          parsed.invoices.forEach((inv: any) => {
+            if (inv.currency === 'USD') inv.currency = 'MYR';
+          });
+        }
+        parsed.settings = parsed.settings || [];
+        parsed.nextIds = parsed.nextIds || {};
+        parsed.settings.push({
+          id: (parsed.nextIds.settings = (parsed.nextIds.settings || 10) + 1),
+          setting_key: 'default_currency_myr_set',
+          setting_value: '1',
+          updated_at: new Date().toISOString(),
+        });
         needsSave = true;
       }
       if (needsSave) {
@@ -686,7 +1049,7 @@ async function deleteClientFromMySQL(id: number, clientIdString?: string): Promi
       console.warn('[MySQL] Could not delete comments by client_id:', e.message);
     }
 
-    // 4. Delete hotel bookings and follow-ups linked to client
+    // 4. Delete hotel bookings, follow-ups, and invoices linked to client
     try {
       await pool.query('DELETE FROM hotel_bookings WHERE client_id = ?', [id]);
     } catch (e: any) {
@@ -696,6 +1059,16 @@ async function deleteClientFromMySQL(id: number, clientIdString?: string): Promi
       await pool.query('DELETE FROM follow_ups WHERE client_id = ?', [id]);
     } catch (e: any) {
       console.warn('[MySQL] Could not delete follow_ups:', e.message);
+    }
+    try {
+      const [invRows]: any = await pool.query('SELECT id FROM invoices WHERE client_id = ?', [id]);
+      if (Array.isArray(invRows) && invRows.length > 0) {
+        const invIds = invRows.map((r: any) => r.id);
+        await pool.query('DELETE FROM invoice_items WHERE invoice_id IN (?)', [invIds]);
+      }
+      await pool.query('DELETE FROM invoices WHERE client_id = ?', [id]);
+    } catch (e: any) {
+      console.warn('[MySQL] Could not delete client invoices:', e.message);
     }
 
     // 5. Delete visa applications linked to client
@@ -776,7 +1149,7 @@ async function syncFromMySQL(force = false): Promise<void> {
   };
 
   try {
-    const [u, c, cl, cf, cfv, vt, va, ash, t, cm, al, h, hr, hb, s, fu] = await Promise.all([
+    const [u, c, cl, cf, cfv, vt, va, ash, t, cm, al, h, hr, hb, s, fu, invS, invCat, inv, invItems] = await Promise.all([
       safeQuery('SELECT * FROM users'),
       safeQuery('SELECT * FROM countries ORDER BY display_order ASC, name ASC'),
       safeQuery('SELECT * FROM clients'),
@@ -793,6 +1166,10 @@ async function syncFromMySQL(force = false): Promise<void> {
       safeQuery('SELECT * FROM hotel_bookings'),
       safeQuery('SELECT * FROM settings'),
       safeQuery('SELECT * FROM follow_ups'),
+      safeQuery('SELECT * FROM invoice_settings LIMIT 1'),
+      safeQuery('SELECT * FROM invoice_catalog_items ORDER BY display_order ASC, id ASC'),
+      safeQuery('SELECT * FROM invoices ORDER BY id DESC'),
+      safeQuery('SELECT * FROM invoice_items'),
     ]);
 
     if (Array.isArray(u) && u.length > 0) store.users = u;
@@ -838,6 +1215,43 @@ async function syncFromMySQL(force = false): Promise<void> {
     }
     if (Array.isArray(s) && s.length > 0) store.settings = s;
 
+    if (Array.isArray(invS) && invS.length > 0) {
+      store.invoice_settings = {
+        ...invS[0],
+        next_number: Number(invS[0].next_number) || 1001,
+      };
+    }
+    if (Array.isArray(invCat)) {
+      store.invoice_catalog_items = invCat.map((item: any) => ({
+        ...item,
+        default_unit_price: Number(item.default_unit_price) || 0,
+        is_active: Number(item.is_active ?? 1),
+        display_order: Number(item.display_order) || 0,
+      }));
+    }
+    if (Array.isArray(inv)) {
+      store.invoices = inv.map((item: any) => ({
+        ...item,
+        issue_date: item.issue_date ? String(item.issue_date).slice(0, 10) : new Date().toISOString().slice(0, 10),
+        due_date: item.due_date ? String(item.due_date).slice(0, 10) : null,
+        subtotal: Number(item.subtotal) || 0,
+        discount: Number(item.discount) || 0,
+        tax_rate: Number(item.tax_rate) || 0,
+        tax_amount: Number(item.tax_amount) || 0,
+        total_amount: Number(item.total_amount) || 0,
+        paid_amount: Number(item.paid_amount) || 0,
+        balance_due: Number(item.balance_due) || 0,
+      }));
+    }
+    if (Array.isArray(invItems)) {
+      store.invoice_items = invItems.map((item: any) => ({
+        ...item,
+        quantity: Number(item.quantity) || 1,
+        unit_price: Number(item.unit_price) || 0,
+        total: Number(item.total) || 0,
+      }));
+    }
+
     // Recalculate nextIds safely
     store.nextIds = {
       users: Math.max(...store.users.map(x => x.id), 0) + 1,
@@ -856,6 +1270,9 @@ async function syncFromMySQL(force = false): Promise<void> {
       hotel_bookings: Math.max(...(store.hotel_bookings || []).map(x => x.id), 0) + 1,
       follow_ups: Math.max(...(store.follow_ups || []).map(x => x.id), 0) + 1,
       settings: Math.max(...(store.settings || []).map(x => x.id), 0) + 1,
+      invoice_catalog_items: Math.max(...(store.invoice_catalog_items || []).map(x => x.id), 0) + 1,
+      invoices: Math.max(...(store.invoices || []).map(x => x.id), 0) + 1,
+      invoice_items: Math.max(...(store.invoice_items || []).map(x => x.id), 0) + 1,
     };
 
     lastSyncTime = Date.now();
@@ -1192,6 +1609,9 @@ export const dbService = {
     // Follow-ups for this client
     const followUps = this.getFollowUps({ clientId: client.id });
 
+    // Invoices for this client
+    const invoices = this.getInvoices({ clientId: client.id });
+
     return {
       ...client,
       custom_values: customValues,
@@ -1199,6 +1619,7 @@ export const dbService = {
       tasks,
       hotel_bookings: hotelBookings,
       follow_ups: followUps,
+      invoices,
       comments,
       activity,
     };
@@ -1491,6 +1912,9 @@ export const dbService = {
     store.comments = store.comments.filter(c => c.client_id !== id && !relatedAppIds.includes(c.application_id || 0));
     store.hotel_bookings = (store.hotel_bookings || []).filter(b => b.client_id !== id);
     store.follow_ups = (store.follow_ups || []).filter(f => f.client_id !== id);
+    const clientInvoiceIds = (store.invoices || []).filter(inv => inv.client_id === id).map(inv => inv.id);
+    store.invoices = (store.invoices || []).filter(inv => inv.client_id !== id);
+    store.invoice_items = (store.invoice_items || []).filter(it => !clientInvoiceIds.includes(it.invoice_id));
     store.application_status_history = store.application_status_history.filter(h => !relatedAppIds.includes(h.application_id));
 
     saveStore(store);
@@ -4227,6 +4651,10 @@ export const dbService = {
     dumpTable('hotel_rooms', store.hotel_rooms);
     dumpTable('hotel_bookings', store.hotel_bookings);
     dumpTable('follow_ups', store.follow_ups || []);
+    dumpTable('invoice_settings', store.invoice_settings ? [store.invoice_settings] : []);
+    dumpTable('invoice_catalog_items', store.invoice_catalog_items || []);
+    dumpTable('invoices', store.invoices || []);
+    dumpTable('invoice_items', store.invoice_items || []);
     dumpTable('settings', store.settings || []);
 
     // Also append metadata JSON block for instant 100% faithful JSON parse restore
@@ -4279,6 +4707,10 @@ export const dbService = {
           store.hotels = parsed.hotels || [];
           store.hotel_rooms = parsed.hotel_rooms || [];
           store.hotel_bookings = parsed.hotel_bookings || [];
+          if (parsed.invoice_settings) store.invoice_settings = parsed.invoice_settings;
+          if (Array.isArray(parsed.invoice_catalog_items)) store.invoice_catalog_items = parsed.invoice_catalog_items;
+          if (Array.isArray(parsed.invoices)) store.invoices = parsed.invoices;
+          if (Array.isArray(parsed.invoice_items)) store.invoice_items = parsed.invoice_items;
           store.settings = parsed.settings || store.settings;
           store.nextIds = parsed.nextIds || store.nextIds;
 
@@ -4334,5 +4766,743 @@ export const dbService = {
     }
 
     throw new Error('Unrecognized SQL backup format. Please ensure you upload a valid SN Travels SQL backup file.');
+  },
+
+  // --------------------------------------------------------------------------
+  // Invoice Settings & Configurable Catalog Management
+  // --------------------------------------------------------------------------
+  getInvoiceSettings(): InvoiceSettings {
+    if (!store.invoice_settings) {
+      store.invoice_settings = getInitialData().invoice_settings;
+    }
+    const prefix = store.invoice_settings.invoice_prefix || 'INV-2026-';
+    let nextNum = Number(store.invoice_settings.next_number) || 1001;
+    const existingNumbers = new Set((store.invoices || []).map(inv => (inv.invoice_number || '').trim().toUpperCase()));
+    while (existingNumbers.has(`${prefix}${nextNum}`.toUpperCase())) {
+      nextNum++;
+    }
+    if (nextNum !== store.invoice_settings.next_number) {
+      store.invoice_settings.next_number = nextNum;
+      saveStore(store);
+    }
+    return { ...store.invoice_settings };
+  },
+
+  async updateInvoiceSettings(data: Partial<InvoiceSettings>, operatorId?: number): Promise<InvoiceSettings> {
+    if (!store.invoice_settings) {
+      store.invoice_settings = getInitialData().invoice_settings;
+    }
+    const updated: InvoiceSettings = {
+      ...store.invoice_settings,
+      ...data,
+      updated_at: new Date().toISOString(),
+    };
+    store.invoice_settings = updated;
+    saveStore(store);
+
+    if (pool && isConnectedToMySQL) {
+      try {
+        await pool.query(
+          `INSERT INTO invoice_settings (id, company_name, company_tagline, logo_url, phone, whatsapp, email, website, address, tax_number, bank_details, payment_notes, terms_and_conditions, default_currency, invoice_prefix, next_number)
+           VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON DUPLICATE KEY UPDATE
+             company_name = VALUES(company_name),
+             company_tagline = VALUES(company_tagline),
+             logo_url = VALUES(logo_url),
+             phone = VALUES(phone),
+             whatsapp = VALUES(whatsapp),
+             email = VALUES(email),
+             website = VALUES(website),
+             address = VALUES(address),
+             tax_number = VALUES(tax_number),
+             bank_details = VALUES(bank_details),
+             payment_notes = VALUES(payment_notes),
+             terms_and_conditions = VALUES(terms_and_conditions),
+             default_currency = VALUES(default_currency),
+             invoice_prefix = VALUES(invoice_prefix),
+             next_number = VALUES(next_number)`,
+          [
+            updated.company_name || 'SN Travels Agency',
+            updated.company_tagline || '',
+            updated.logo_url || null,
+            updated.phone || '',
+            updated.whatsapp || '',
+            updated.email || '',
+            updated.website || '',
+            updated.address || '',
+            updated.tax_number || null,
+            updated.bank_details || '',
+            updated.payment_notes || '',
+            updated.terms_and_conditions || '',
+            updated.default_currency || 'MYR',
+            updated.invoice_prefix || 'INV-2026-',
+            updated.next_number || 1001,
+          ]
+        );
+      } catch (err: any) {
+        console.warn('[MySQL] Failed to update invoice_settings:', err.message);
+      }
+    }
+
+    if (operatorId) {
+      this.logActivity(
+        operatorId,
+        'UPDATE_SETTINGS',
+        'SYSTEM',
+        1,
+        'Updated company invoice branding and billing configuration'
+      );
+    }
+
+    return updated;
+  },
+
+  getInvoiceCatalogItems(activeOnly = false): InvoiceCatalogItem[] {
+    if (!store.invoice_catalog_items) {
+      store.invoice_catalog_items = getInitialData().invoice_catalog_items;
+    }
+    let list = [...store.invoice_catalog_items];
+    if (activeOnly) {
+      list = list.filter(item => item.is_active === 1);
+    }
+    return list.sort((a, b) => (a.display_order || 999) - (b.display_order || 999) || a.id - b.id);
+  },
+
+  getInvoiceCatalog(activeOnly = false): InvoiceCatalogItem[] {
+    return this.getInvoiceCatalogItems(activeOnly);
+  },
+
+  async createInvoiceCatalogItem(data: Omit<InvoiceCatalogItem, 'id' | 'created_at' | 'updated_at'>, operatorId?: number): Promise<InvoiceCatalogItem> {
+    if (!store.invoice_catalog_items) {
+      store.invoice_catalog_items = getInitialData().invoice_catalog_items;
+    }
+    const now = new Date().toISOString();
+    const id = (store.nextIds.invoice_catalog_items = (store.nextIds.invoice_catalog_items || 10) + 1);
+    const maxOrder = store.invoice_catalog_items.reduce((max, it) => Math.max(max, Number(it.display_order) || 0), 0);
+    const desiredOrder =
+      data.display_order !== undefined && Number(data.display_order) > 0
+        ? Number(data.display_order)
+        : maxOrder + 1;
+
+    const newItem: InvoiceCatalogItem = {
+      id,
+      name: data.name,
+      description: data.description || null,
+      default_unit_price: Number(data.default_unit_price) || 0,
+      category: data.category || 'Visa Services',
+      is_active: data.is_active ?? 1,
+      display_order: desiredOrder,
+      created_at: now,
+      updated_at: now,
+    };
+
+    store.invoice_catalog_items.push(newItem);
+    // Normalize display_order sequence
+    const sorted = [...store.invoice_catalog_items].sort((a, b) => {
+      if (a.id === newItem.id && b.display_order >= desiredOrder) return -1;
+      if (b.id === newItem.id && a.display_order >= desiredOrder) return 1;
+      return (a.display_order || 999) - (b.display_order || 999) || a.id - b.id;
+    });
+    sorted.forEach((it, idx) => {
+      it.display_order = idx + 1;
+    });
+    saveStore(store);
+
+    if (pool && isConnectedToMySQL) {
+      try {
+        await pool.query(
+          `INSERT INTO invoice_catalog_items (id, name, description, default_unit_price, category, is_active, display_order)
+           VALUES (?, ?, ?, ?, ?, ?, ?)`,
+          [
+            newItem.id,
+            newItem.name,
+            newItem.description,
+            newItem.default_unit_price,
+            newItem.category,
+            newItem.is_active,
+            newItem.display_order,
+          ]
+        );
+        for (const it of sorted) {
+          await pool.query('UPDATE invoice_catalog_items SET display_order = ? WHERE id = ?', [it.display_order, it.id]);
+        }
+      } catch (err: any) {
+        console.warn('[MySQL] Failed to insert invoice_catalog_item:', err.message);
+      }
+    }
+
+    if (operatorId) {
+      this.logActivity(
+        operatorId,
+        'CREATE',
+        'SYSTEM',
+        newItem.id,
+        `Created new invoice field/service preset: "${newItem.name}"`
+      );
+    }
+
+    return newItem;
+  },
+
+  async reorderInvoiceCatalogItems(orderedIds: number[], operatorId?: number): Promise<InvoiceCatalogItem[]> {
+    if (!store.invoice_catalog_items) {
+      store.invoice_catalog_items = getInitialData().invoice_catalog_items;
+    }
+
+    const idRank = new Map<number, number>();
+    orderedIds.forEach((id, idx) => {
+      idRank.set(Number(id), idx + 1);
+    });
+
+    const sorted = [...store.invoice_catalog_items].sort((a, b) => {
+      const rankA = idRank.get(a.id) ?? (a.display_order || 999) + 1000;
+      const rankB = idRank.get(b.id) ?? (b.display_order || 999) + 1000;
+      return rankA - rankB || a.id - b.id;
+    });
+
+    const now = new Date().toISOString();
+    sorted.forEach((it, idx) => {
+      it.display_order = idx + 1;
+      it.updated_at = now;
+    });
+
+    store.invoice_catalog_items = sorted;
+    saveStore(store);
+
+    if (pool && isConnectedToMySQL) {
+      try {
+        for (const it of sorted) {
+          await pool.query(
+            'UPDATE invoice_catalog_items SET display_order = ? WHERE id = ?',
+            [it.display_order, it.id]
+          );
+        }
+      } catch (err: any) {
+        console.warn('[MySQL] Failed to reorder invoice_catalog_items:', err.message);
+      }
+    }
+
+    if (operatorId) {
+      this.logActivity(
+        operatorId,
+        'UPDATE',
+        'SYSTEM',
+        1,
+        'Reordered invoice quick-add service items'
+      );
+    }
+
+    return this.getInvoiceCatalogItems(false);
+  },
+
+  async updateInvoiceCatalogItem(id: number, data: Partial<InvoiceCatalogItem>, operatorId?: number): Promise<InvoiceCatalogItem | null> {
+    if (!store.invoice_catalog_items) store.invoice_catalog_items = [];
+    const item = store.invoice_catalog_items.find(i => i.id === id);
+    if (!item) return null;
+
+    if (data.name !== undefined) item.name = data.name;
+    if (data.description !== undefined) item.description = data.description;
+    if (data.default_unit_price !== undefined) item.default_unit_price = Number(data.default_unit_price) || 0;
+    if (data.category !== undefined) item.category = data.category;
+    if (data.is_active !== undefined) item.is_active = data.is_active;
+    if (data.display_order !== undefined) item.display_order = Number(data.display_order) || item.display_order;
+    item.updated_at = new Date().toISOString();
+
+    saveStore(store);
+
+    if (pool && isConnectedToMySQL) {
+      try {
+        await pool.query(
+          `INSERT INTO invoice_catalog_items (id, name, description, default_unit_price, category, is_active, display_order)
+           VALUES (?, ?, ?, ?, ?, ?, ?)
+           ON DUPLICATE KEY UPDATE
+             name = VALUES(name),
+             description = VALUES(description),
+             default_unit_price = VALUES(default_unit_price),
+             category = VALUES(category),
+             is_active = VALUES(is_active),
+             display_order = VALUES(display_order)`,
+          [
+            item.id,
+            item.name,
+            item.description,
+            item.default_unit_price,
+            item.category,
+            item.is_active,
+            item.display_order,
+          ]
+        );
+      } catch (err: any) {
+        console.warn('[MySQL] Failed to update invoice_catalog_item:', err.message);
+      }
+    }
+
+    if (operatorId) {
+      this.logActivity(
+        operatorId,
+        'UPDATE',
+        'SYSTEM',
+        item.id,
+        `Updated invoice preset field: "${item.name}"`
+      );
+    }
+
+    return item;
+  },
+
+  async deleteInvoiceCatalogItem(id: number, operatorId?: number): Promise<boolean> {
+    if (!store.invoice_catalog_items) return false;
+    const index = store.invoice_catalog_items.findIndex(i => i.id === id);
+    if (index === -1) return false;
+
+    const [deleted] = store.invoice_catalog_items.splice(index, 1);
+    saveStore(store);
+
+    if (pool && isConnectedToMySQL) {
+      try {
+        await pool.query('DELETE FROM invoice_catalog_items WHERE id = ?', [id]);
+      } catch (err: any) {
+        console.warn('[MySQL] Failed to delete invoice_catalog_item:', err.message);
+      }
+    }
+
+    if (operatorId) {
+      this.logActivity(
+        operatorId,
+        'DELETE',
+        'SYSTEM',
+        id,
+        `Deleted invoice field preset: "${deleted.name}"`
+      );
+    }
+
+    return true;
+  },
+
+  // --------------------------------------------------------------------------
+  // Customer Invoices & Items Management
+  // --------------------------------------------------------------------------
+  getInvoices(filters?: { clientId?: number; status?: string; search?: string }) {
+    if (!store.invoices) store.invoices = [];
+    if (!store.invoice_items) store.invoice_items = [];
+
+    let list = store.invoices.map(inv => {
+      const client = store.clients.find(c => c.id === inv.client_id);
+      const items = store.invoice_items.filter(it => it.invoice_id === inv.id);
+      const user = inv.created_by_user_id ? store.users.find(u => u.id === inv.created_by_user_id) : null;
+
+      return {
+        ...inv,
+        client_name: client?.full_name || 'Unknown Client',
+        client_photo_url: client?.photo_url || null,
+        client_passport: client?.passport_number || '',
+        client_phone: client?.phone || client?.whatsapp || '',
+        client_email: client?.email || '',
+        client_address: client?.address || '',
+        client_country: client?.country || '',
+        client_code: client?.client_id || '',
+        created_by_user_name: user?.name || null,
+        items,
+      };
+    });
+
+    if (filters?.clientId) {
+      list = list.filter(inv => inv.client_id === filters.clientId);
+    }
+    if (filters?.status && filters.status !== 'all') {
+      list = list.filter(inv => inv.status.toLowerCase() === filters.status!.toLowerCase());
+    }
+    if (filters?.search) {
+      const q = filters.search.toLowerCase().trim();
+      list = list.filter(inv =>
+        inv.invoice_number.toLowerCase().includes(q) ||
+        (inv.client_name && inv.client_name.toLowerCase().includes(q)) ||
+        (inv.client_passport && inv.client_passport.toLowerCase().includes(q)) ||
+        (inv.client_code && inv.client_code.toLowerCase().includes(q)) ||
+        (inv.notes && inv.notes.toLowerCase().includes(q))
+      );
+    }
+
+    return list.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
+  },
+
+  getInvoiceById(id: number) {
+    if (!store.invoices) return null;
+    const inv = store.invoices.find(i => i.id === id);
+    if (!inv) return null;
+
+    const client = store.clients.find(c => c.id === inv.client_id);
+    const items = (store.invoice_items || []).filter(it => it.invoice_id === inv.id);
+    const user = inv.created_by_user_id ? store.users.find(u => u.id === inv.created_by_user_id) : null;
+
+    return {
+      ...inv,
+      client_name: client?.full_name || 'Unknown Client',
+      client_photo_url: client?.photo_url || null,
+      client_passport: client?.passport_number || '',
+      client_phone: client?.phone || client?.whatsapp || '',
+      client_email: client?.email || '',
+      client_address: client?.address || '',
+      client_country: client?.country || '',
+      client_code: client?.client_id || '',
+      created_by_user_name: user?.name || null,
+      items,
+    };
+  },
+
+  async createInvoice(data: any, operatorId?: number): Promise<any> {
+    if (!store.invoices) store.invoices = [];
+    if (!store.invoice_items) store.invoice_items = [];
+    if (!store.invoice_settings) store.invoice_settings = getInitialData().invoice_settings;
+
+    const now = new Date().toISOString();
+    const id = (store.nextIds.invoices = (store.nextIds.invoices || 10) + 1);
+
+    // Generate or validate unique Invoice Number and advance next_number
+    const prefix = store.invoice_settings.invoice_prefix || 'INV-2026-';
+    let nextNum = Number(store.invoice_settings.next_number) || 1001;
+    const existingNumbers = new Set((store.invoices || []).map(inv => (inv.invoice_number || '').trim().toUpperCase()));
+
+    let invoiceNumber = typeof data.invoice_number === 'string' ? data.invoice_number.trim() : '';
+    if (!invoiceNumber || existingNumbers.has(invoiceNumber.toUpperCase())) {
+      while (existingNumbers.has(`${prefix}${nextNum}`.toUpperCase())) {
+        nextNum++;
+      }
+      invoiceNumber = `${prefix}${nextNum}`;
+      store.invoice_settings.next_number = nextNum + 1;
+    } else {
+      // If provided invoice number ends with digits >= next_number, advance next_number
+      const trailingDigitsMatch = invoiceNumber.match(/(\d+)$/);
+      if (trailingDigitsMatch) {
+        const usedNum = parseInt(trailingDigitsMatch[1], 10);
+        if (!isNaN(usedNum) && usedNum >= nextNum) {
+          store.invoice_settings.next_number = usedNum + 1;
+        }
+      }
+    }
+
+    const itemsInput: any[] = Array.isArray(data.items) ? data.items : [];
+    
+    // Calculate items totals
+    let calculatedSubtotal = 0;
+    const preparedItems: InvoiceItem[] = itemsInput.map((it) => {
+      const itemId = (store.nextIds.invoice_items = (store.nextIds.invoice_items || 20) + 1);
+      const qty = Math.max(1, Number(it.quantity) || 1);
+      const unitPrice = Math.max(0, Number(it.unit_price) || 0);
+      const lineTotal = Number((qty * unitPrice).toFixed(2));
+      calculatedSubtotal += lineTotal;
+
+      return {
+        id: itemId,
+        invoice_id: id,
+        catalog_item_id: it.catalog_item_id ? Number(it.catalog_item_id) : null,
+        description: it.description || 'Service Fee',
+        quantity: qty,
+        unit_price: unitPrice,
+        total: lineTotal,
+      };
+    });
+
+    const subtotal = data.subtotal !== undefined ? Number(data.subtotal) : Number(calculatedSubtotal.toFixed(2));
+    const discount = Math.max(0, Number(data.discount) || 0);
+    const taxRate = Math.max(0, Number(data.tax_rate) || 0);
+    const afterDiscount = Math.max(0, subtotal - discount);
+    const taxAmount = Number(((afterDiscount * taxRate) / 100).toFixed(2));
+    const totalAmount = Number((afterDiscount + taxAmount).toFixed(2));
+
+    let status = data.status || 'Pending';
+    let paidAmount = Math.max(0, Number(data.paid_amount) || 0);
+
+    if (status === 'Paid') {
+      paidAmount = totalAmount;
+    } else if (status === 'Pending' || status === 'Cancelled') {
+      if (data.status === 'Pending' || data.status === 'Cancelled') {
+        paidAmount = 0;
+      }
+    }
+
+    if (status !== 'Cancelled') {
+      if (paidAmount >= totalAmount && totalAmount > 0) {
+        status = 'Paid';
+        paidAmount = totalAmount;
+      } else if (paidAmount > 0 && paidAmount < totalAmount) {
+        status = 'Partial';
+      }
+    }
+
+    const balanceDue = status === 'Cancelled' ? 0 : Math.max(0, Number((totalAmount - paidAmount).toFixed(2)));
+
+    const newInvoice: Invoice = {
+      id,
+      invoice_number: invoiceNumber,
+      client_id: Number(data.client_id),
+      issue_date: data.issue_date || now.split('T')[0],
+      due_date: data.due_date || null,
+      status,
+      payment_method: data.payment_method || null,
+      currency: data.currency || store.invoice_settings.default_currency || 'MYR',
+      subtotal,
+      discount,
+      tax_rate: taxRate,
+      tax_amount: taxAmount,
+      total_amount: totalAmount,
+      paid_amount: paidAmount,
+      balance_due: balanceDue,
+      notes: data.notes || null,
+      created_by_user_id: operatorId || data.created_by_user_id || null,
+      created_at: now,
+      updated_at: now,
+    };
+
+    store.invoices.unshift(newInvoice);
+    preparedItems.forEach(it => store.invoice_items.push(it));
+    saveStore(store);
+
+    if (pool && isConnectedToMySQL) {
+      try {
+        await pool.query(
+          `INSERT INTO invoices (id, invoice_number, client_id, issue_date, due_date, status, payment_method, currency, subtotal, discount, tax_rate, tax_amount, total_amount, paid_amount, balance_due, notes, created_by_user_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            newInvoice.id,
+            newInvoice.invoice_number,
+            newInvoice.client_id,
+            newInvoice.issue_date,
+            newInvoice.due_date,
+            newInvoice.status,
+            newInvoice.payment_method,
+            newInvoice.currency,
+            newInvoice.subtotal,
+            newInvoice.discount,
+            newInvoice.tax_rate,
+            newInvoice.tax_amount,
+            newInvoice.total_amount,
+            newInvoice.paid_amount,
+            newInvoice.balance_due,
+            newInvoice.notes,
+            newInvoice.created_by_user_id,
+          ]
+        );
+
+        for (const it of preparedItems) {
+          await pool.query(
+            `INSERT INTO invoice_items (id, invoice_id, catalog_item_id, description, quantity, unit_price, total)
+             VALUES (?, ?, ?, ?, ?, ?, ?)`,
+            [
+              it.id,
+              it.invoice_id,
+              it.catalog_item_id,
+              it.description,
+              it.quantity,
+              it.unit_price,
+              it.total,
+            ]
+          );
+        }
+
+        // Update settings next_number in MySQL
+        await pool.query(
+          'UPDATE invoice_settings SET next_number = ? WHERE id = 1',
+          [store.invoice_settings.next_number]
+        ).catch(() => {});
+      } catch (err: any) {
+        console.warn('[MySQL] Failed to insert invoice:', err.message);
+      }
+    }
+
+    const client = store.clients.find(c => c.id === newInvoice.client_id);
+    if (operatorId) {
+      this.logActivity(
+        operatorId,
+        'CREATE',
+        'CLIENT',
+        newInvoice.client_id,
+        `Created invoice ${newInvoice.invoice_number} for ${client?.full_name || 'Client'} (${newInvoice.currency} ${newInvoice.total_amount.toFixed(2)})`
+      );
+    }
+
+    return this.getInvoiceById(id);
+  },
+
+  async updateInvoice(id: number, data: any, operatorId?: number): Promise<any> {
+    if (!store.invoices) return null;
+    const inv = store.invoices.find(i => i.id === id);
+    if (!inv) return null;
+
+    const now = new Date().toISOString();
+
+    if (data.invoice_number !== undefined) inv.invoice_number = data.invoice_number;
+    if (data.client_id !== undefined) inv.client_id = Number(data.client_id);
+    if (data.issue_date !== undefined) inv.issue_date = data.issue_date;
+    if (data.due_date !== undefined) inv.due_date = data.due_date;
+    if (data.payment_method !== undefined) inv.payment_method = data.payment_method;
+    if (data.currency !== undefined) inv.currency = data.currency;
+    if (data.notes !== undefined) inv.notes = data.notes;
+
+    // Handle line items if updated
+    if (Array.isArray(data.items)) {
+      // Remove previous items
+      store.invoice_items = (store.invoice_items || []).filter(it => it.invoice_id !== id);
+
+      let calculatedSubtotal = 0;
+      const newItems: InvoiceItem[] = data.items.map((it: any) => {
+        const itemId = (store.nextIds.invoice_items = (store.nextIds.invoice_items || 20) + 1);
+        const qty = Math.max(1, Number(it.quantity) || 1);
+        const unitPrice = Math.max(0, Number(it.unit_price) || 0);
+        const lineTotal = Number((qty * unitPrice).toFixed(2));
+        calculatedSubtotal += lineTotal;
+
+        return {
+          id: itemId,
+          invoice_id: id,
+          catalog_item_id: it.catalog_item_id ? Number(it.catalog_item_id) : null,
+          description: it.description || 'Service Fee',
+          quantity: qty,
+          unit_price: unitPrice,
+          total: lineTotal,
+        };
+      });
+
+      newItems.forEach(it => store.invoice_items.push(it));
+      inv.subtotal = Number(calculatedSubtotal.toFixed(2));
+    } else if (data.subtotal !== undefined) {
+      inv.subtotal = Number(data.subtotal);
+    }
+
+    if (data.discount !== undefined) inv.discount = Number(data.discount) || 0;
+    if (data.tax_rate !== undefined) inv.tax_rate = Number(data.tax_rate) || 0;
+
+    const afterDiscount = Math.max(0, inv.subtotal - inv.discount);
+    inv.tax_amount = Number(((afterDiscount * inv.tax_rate) / 100).toFixed(2));
+    inv.total_amount = Number((afterDiscount + inv.tax_amount).toFixed(2));
+
+    if (data.paid_amount !== undefined) inv.paid_amount = Math.max(0, Number(data.paid_amount) || 0);
+
+    if (data.status) {
+      inv.status = data.status;
+      if (data.status === 'Paid') {
+        inv.paid_amount = inv.total_amount;
+      } else if (data.status === 'Pending' || data.status === 'Cancelled') {
+        inv.paid_amount = 0;
+      }
+    } else {
+      if (inv.paid_amount >= inv.total_amount && inv.total_amount > 0) {
+        inv.status = 'Paid';
+        inv.paid_amount = inv.total_amount;
+      } else if (inv.paid_amount > 0 && inv.paid_amount < inv.total_amount) {
+        inv.status = 'Partial';
+      } else {
+        inv.status = 'Pending';
+      }
+    }
+
+    if (inv.status !== 'Cancelled') {
+      if (inv.paid_amount >= inv.total_amount && inv.total_amount > 0) {
+        inv.status = 'Paid';
+        inv.paid_amount = inv.total_amount;
+      } else if (inv.paid_amount > 0 && inv.paid_amount < inv.total_amount && data.status !== 'Paid') {
+        inv.status = 'Partial';
+      }
+    }
+
+    inv.balance_due = inv.status === 'Cancelled' ? 0 : Math.max(0, Number((inv.total_amount - inv.paid_amount).toFixed(2)));
+
+    inv.updated_at = now;
+    saveStore(store);
+
+    if (pool && isConnectedToMySQL) {
+      try {
+        await pool.query(
+          `UPDATE invoices SET
+             invoice_number = ?, client_id = ?, issue_date = ?, due_date = ?, status = ?,
+             payment_method = ?, currency = ?, subtotal = ?, discount = ?, tax_rate = ?,
+             tax_amount = ?, total_amount = ?, paid_amount = ?, balance_due = ?, notes = ?
+           WHERE id = ?`,
+          [
+            inv.invoice_number,
+            inv.client_id,
+            inv.issue_date,
+            inv.due_date,
+            inv.status,
+            inv.payment_method,
+            inv.currency,
+            inv.subtotal,
+            inv.discount,
+            inv.tax_rate,
+            inv.tax_amount,
+            inv.total_amount,
+            inv.paid_amount,
+            inv.balance_due,
+            inv.notes,
+            inv.id,
+          ]
+        );
+
+        if (Array.isArray(data.items)) {
+          await pool.query('DELETE FROM invoice_items WHERE invoice_id = ?', [id]);
+          const currentItems = store.invoice_items.filter(it => it.invoice_id === id);
+          for (const it of currentItems) {
+            await pool.query(
+              `INSERT INTO invoice_items (id, invoice_id, catalog_item_id, description, quantity, unit_price, total)
+               VALUES (?, ?, ?, ?, ?, ?, ?)`,
+              [
+                it.id,
+                it.invoice_id,
+                it.catalog_item_id,
+                it.description,
+                it.quantity,
+                it.unit_price,
+                it.total,
+              ]
+            );
+          }
+        }
+      } catch (err: any) {
+        console.warn('[MySQL] Failed to update invoice in MySQL:', err.message);
+      }
+    }
+
+    if (operatorId) {
+      this.logActivity(
+        operatorId,
+        'UPDATE',
+        'CLIENT',
+        inv.client_id,
+        `Updated invoice ${inv.invoice_number} (Status: ${inv.status}, Total: ${inv.currency} ${inv.total_amount.toFixed(2)})`
+      );
+    }
+
+    return this.getInvoiceById(id);
+  },
+
+  async deleteInvoice(id: number, operatorId?: number): Promise<boolean> {
+    if (!store.invoices) return false;
+    const index = store.invoices.findIndex(i => i.id === id);
+    if (index === -1) return false;
+
+    const [deleted] = store.invoices.splice(index, 1);
+    store.invoice_items = (store.invoice_items || []).filter(it => it.invoice_id !== id);
+    saveStore(store);
+
+    if (pool && isConnectedToMySQL) {
+      try {
+        await pool.query('DELETE FROM invoice_items WHERE invoice_id = ?', [id]);
+        await pool.query('DELETE FROM invoices WHERE id = ?', [id]);
+      } catch (err: any) {
+        console.warn('[MySQL] Failed to delete invoice in MySQL:', err.message);
+      }
+    }
+
+    if (operatorId) {
+      this.logActivity(
+        operatorId,
+        'DELETE',
+        'CLIENT',
+        deleted.client_id,
+        `Deleted invoice ${deleted.invoice_number} (${deleted.currency} ${deleted.total_amount.toFixed(2)})`
+      );
+    }
+
+    return true;
   },
 };

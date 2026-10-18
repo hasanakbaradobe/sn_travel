@@ -86,7 +86,6 @@ export const ClientAvatar: React.FC<ClientAvatarProps> = ({
               src={currentSrc}
               alt={name}
               referrerPolicy="no-referrer"
-              crossOrigin="anonymous"
               className="w-full h-full object-cover object-center transition duration-200 group-hover:scale-105"
               onError={handleImageError}
               loading="lazy"

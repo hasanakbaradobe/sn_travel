@@ -27,6 +27,10 @@ import {
   PurgePreviewResult,
   PurgeExecuteResult,
   PaginatedResponse,
+  Invoice,
+  InvoiceCatalogItem,
+  InvoiceSettings,
+  InvoiceItem,
 } from '../types';
 
 const API_BASE = '/api';
@@ -870,6 +874,124 @@ class ApiService {
     return this.request('/db/restore', {
       method: 'POST',
       body: JSON.stringify({ dumpContent }),
+    });
+  }
+
+  // --------------------------------------------------------------------------
+  // Invoice Branding & Settings
+  // --------------------------------------------------------------------------
+  async getInvoiceSettings(): Promise<InvoiceSettings> {
+    return this.request<InvoiceSettings>('/invoice-settings');
+  }
+
+  async updateInvoiceSettings(data: Partial<InvoiceSettings>): Promise<InvoiceSettings> {
+    return this.request<InvoiceSettings>('/invoice-settings', {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  }
+
+  // --------------------------------------------------------------------------
+  // Configurable Invoice Fields & Catalog
+  // --------------------------------------------------------------------------
+  async getInvoiceCatalog(activeOnly = false): Promise<InvoiceCatalogItem[]> {
+    return this.request<InvoiceCatalogItem[]>(`/invoice-catalog${activeOnly ? '?active_only=true' : ''}`);
+  }
+
+  async createInvoiceCatalogItem(data: {
+    name: string;
+    description?: string;
+    default_unit_price: number;
+    category?: string;
+    is_active?: number;
+    display_order?: number;
+  }): Promise<InvoiceCatalogItem> {
+    return this.request<InvoiceCatalogItem>('/invoice-catalog', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateInvoiceCatalogItem(id: number, data: Partial<InvoiceCatalogItem>): Promise<InvoiceCatalogItem> {
+    return this.request<InvoiceCatalogItem>(`/invoice-catalog/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async reorderInvoiceCatalog(orderedIds: number[]): Promise<InvoiceCatalogItem[]> {
+    return this.request<InvoiceCatalogItem[]>('/invoice-catalog/reorder', {
+      method: 'PUT',
+      body: JSON.stringify({ orderedIds }),
+    });
+  }
+
+  async deleteInvoiceCatalogItem(id: number): Promise<{ success: boolean; message: string }> {
+    return this.request<{ success: boolean; message: string }>(`/invoice-catalog/${id}`, {
+      method: 'DELETE',
+    });
+  }
+
+  // --------------------------------------------------------------------------
+  // Customer Invoices
+  // --------------------------------------------------------------------------
+  async getInvoices(filters?: { clientId?: number; status?: string; search?: string }): Promise<Invoice[]> {
+    const params = new URLSearchParams();
+    if (filters?.clientId) params.append('client_id', String(filters.clientId));
+    if (filters?.status && filters.status !== 'all') params.append('status', filters.status);
+    if (filters?.search) params.append('search', filters.search);
+    const query = params.toString() ? `?${params.toString()}` : '';
+    return this.request<Invoice[]>(`/invoices${query}`);
+  }
+
+  async getInvoice(id: number): Promise<Invoice> {
+    return this.request<Invoice>(`/invoices/${id}`);
+  }
+
+  async createInvoice(data: {
+    client_id: number;
+    invoice_number?: string;
+    issue_date?: string;
+    due_date?: string;
+    status?: string;
+    payment_method?: string;
+    currency?: string;
+    subtotal?: number;
+    discount?: number;
+    tax_rate?: number;
+    paid_amount?: number;
+    notes?: string;
+    items: Array<{
+      catalog_item_id?: number | null;
+      description: string;
+      quantity: number;
+      unit_price: number;
+    }>;
+  }): Promise<Invoice> {
+    return this.request<Invoice>('/invoices', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateInvoice(id: number, data: Partial<Omit<Invoice, 'items'>> & {
+    items?: Array<{
+      catalog_item_id?: number | null;
+      description: string;
+      quantity: number;
+      unit_price: number;
+      total?: number;
+    }>;
+  }): Promise<Invoice> {
+    return this.request<Invoice>(`/invoices/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async deleteInvoice(id: number): Promise<{ success: boolean; message: string }> {
+    return this.request<{ success: boolean; message: string }>(`/invoices/${id}`, {
+      method: 'DELETE',
     });
   }
 }

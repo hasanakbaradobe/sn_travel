@@ -27,10 +27,13 @@ import {
   BedDouble,
   MessageSquarePlus,
   MessageCircle,
+  Receipt,
+  DollarSign,
+  Printer,
   X,
 } from 'lucide-react';
 import { api } from '../services/api';
-import { ClientProfileDetails, ApplicationStatus, Country, HotelBooking, FollowUp, User as UserType } from '../types';
+import { ClientProfileDetails, ApplicationStatus, Country, HotelBooking, FollowUp, Invoice, User as UserType } from '../types';
 import { STATUS_CONFIG, getPriorityBadge } from '../utils/status';
 import { CountrySelectSearch } from '../components/CountrySelectSearch';
 import { ClientAvatar } from '../components/ClientAvatar';
@@ -39,6 +42,8 @@ import { getGoogleDriveDirectImageUrl, isGoogleDriveLink } from '../utils/image'
 import { NewHotelBookingModal } from '../components/NewHotelBookingModal';
 import { HotelBookingDetailModal } from '../components/HotelBookingDetailModal';
 import { CreateFollowUpModal } from '../components/CreateFollowUpModal';
+import { CreateInvoiceModal } from '../components/CreateInvoiceModal';
+import { InvoiceDetailModal } from '../components/InvoiceDetailModal';
 import { Hotel } from '../types';
 
 interface ClientProfileViewProps {
@@ -70,7 +75,7 @@ export const ClientProfileView: React.FC<ClientProfileViewProps> = ({
 }) => {
   const [client, setClient] = useState<ClientProfileDetails | null>(null);
   const [loading, setLoading] = useState(true);
-  const [activeTab, setActiveTab] = useState<'overview' | 'applications' | 'hotels' | 'tasks' | 'followups' | 'comments' | 'activity'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'applications' | 'hotels' | 'tasks' | 'followups' | 'invoices' | 'comments' | 'activity'>('overview');
   const [usersList, setUsersList] = useState<UserType[]>(users || []);
   const [commentMessage, setCommentMessage] = useState('');
   const [submittingComment, setSubmittingComment] = useState(false);
@@ -83,6 +88,13 @@ export const ClientProfileView: React.FC<ClientProfileViewProps> = ({
   const [selectedBookingForDetail, setSelectedBookingForDetail] = useState<HotelBooking | null>(null);
   const [bookingDetailModalOpen, setBookingDetailModalOpen] = useState(false);
   const [followUpModalOpen, setFollowUpModalOpen] = useState(false);
+  const [createInvoiceModalOpen, setCreateInvoiceModalOpen] = useState(false);
+  const [detailInvoiceModalOpen, setDetailInvoiceModalOpen] = useState(false);
+  const [selectedInvoice, setSelectedInvoice] = useState<Invoice | null>(null);
+  const [invoiceToEdit, setInvoiceToEdit] = useState<Invoice | null>(null);
+  const [invoiceToDelete, setInvoiceToDelete] = useState<Invoice | null>(null);
+  const [deleteInvoiceModalOpen, setDeleteInvoiceModalOpen] = useState(false);
+  const [deletingInvoice, setDeletingInvoice] = useState(false);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [deletingClient, setDeletingClient] = useState(false);
   const [appToDelete, setAppToDelete] = useState<{ id: number; application_id: string } | null>(null);
@@ -246,6 +258,22 @@ export const ClientProfileView: React.FC<ClientProfileViewProps> = ({
       if (onRefreshData) onRefreshData();
     } catch (err: any) {
       console.error('Failed to delete follow-up', err);
+    }
+  };
+
+  const handleDeleteInvoice = async () => {
+    if (!invoiceToDelete) return;
+    setDeletingInvoice(true);
+    try {
+      await api.deleteInvoice(invoiceToDelete.id);
+      fetchClientData(true);
+      if (onRefreshData) onRefreshData();
+      setDeleteInvoiceModalOpen(false);
+      setInvoiceToDelete(null);
+    } catch (err: any) {
+      console.error('Failed to delete invoice', err);
+    } finally {
+      setDeletingInvoice(false);
     }
   };
 
@@ -527,6 +555,18 @@ export const ClientProfileView: React.FC<ClientProfileViewProps> = ({
             </button>
 
             <button
+              onClick={() => {
+                setInvoiceToEdit(null);
+                setCreateInvoiceModalOpen(true);
+              }}
+              className="px-3 py-2 bg-indigo-700 hover:bg-indigo-800 text-white rounded-lg text-xs font-semibold shadow-xs flex items-center gap-1.5 transition active:scale-95 cursor-pointer"
+              title="Create an official invoice for this customer"
+            >
+              <Receipt className="w-3.5 h-3.5" />
+              <span>Create Invoice</span>
+            </button>
+
+            <button
               onClick={() => onOpenNewTask(client.id, client.full_name)}
               className="px-3 py-2 bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-lg text-xs font-medium flex items-center gap-1.5"
             >
@@ -621,6 +661,20 @@ export const ClientProfileView: React.FC<ClientProfileViewProps> = ({
             <span>Follow-ups</span>
             <span className="text-[10px] bg-slate-100 px-1.5 py-0.2 rounded-full font-bold">
               {client.follow_ups ? client.follow_ups.length : 0}
+            </span>
+          </button>
+          <button
+            onClick={() => setActiveTab('invoices')}
+            className={`pb-2 px-3 border-b-2 transition flex items-center gap-1.5 whitespace-nowrap cursor-pointer ${
+              activeTab === 'invoices'
+                ? 'border-sky-700 text-sky-800 font-bold'
+                : 'border-transparent hover:text-slate-900'
+            }`}
+          >
+            <Receipt className="w-3.5 h-3.5 text-sky-700" />
+            <span>Invoices</span>
+            <span className="text-[10px] bg-slate-100 px-1.5 py-0.2 rounded-full font-bold">
+              {client.invoices ? client.invoices.length : 0}
             </span>
           </button>
           <button
@@ -1052,6 +1106,58 @@ export const ClientProfileView: React.FC<ClientProfileViewProps> = ({
               ) : (
                 <p className="text-[11px] text-slate-500">
                   No active follow-up scheduled. Click "+ Set Follow-up" to schedule a visa renewal or re-engagement check-in.
+                </p>
+              )}
+            </div>
+
+            {/* Quick Invoicing & Billing Summary Card */}
+            <div className="p-3.5 bg-sky-50/60 border border-sky-200/90 rounded-xl space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="font-bold text-xs text-sky-900 flex items-center gap-1.5">
+                  <Receipt className="w-3.5 h-3.5 text-sky-700" />
+                  <span>Invoices & Billing</span>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setInvoiceToEdit(null);
+                    setCreateInvoiceModalOpen(true);
+                  }}
+                  className="text-[11px] font-bold text-sky-700 hover:text-sky-900 hover:underline cursor-pointer"
+                >
+                  + Create Invoice
+                </button>
+              </div>
+
+              {client.invoices && client.invoices.length > 0 ? (
+                (() => {
+                  const clientInvoices = client.invoices;
+                  const totalInvoiced = clientInvoices.reduce((s, i) => s + (Number(i.total_amount) || 0), 0);
+                  const totalPaid = clientInvoices.reduce((s, i) => s + (Number(i.paid_amount) || 0), 0);
+                  const balanceDue = clientInvoices.reduce((s, i) => s + (Number(i.balance_due) || 0), 0);
+
+                  return (
+                    <div className="text-xs space-y-1.5">
+                      <div className="flex items-center justify-between font-mono pt-0.5">
+                        <span className="text-slate-500 text-[11px]">Billed: <strong className="text-slate-800">${totalInvoiced.toFixed(2)}</strong></span>
+                        <span className="text-emerald-700 text-[11px]">Paid: <strong>${totalPaid.toFixed(2)}</strong></span>
+                        <span className={`text-[11px] font-bold ${balanceDue > 0 ? 'text-amber-800' : 'text-slate-400'}`}>
+                          Due: ${balanceDue.toFixed(2)}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setActiveTab('invoices')}
+                        className="text-[11px] text-sky-700 font-medium hover:underline pt-0.5 block cursor-pointer"
+                      >
+                        View all invoices ({clientInvoices.length}) →
+                      </button>
+                    </div>
+                  );
+                })()
+              ) : (
+                <p className="text-[11px] text-slate-500">
+                  No invoices generated for this client yet. Click "+ Create Invoice" to bill visa services.
                 </p>
               )}
             </div>
@@ -1589,6 +1695,190 @@ export const ClientProfileView: React.FC<ClientProfileViewProps> = ({
         </div>
       )}
 
+      {/* Tab: Customer Invoices */}
+      {activeTab === 'invoices' && (
+        <div className="space-y-4">
+          <div className="flex items-center justify-between flex-wrap gap-3">
+            <div>
+              <h2 className="font-bold text-sm text-slate-900">
+                Customer Invoices & Billing ({client.invoices?.length || 0})
+              </h2>
+              <p className="text-xs text-slate-500">
+                Official invoices issued to {client.full_name} for visa and travel services
+              </p>
+            </div>
+            <button
+              onClick={() => {
+                setInvoiceToEdit(null);
+                setCreateInvoiceModalOpen(true);
+              }}
+              className="px-3.5 py-2 bg-sky-700 hover:bg-sky-800 text-white rounded-lg text-xs font-semibold shadow-xs flex items-center gap-1.5 transition active:scale-95 cursor-pointer"
+            >
+              <Plus className="w-4 h-4" />
+              <span>Create Customer Invoice</span>
+            </button>
+          </div>
+
+          {/* Quick Metrics Bar for Client's Billing */}
+          {client.invoices && client.invoices.length > 0 && (
+            (() => {
+              const invs = client.invoices;
+              const activeInvs = invs.filter(i => i.status !== 'Cancelled');
+              const rawCur = invs[0]?.currency || 'MYR';
+              const primaryCurrency = rawCur === 'MYR' ? 'RM' : rawCur;
+              const totalBilled = activeInvs.reduce((acc, i) => acc + (Number(i.total_amount) || 0), 0);
+              const totalPaid = invs.reduce((acc, i) => acc + (Number(i.paid_amount) || 0), 0);
+              const balanceDue = activeInvs.reduce((acc, i) => acc + (Number(i.balance_due) || 0), 0);
+
+              return (
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-xs space-y-0.5">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
+                      Total Billed
+                    </span>
+                    <span className="text-lg font-black font-mono text-slate-900">
+                      {primaryCurrency} {totalBilled.toFixed(2)}
+                    </span>
+                  </div>
+
+                  <div className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-xs space-y-0.5">
+                    <span className="text-[10px] font-bold text-emerald-600 uppercase tracking-wider block">
+                      Amount Paid
+                    </span>
+                    <span className="text-lg font-black font-mono text-emerald-700">
+                      {primaryCurrency} {totalPaid.toFixed(2)}
+                    </span>
+                  </div>
+
+                  <div className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-xs space-y-0.5">
+                    <span className="text-[10px] font-bold text-amber-600 uppercase tracking-wider block">
+                      Balance Due
+                    </span>
+                    <span className={`text-lg font-black font-mono ${balanceDue > 0 ? 'text-amber-800' : 'text-slate-400'}`}>
+                      {primaryCurrency} {balanceDue.toFixed(2)}
+                    </span>
+                  </div>
+                </div>
+              );
+            })()
+          )}
+
+          {/* Invoices List / Table */}
+          <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
+            {!client.invoices || client.invoices.length === 0 ? (
+              <div className="p-12 text-center space-y-3">
+                <div className="w-12 h-12 rounded-xl bg-sky-50 text-sky-700 flex items-center justify-center mx-auto border border-sky-100">
+                  <Receipt className="w-6 h-6" />
+                </div>
+                <div className="space-y-1">
+                  <h3 className="font-bold text-sm text-slate-800">No Invoices Issued</h3>
+                  <p className="text-xs text-slate-500 max-w-sm mx-auto">
+                    No invoices have been billed to {client.full_name} yet. Click below to generate an invoice.
+                  </p>
+                </div>
+                <button
+                  onClick={() => {
+                    setInvoiceToEdit(null);
+                    setCreateInvoiceModalOpen(true);
+                  }}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-white bg-sky-700 hover:bg-sky-800 rounded-lg transition"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Create Invoice</span>
+                </button>
+              </div>
+            ) : (
+              <div className="divide-y divide-slate-100">
+                {client.invoices.map((inv) => (
+                  <div
+                    key={inv.id}
+                    className="p-4 hover:bg-slate-50/70 transition flex flex-col sm:flex-row sm:items-center justify-between gap-4"
+                  >
+                    <div className="space-y-1">
+                      <div className="flex items-center gap-2">
+                        <span className="font-mono font-bold text-sky-800 text-sm">
+                          {inv.invoice_number}
+                        </span>
+                        <span
+                          className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${
+                            inv.status === 'Paid'
+                              ? 'bg-emerald-100 text-emerald-800 border-emerald-200'
+                              : inv.status === 'Partial'
+                              ? 'bg-sky-100 text-sky-800 border-sky-200'
+                              : inv.status === 'Pending'
+                              ? 'bg-amber-100 text-amber-800 border-amber-200'
+                              : 'bg-slate-100 text-slate-700 border-slate-200'
+                          }`}
+                        >
+                          {inv.status}
+                        </span>
+                      </div>
+                      <div className="text-xs text-slate-500 flex items-center gap-2">
+                        <span>Issued: <strong>{inv.issue_date}</strong></span>
+                        {inv.items && inv.items.length > 0 && (
+                          <>
+                            <span>•</span>
+                            <span>{inv.items.length} item{inv.items.length > 1 ? 's' : ''}</span>
+                          </>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between sm:justify-end gap-6">
+                      <div className="text-right">
+                        <div className="text-sm font-bold font-mono text-slate-900">
+                          {(!inv.currency || inv.currency === 'MYR' ? 'RM' : inv.currency)} {Number(inv.total_amount).toFixed(2)}
+                        </div>
+                        <div className="text-[11px] text-slate-400 font-mono">
+                          Paid: <span className="text-emerald-700 font-medium">{(!inv.currency || inv.currency === 'MYR' ? 'RM' : inv.currency)} {Number(inv.paid_amount).toFixed(2)}</span> · Due: <span className={inv.balance_due > 0 ? 'text-amber-800 font-bold' : 'text-slate-500'}>{(!inv.currency || inv.currency === 'MYR' ? 'RM' : inv.currency)} {Number(inv.balance_due).toFixed(2)}</span>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedInvoice(inv);
+                            setDetailInvoiceModalOpen(true);
+                          }}
+                          title="View / Print Invoice"
+                          className="px-2.5 py-1.5 text-xs font-semibold text-sky-700 hover:text-sky-900 bg-sky-50 hover:bg-sky-100 rounded-lg border border-sky-200 transition flex items-center gap-1"
+                        >
+                          <Eye className="w-3.5 h-3.5" />
+                          <span>View</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setInvoiceToEdit(inv);
+                            setCreateInvoiceModalOpen(true);
+                          }}
+                          title="Edit Invoice"
+                          className="p-1.5 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition"
+                        >
+                          <Edit2 className="w-3.5 h-3.5" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setInvoiceToDelete(inv);
+                            setDeleteInvoiceModalOpen(true);
+                          }}
+                          title="Delete Invoice"
+                          className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Tab: Comments / Notes */}
       {activeTab === 'comments' && (
         <div className="space-y-4">
@@ -1722,6 +2012,65 @@ export const ClientProfileView: React.FC<ClientProfileViewProps> = ({
           }}
         />
       )}
+
+      {/* Customer Invoicing Modals */}
+      {client && (
+        <CreateInvoiceModal
+          isOpen={createInvoiceModalOpen}
+          onClose={() => {
+            setCreateInvoiceModalOpen(false);
+            setInvoiceToEdit(null);
+          }}
+          onInvoiceSaved={(saved) => {
+            fetchClientData(true);
+            if (onRefreshData) onRefreshData();
+            setActiveTab('invoices');
+            setSelectedInvoice(saved);
+            setDetailInvoiceModalOpen(true);
+          }}
+          clients={[client]}
+          initialClientId={client.id}
+          invoiceToEdit={invoiceToEdit}
+        />
+      )}
+
+      <InvoiceDetailModal
+        isOpen={detailInvoiceModalOpen}
+        onClose={() => {
+          setDetailInvoiceModalOpen(false);
+          setSelectedInvoice(null);
+        }}
+        invoice={selectedInvoice}
+        onEditInvoice={(inv) => {
+          setInvoiceToEdit(inv);
+          setCreateInvoiceModalOpen(true);
+        }}
+        onDeleteInvoice={(invoiceId) => {
+          const inv = client.invoices?.find(i => i.id === invoiceId) || selectedInvoice;
+          if (inv) {
+            setInvoiceToDelete(inv);
+            setDeleteInvoiceModalOpen(true);
+          }
+        }}
+        onInvoiceUpdated={(updated) => {
+          setSelectedInvoice(updated);
+          fetchClientData(true);
+          if (onRefreshData) onRefreshData();
+        }}
+      />
+
+      <ConfirmDeleteModal
+        isOpen={deleteInvoiceModalOpen}
+        title="Delete Customer Invoice"
+        message={`Are you sure you want to delete invoice ${invoiceToDelete?.invoice_number}? This cannot be undone.`}
+        confirmLabel="Delete Invoice"
+        onConfirm={handleDeleteInvoice}
+        onCancel={() => {
+          setDeleteInvoiceModalOpen(false);
+          setInvoiceToDelete(null);
+        }}
+        isLoading={deletingInvoice}
+      />
     </div>
   );
 };

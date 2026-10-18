@@ -156,6 +156,9 @@ function getCurrentUser(req: Request) {
  * Rejects unauthenticated requests with 401 Unauthorized.
  */
 function requireAuth(req: Request, res: Response, next: NextFunction) {
+  if (req.path === '/proxy-image') {
+    return next();
+  }
   const user = getCurrentUser(req);
   if (!user) {
     return res.status(401).json({
@@ -1683,6 +1686,10 @@ apiRouter.get('/proxy-image', async (req: Request, res: Response) => {
     }
   }
 
+  if (req.query.fallback === '404') {
+    return res.status(404).send('Image not found');
+  }
+
   // Fallback SVG avatar placeholder if private/failed
   res.setHeader('Content-Type', 'image/svg+xml');
   return res.send(`
@@ -1692,6 +1699,196 @@ apiRouter.get('/proxy-image', async (req: Request, res: Response) => {
       <path d="M 30 180 C 30 130, 170 130, 170 180 Z" fill="#38bdf8"/>
     </svg>
   `);
+});
+
+// --------------------------------------------------------------------------
+// Invoice System Endpoints
+// --------------------------------------------------------------------------
+
+// 1. Invoice Branding & Settings
+apiRouter.get('/invoice-settings', (_req: Request, res: Response) => {
+  const cached = getCachedReference('invoice_settings');
+  if (cached) return res.json(cached);
+
+  const settings = dbService.getInvoiceSettings();
+  setCachedReference('invoice_settings', settings);
+  return res.json(settings);
+});
+
+apiRouter.put('/invoice-settings', async (req: Request, res: Response) => {
+  const currentUser = getCurrentUser(req);
+  try {
+    const updated = await dbService.updateInvoiceSettings(req.body, currentUser?.id || 1);
+    invalidateReferenceCache('invoice_settings');
+    broadcastDataChange('invoice_settings_updated', { settings: updated });
+    return res.json(updated);
+  } catch (err: any) {
+    return res.status(400).json({ error: err.message || 'Failed to update invoice settings' });
+  }
+});
+
+// 2. Configurable Invoice Fields & Catalog
+apiRouter.get('/invoice-catalog', (req: Request, res: Response) => {
+  const activeOnly = req.query.active_only === 'true';
+  const cacheKey = `invoice_catalog_${activeOnly}`;
+  const cached = getCachedReference(cacheKey);
+  if (cached) return res.json(cached);
+
+  const items = dbService.getInvoiceCatalogItems(activeOnly);
+  setCachedReference(cacheKey, items);
+  return res.json(items);
+});
+
+apiRouter.post('/invoice-catalog', async (req: Request, res: Response) => {
+  const currentUser = getCurrentUser(req);
+  const { name, default_unit_price, category, description, is_active, display_order } = req.body;
+
+  if (!name || !name.trim()) {
+    return res.status(400).json({ error: 'Field/Service name is required' });
+  }
+
+  try {
+    const newItem = await dbService.createInvoiceCatalogItem(
+      {
+        name: name.trim(),
+        default_unit_price: Number(default_unit_price) || 0,
+        category: category || 'Visa Services',
+        description: description || '',
+        is_active: is_active !== undefined ? Number(is_active) : 1,
+        display_order: display_order !== undefined && Number(display_order) > 0 ? Number(display_order) : 0,
+      },
+      currentUser?.id || 1
+    );
+
+    invalidateReferenceCache('invoice_catalog');
+    broadcastDataChange('invoice_catalog_updated', { item: newItem });
+    return res.status(201).json(newItem);
+  } catch (err: any) {
+    return res.status(400).json({ error: err.message || 'Failed to create invoice catalog item' });
+  }
+});
+
+apiRouter.put('/invoice-catalog/reorder', async (req: Request, res: Response) => {
+  const currentUser = getCurrentUser(req);
+  const { orderedIds } = req.body;
+
+  if (!Array.isArray(orderedIds) || orderedIds.length === 0) {
+    return res.status(400).json({ error: 'orderedIds array is required' });
+  }
+
+  try {
+    const items = await dbService.reorderInvoiceCatalogItems(
+      orderedIds.map((id: any) => Number(id)),
+      currentUser?.id || 1
+    );
+    invalidateReferenceCache('invoice_catalog');
+    broadcastDataChange('invoice_catalog_updated', { items });
+    return res.json(items);
+  } catch (err: any) {
+    return res.status(400).json({ error: err.message || 'Failed to reorder catalog items' });
+  }
+});
+
+apiRouter.put('/invoice-catalog/:id', async (req: Request, res: Response) => {
+  const currentUser = getCurrentUser(req);
+  const id = parseInt(req.params.id, 10);
+  try {
+    const updated = await dbService.updateInvoiceCatalogItem(id, req.body, currentUser?.id || 1);
+    if (!updated) {
+      return res.status(404).json({ error: 'Catalog item not found' });
+    }
+    invalidateReferenceCache('invoice_catalog');
+    broadcastDataChange('invoice_catalog_updated', { item: updated });
+    return res.json(updated);
+  } catch (err: any) {
+    return res.status(400).json({ error: err.message || 'Failed to update catalog item' });
+  }
+});
+
+apiRouter.delete('/invoice-catalog/:id', async (req: Request, res: Response) => {
+  const currentUser = getCurrentUser(req);
+  const id = parseInt(req.params.id, 10);
+  try {
+    const ok = await dbService.deleteInvoiceCatalogItem(id, currentUser?.id || 1);
+    if (!ok) {
+      return res.status(404).json({ error: 'Catalog item not found' });
+    }
+    invalidateReferenceCache('invoice_catalog');
+    broadcastDataChange('invoice_catalog_updated', { deletedId: id });
+    return res.json({ success: true, message: 'Catalog field deleted successfully' });
+  } catch (err: any) {
+    return res.status(400).json({ error: err.message || 'Failed to delete catalog item' });
+  }
+});
+
+// 3. Customer Invoices Management
+apiRouter.get('/invoices', (req: Request, res: Response) => {
+  const { client_id, status, search } = req.query;
+  const invoices = dbService.getInvoices({
+    clientId: client_id ? parseInt(client_id as string, 10) : undefined,
+    status: status as string,
+    search: search as string,
+  });
+  return res.json(invoices);
+});
+
+apiRouter.get('/invoices/:id', (req: Request, res: Response) => {
+  const id = parseInt(req.params.id, 10);
+  const invoice = dbService.getInvoiceById(id);
+  if (!invoice) {
+    return res.status(404).json({ error: 'Invoice not found' });
+  }
+  return res.json(invoice);
+});
+
+apiRouter.post('/invoices', async (req: Request, res: Response) => {
+  const currentUser = getCurrentUser(req);
+  const { client_id, items } = req.body;
+
+  if (!client_id) {
+    return res.status(400).json({ error: 'Customer is required for the invoice' });
+  }
+  if (!Array.isArray(items) || items.length === 0) {
+    return res.status(400).json({ error: 'At least one line item is required' });
+  }
+
+  try {
+    const newInvoice = await dbService.createInvoice(req.body, currentUser?.id || 1);
+    broadcastDataChange('invoice_created', { invoice: newInvoice });
+    return res.status(201).json(newInvoice);
+  } catch (err: any) {
+    return res.status(400).json({ error: err.message || 'Failed to create invoice' });
+  }
+});
+
+apiRouter.put('/invoices/:id', async (req: Request, res: Response) => {
+  const currentUser = getCurrentUser(req);
+  const id = parseInt(req.params.id, 10);
+  try {
+    const updated = await dbService.updateInvoice(id, req.body, currentUser?.id || 1);
+    if (!updated) {
+      return res.status(404).json({ error: 'Invoice not found' });
+    }
+    broadcastDataChange('invoice_updated', { invoice: updated });
+    return res.json(updated);
+  } catch (err: any) {
+    return res.status(400).json({ error: err.message || 'Failed to update invoice' });
+  }
+});
+
+apiRouter.delete('/invoices/:id', async (req: Request, res: Response) => {
+  const currentUser = getCurrentUser(req);
+  const id = parseInt(req.params.id, 10);
+  try {
+    const ok = await dbService.deleteInvoice(id, currentUser?.id || 1);
+    if (!ok) {
+      return res.status(404).json({ error: 'Invoice not found' });
+    }
+    broadcastDataChange('invoice_deleted', { deletedId: id });
+    return res.json({ success: true, message: 'Invoice deleted successfully' });
+  } catch (err: any) {
+    return res.status(400).json({ error: err.message || 'Failed to delete invoice' });
+  }
 });
 
 // --------------------------------------------------------------------------

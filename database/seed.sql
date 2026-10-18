@@ -197,4 +197,39 @@ INSERT INTO `settings` (`setting_key`, `setting_value`, `updated_at`) VALUES
 ('secret_login_enabled', '1', NOW()),
 ('secret_login_key', 'sn-secure-staff-2026', NOW());
 
+-- --------------------------------------------------------
+-- Seed Invoice Settings & Configurable Catalog Fields
+-- --------------------------------------------------------
+TRUNCATE TABLE `invoice_settings`;
+INSERT INTO `invoice_settings` (`id`, `company_name`, `company_tagline`, `logo_url`, `phone`, `whatsapp`, `email`, `website`, `address`, `tax_number`, `bank_details`, `payment_notes`, `terms_and_conditions`, `default_currency`, `invoice_prefix`, `next_number`) VALUES
+(1, 'SN Travels Agency', 'China Visa & Travel Processing Specialists', 'https://images.unsplash.com/photo-1569154941061-e231b4725ef1?w=400&auto=format&fit=crop&q=80', '+971 4 399 2200', '+971 50 123 4567', 'visa@sn-travelsagency.com', 'sn-travelsagency.com', 'Office 402, Al Hudaiba Awards Building, 2nd December St, Dubai, UAE', 'TRN-100482910400003', 'Bank: Emirates NBD\nAccount Title: SN Travels Agency LLC\nIBAN: AE24 0260 0000 0000 1234 56\nSWIFT: ENBDDBAXXX', 'Please reference your Invoice number when transferring funds. Payment due upon presentation.', '1. Embassy visa processing and biometric slots are subject to consular verification.\n2. Invoices must be cleared before document submission or passport delivery.\n3. Official receipt issued upon payment confirmation.', 'MYR', 'INV-2026-', 1004);
+
+TRUNCATE TABLE `invoice_catalog_items`;
+INSERT INTO `invoice_catalog_items` (`id`, `name`, `description`, `default_unit_price`, `category`, `is_active`, `display_order`) VALUES
+(1, 'China Commercial Trade Visa (M) - 1 Year Multi-Entry', 'Includes documentation audit, PU invitation review, appointment scheduling, and consular VIP submission', 350.00, 'Visa Services', 1, 1),
+(2, 'China Tourist Visa (L) Standard Processing', 'Tourist visa filing, itinerary validation, travel hotel verification, and consular courier dispatch', 180.00, 'Visa Services', 1, 2),
+(3, 'Official Embassy Consular Visa Fee', 'Official government visa stamping charges (Non-refundable consular fee)', 140.00, 'Government Fees', 1, 3),
+(4, 'Express Consular Priority VIP Handling', 'Next-day fast-track processing and priority consular submission lane', 85.00, 'Express Services', 1, 4),
+(5, 'China Student Visa (X1/X2) Package', 'Full review of JW202/DQ form, university admission notice verification, and medical record check', 220.00, 'Visa Services', 1, 5),
+(6, 'Hotel Reservation & Voucher Booking', 'Official confirmed hotel voucher for embassy submission and travel itinerary proof', 60.00, 'Travel & Accommodation', 1, 6),
+(7, 'Document Legalization & Chinese Translation', 'Certified translation into Simplified Chinese by accredited legal translator', 45.00, 'Document Services', 1, 7),
+(8, 'Secure Passport Return Courier Delivery', 'Insured premium diplomatic courier return delivery to client doorstep', 25.00, 'Logistics', 1, 8);
+
+TRUNCATE TABLE `invoices`;
+INSERT INTO `invoices` (`id`, `invoice_number`, `client_id`, `issue_date`, `due_date`, `status`, `payment_method`, `currency`, `subtotal`, `discount`, `tax_rate`, `tax_amount`, `total_amount`, `paid_amount`, `balance_due`, `notes`, `created_by_user_id`) VALUES
+(1, 'INV-2026-1001', 1, DATE_SUB(CURRENT_DATE, INTERVAL 10 DAY), DATE_SUB(CURRENT_DATE, INTERVAL 3 DAY), 'Paid', 'Bank Transfer', 'MYR', 490.00, 0.00, 5.00, 24.50, 514.50, 514.50, 0.00, 'Client paid in full via Emirates NBD transfer.', 1),
+(2, 'INV-2026-1002', 2, DATE_SUB(CURRENT_DATE, INTERVAL 5 DAY), DATE_ADD(CURRENT_DATE, INTERVAL 2 DAY), 'Partial', 'Credit Card', 'MYR', 240.00, 0.00, 5.00, 12.00, 252.00, 150.00, 102.00, 'Initial deposit received. Balance due upon passport collection.', 2),
+(3, 'INV-2026-1003', 3, CURRENT_DATE, DATE_ADD(CURRENT_DATE, INTERVAL 7 DAY), 'Pending', 'Bank Transfer', 'MYR', 380.00, 20.00, 5.00, 18.00, 378.00, 0.00, 378.00, 'F visa processing and express translation package. Invoice emailed to client.', 1);
+
+TRUNCATE TABLE `invoice_items`;
+INSERT INTO `invoice_items` (`id`, `invoice_id`, `catalog_item_id`, `description`, `quantity`, `unit_price`, `total`) VALUES
+(1, 1, 1, 'China Commercial Trade Visa (M) - 1 Year Multi-Entry', 1, 350.00, 350.00),
+(2, 1, 3, 'Official Embassy Consular Visa Fee', 1, 140.00, 140.00),
+(3, 2, 2, 'China Tourist Visa (L) Standard Processing', 1, 180.00, 180.00),
+(4, 2, 6, 'Hotel Reservation & Voucher Booking', 1, 60.00, 60.00),
+(5, 3, 5, 'China Student Visa (X1/X2) Package', 1, 220.00, 220.00),
+(6, 3, 3, 'Official Embassy Consular Visa Fee', 1, 140.00, 140.00),
+(7, 3, 8, 'Secure Passport Return Courier Delivery', 1, 20.00, 20.00);
+
 SET FOREIGN_KEY_CHECKS = 1;
+

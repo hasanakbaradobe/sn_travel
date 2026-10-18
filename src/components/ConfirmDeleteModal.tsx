@@ -7,8 +7,10 @@ interface ConfirmDeleteModalProps {
   message: string;
   confirmLabel?: string;
   onConfirm: () => void | Promise<void>;
-  onClose: () => void;
+  onClose?: () => void;
+  onCancel?: () => void;
   loading?: boolean;
+  isLoading?: boolean;
 }
 
 export const ConfirmDeleteModal: React.FC<ConfirmDeleteModalProps> = ({
@@ -18,16 +20,25 @@ export const ConfirmDeleteModal: React.FC<ConfirmDeleteModalProps> = ({
   confirmLabel = 'Delete Item',
   onConfirm,
   onClose,
+  onCancel,
   loading = false,
+  isLoading = false,
 }) => {
   if (!isOpen) return null;
+  const isBusy = loading || isLoading;
+  const handleClose = () => {
+    if (!isBusy) {
+      if (onClose) onClose();
+      else if (onCancel) onCancel();
+    }
+  };
 
   return (
     <div
       className="fixed inset-0 z-[9999] flex items-center justify-center p-4 overflow-y-auto"
       onClick={(e) => {
         e.stopPropagation();
-        if (!loading) onClose();
+        handleClose();
       }}
     >
       {/* Backdrop */}
@@ -50,7 +61,7 @@ export const ConfirmDeleteModal: React.FC<ConfirmDeleteModalProps> = ({
             type="button"
             onClick={(e) => {
               e.stopPropagation();
-              if (!loading) onClose();
+              handleClose();
             }}
             className="p-1 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition"
           >
@@ -63,9 +74,9 @@ export const ConfirmDeleteModal: React.FC<ConfirmDeleteModalProps> = ({
             type="button"
             onClick={(e) => {
               e.stopPropagation();
-              if (!loading) onClose();
+              handleClose();
             }}
-            disabled={loading}
+            disabled={isBusy}
             className="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-800 hover:bg-slate-100 rounded-lg transition"
           >
             Cancel
@@ -76,10 +87,10 @@ export const ConfirmDeleteModal: React.FC<ConfirmDeleteModalProps> = ({
               e.stopPropagation();
               await onConfirm();
             }}
-            disabled={loading}
+            disabled={isBusy}
             className="px-4 py-2 bg-red-600 hover:bg-red-700 text-white text-xs font-bold rounded-lg shadow-sm transition flex items-center gap-1.5 active:scale-95"
           >
-            {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+            {isBusy ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
             <span>{confirmLabel}</span>
           </button>
         </div>

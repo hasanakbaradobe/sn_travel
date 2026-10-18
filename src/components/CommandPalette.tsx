@@ -14,6 +14,7 @@ import {
   X,
   Clock,
   ExternalLink,
+  Receipt,
 } from 'lucide-react';
 import { Client, VisaApplication } from '../types';
 import { ClientAvatar } from './ClientAvatar';
@@ -169,6 +170,28 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
       run: () => {
         onClose();
         onNavigate('hotels');
+      },
+    },
+    {
+      id: 'nav-followups',
+      type: 'nav' as const,
+      title: 'Go to Follow-ups',
+      subtitle: 'Client follow-ups, calls, milestones & alerts',
+      icon: <MessageSquarePlus className="w-4 h-4 text-emerald-500" />,
+      run: () => {
+        onClose();
+        onNavigate('followups');
+      },
+    },
+    {
+      id: 'nav-invoices',
+      type: 'nav' as const,
+      title: 'Go to Invoices & Billing',
+      subtitle: 'Customer billing, receipts, payments & print',
+      icon: <Receipt className="w-4 h-4 text-emerald-600" />,
+      run: () => {
+        onClose();
+        onNavigate('invoices');
       },
     },
     {

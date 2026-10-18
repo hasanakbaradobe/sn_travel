@@ -13,10 +13,11 @@ import {
   Plane,
   Building2,
   MessageSquarePlus,
+  Receipt,
 } from 'lucide-react';
 import { UserRole } from '../types';
 
-export type NavTab = 'dashboard' | 'clients' | 'applications' | 'hotels' | 'followups' | 'calendar' | 'tasks' | 'settings' | '404';
+export type NavTab = 'dashboard' | 'clients' | 'applications' | 'hotels' | 'followups' | 'invoices' | 'calendar' | 'tasks' | 'settings' | '404';
 
 interface SidebarProps {
   currentTab: NavTab;
@@ -72,6 +73,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
       icon: <MessageSquarePlus className="w-5 h-5" />,
       badge: dueFollowUpsCount > 0 ? dueFollowUpsCount : undefined,
       badgeColor: 'bg-emerald-100 text-emerald-800',
+    },
+    {
+      id: 'invoices',
+      label: 'Invoices',
+      icon: <Receipt className="w-5 h-5" />,
     },
     {
       id: 'calendar',
