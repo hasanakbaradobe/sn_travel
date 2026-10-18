@@ -21,230 +21,271 @@ const DB_SSL = process.env.DB_SSL === 'true' || process.env.MYSQL_SSL === 'true'
 let pool: mysql.Pool | null = null;
 let isConnectedToMySQL = false;
 let connectionError: string | null = null;
+let schemaInitialized = false;
+let lastProbeAttemptTime = 0;
+let lastPingMs: number | null = null;
+let inFlightProbePromise: Promise<boolean> | null = null;
+const PROBE_COOLDOWN_MS = 15000;
 
-async function probeMySQLConnection() {
+async function probeMySQLConnection(force = false): Promise<boolean> {
   if (!pool) return false;
-  try {
-    const conn = await pool.getConnection();
-    isConnectedToMySQL = true;
-    connectionError = null;
-    console.log(`[Database] Connected to MySQL database "${DB_NAME}" at ${DB_HOST}:${DB_PORT}`);
-    
-    // Ensure high-performance composite indexes exist in MySQL
-    try { await conn.query('CREATE INDEX idx_tasks_app_id ON tasks(application_id)'); } catch {}
-    try { await conn.query('CREATE INDEX idx_tasks_client_id ON tasks(client_id)'); } catch {}
-    try { await conn.query('CREATE INDEX idx_tasks_status ON tasks(status)'); } catch {}
-    try { await conn.query('CREATE INDEX idx_tasks_due ON tasks(due_date)'); } catch {}
-    try { await conn.query('CREATE INDEX idx_tasks_due_status ON tasks(due_date, status)'); } catch {}
-    try { await conn.query('CREATE INDEX idx_tasks_client_due ON tasks(client_id, due_date)'); } catch {}
-
-    try { await conn.query('CREATE INDEX idx_apps_client_id ON visa_applications(client_id)'); } catch {}
-    try { await conn.query('CREATE INDEX idx_apps_status ON visa_applications(status)'); } catch {}
-    try { await conn.query('CREATE INDEX idx_apps_delivery ON visa_applications(delivery_date)'); } catch {}
-    try { await conn.query('CREATE INDEX idx_apps_status_delivery ON visa_applications(status, delivery_date)'); } catch {}
-    try { await conn.query('CREATE INDEX idx_apps_client_status ON visa_applications(client_id, status)'); } catch {}
-
-    try { await conn.query('CREATE INDEX idx_app_hist_app_id ON application_status_history(application_id)'); } catch {}
-    try { await conn.query('CREATE INDEX idx_hb_client_id ON hotel_bookings(client_id)'); } catch {}
-    try { await conn.query('CREATE INDEX idx_hb_status ON hotel_bookings(status)'); } catch {}
-    try { await conn.query('CREATE INDEX idx_hb_dates ON hotel_bookings(check_in_date, check_out_date)'); } catch {}
-    try { await conn.query('CREATE INDEX idx_hb_checkout_status ON hotel_bookings(check_out_date, status)'); } catch {}
-
-    try { await conn.query('CREATE INDEX idx_act_created ON activity_logs(created_at)'); } catch {}
-    try { await conn.query('CREATE INDEX idx_act_entity ON activity_logs(entity_type, entity_id)'); } catch {}
-
-    // Ensure follow_ups table and indexes exist in MySQL
-    try {
-      await conn.query(`
-        CREATE TABLE IF NOT EXISTS follow_ups (
-          id INT AUTO_INCREMENT PRIMARY KEY,
-          client_id INT NOT NULL,
-          title VARCHAR(255) NOT NULL,
-          reason VARCHAR(150) NOT NULL,
-          channel ENUM('WhatsApp', 'Phone Call', 'WeChat', 'Email', 'SMS') NOT NULL DEFAULT 'WhatsApp',
-          cadence ENUM('1 Month', '2 Months', '3 Months', '6 Months', 'One-time') NOT NULL DEFAULT '1 Month',
-          due_date DATE NOT NULL,
-          notes TEXT DEFAULT NULL,
-          message_template TEXT DEFAULT NULL,
-          status ENUM('Pending', 'Completed', 'Cancelled') NOT NULL DEFAULT 'Pending',
-          priority ENUM('Low', 'Normal', 'High', 'Urgent') NOT NULL DEFAULT 'Normal',
-          task_id INT DEFAULT NULL,
-          assigned_user_id INT DEFAULT NULL,
-          completed_at DATETIME DEFAULT NULL,
-          completed_notes TEXT DEFAULT NULL,
-          created_by_user_id INT DEFAULT NULL,
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-          INDEX idx_fu_client (client_id),
-          INDEX idx_fu_due (due_date),
-          INDEX idx_fu_status (status),
-          INDEX idx_fu_due_status (due_date, status),
-          INDEX idx_fu_task (task_id)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-      `);
-    } catch (e: any) {
-      console.warn('[MySQL] Could not ensure follow_ups table:', e.message);
-    }
-    try { await conn.query('CREATE INDEX idx_fu_client ON follow_ups(client_id)'); } catch {}
-    try { await conn.query('CREATE INDEX idx_fu_due ON follow_ups(due_date)'); } catch {}
-    try { await conn.query('CREATE INDEX idx_fu_status ON follow_ups(status)'); } catch {}
-    try { await conn.query('CREATE INDEX idx_fu_due_status ON follow_ups(due_date, status)'); } catch {}
-    try { await conn.query('CREATE INDEX idx_fu_task ON follow_ups(task_id)'); } catch {}
-
-    // Ensure invoice_settings, invoice_catalog_items, invoices, and invoice_items exist in MySQL
-    try {
-      await conn.query(`
-        CREATE TABLE IF NOT EXISTS invoice_settings (
-          id INT AUTO_INCREMENT PRIMARY KEY,
-          company_name VARCHAR(255) NOT NULL DEFAULT 'SN Travels Agency',
-          company_tagline VARCHAR(255) DEFAULT 'China Visa & Travel Processing Specialists',
-          logo_url TEXT DEFAULT NULL,
-          phone VARCHAR(50) DEFAULT '+971 4 399 2200',
-          whatsapp VARCHAR(50) DEFAULT '+971 50 123 4567',
-          email VARCHAR(191) DEFAULT 'visa@sn-travelsagency.com',
-          website VARCHAR(191) DEFAULT 'sn-travelsagency.com',
-          address TEXT DEFAULT 'Office 402, Al Hudaiba Awards Building, 2nd December St, Dubai, UAE',
-          tax_number VARCHAR(100) DEFAULT NULL,
-          bank_details TEXT DEFAULT NULL,
-          payment_notes TEXT DEFAULT NULL,
-          terms_and_conditions TEXT DEFAULT NULL,
-          default_currency VARCHAR(10) NOT NULL DEFAULT 'MYR',
-          invoice_prefix VARCHAR(20) NOT NULL DEFAULT 'INV-2026-',
-          next_number INT NOT NULL DEFAULT 1001,
-          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-      `);
-      await conn.query(`
-        CREATE TABLE IF NOT EXISTS invoice_catalog_items (
-          id INT AUTO_INCREMENT PRIMARY KEY,
-          name VARCHAR(200) NOT NULL,
-          description TEXT DEFAULT NULL,
-          default_unit_price DECIMAL(10,2) NOT NULL DEFAULT 0.00,
-          category VARCHAR(100) DEFAULT 'Visa Services',
-          is_active TINYINT(1) NOT NULL DEFAULT 1,
-          display_order INT NOT NULL DEFAULT 0,
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-          INDEX idx_catalog_active (is_active),
-          INDEX idx_catalog_order (display_order)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-      `);
-      await conn.query(`
-        CREATE TABLE IF NOT EXISTS invoices (
-          id INT AUTO_INCREMENT PRIMARY KEY,
-          invoice_number VARCHAR(50) NOT NULL UNIQUE,
-          client_id INT NOT NULL,
-          issue_date DATE NOT NULL,
-          due_date DATE DEFAULT NULL,
-          status ENUM('Pending', 'Paid', 'Partial', 'Cancelled') NOT NULL DEFAULT 'Pending',
-          payment_method ENUM('Cash', 'Bank Transfer', 'Credit Card', 'WeChat Pay', 'Alipay', 'Other') DEFAULT NULL,
-          currency VARCHAR(10) NOT NULL DEFAULT 'MYR',
-          subtotal DECIMAL(12,2) NOT NULL DEFAULT 0.00,
-          discount DECIMAL(12,2) NOT NULL DEFAULT 0.00,
-          tax_rate DECIMAL(5,2) NOT NULL DEFAULT 0.00,
-          tax_amount DECIMAL(12,2) NOT NULL DEFAULT 0.00,
-          total_amount DECIMAL(12,2) NOT NULL DEFAULT 0.00,
-          paid_amount DECIMAL(12,2) NOT NULL DEFAULT 0.00,
-          balance_due DECIMAL(12,2) NOT NULL DEFAULT 0.00,
-          notes TEXT DEFAULT NULL,
-          created_by_user_id INT DEFAULT NULL,
-          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-          updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-          INDEX idx_invoices_client (client_id),
-          INDEX idx_invoices_number (invoice_number),
-          INDEX idx_invoices_status (status),
-          INDEX idx_invoices_date (issue_date)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-      `);
-      await conn.query(`
-        CREATE TABLE IF NOT EXISTS invoice_items (
-          id INT AUTO_INCREMENT PRIMARY KEY,
-          invoice_id INT NOT NULL,
-          catalog_item_id INT DEFAULT NULL,
-          description VARCHAR(255) NOT NULL,
-          quantity INT NOT NULL DEFAULT 1,
-          unit_price DECIMAL(12,2) NOT NULL DEFAULT 0.00,
-          total DECIMAL(12,2) NOT NULL DEFAULT 0.00,
-          INDEX idx_inv_items_invoice (invoice_id)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
-      `);
-      // Ensure initial invoice_settings row exists in MySQL
-      const [invSetRows]: any = await conn.query('SELECT COUNT(*) as cnt FROM invoice_settings');
-      if (invSetRows && invSetRows[0] && Number(invSetRows[0].cnt) === 0) {
-        const initSet = getInitialData().invoice_settings;
-        await conn.query(
-          `INSERT IGNORE INTO invoice_settings (
-            id, company_name, company_tagline, logo_url, phone, whatsapp, email, website,
-            address, tax_number, bank_details, payment_notes, terms_and_conditions,
-            default_currency, invoice_prefix, next_number
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [
-            1,
-            initSet.company_name,
-            initSet.company_tagline,
-            initSet.logo_url,
-            initSet.phone,
-            initSet.whatsapp,
-            initSet.email,
-            initSet.website,
-            initSet.address,
-            initSet.tax_number,
-            initSet.bank_details,
-            initSet.payment_notes,
-            initSet.terms_and_conditions,
-            initSet.default_currency,
-            initSet.invoice_prefix,
-            initSet.next_number,
-          ]
-        );
-      }
-
-      // Seed initial invoice_catalog_items in MySQL once if table is empty and not previously seeded
-      const [catCountRows]: any = await conn.query('SELECT COUNT(*) as cnt FROM invoice_catalog_items');
-      const [seededRows]: any = await conn.query("SELECT setting_value FROM settings WHERE setting_key = 'invoice_catalog_seeded' LIMIT 1");
-      const alreadySeeded = Array.isArray(seededRows) && seededRows.length > 0;
-      if (catCountRows && catCountRows[0] && Number(catCountRows[0].cnt) === 0 && !alreadySeeded) {
-        const itemsToSeed = (store && Array.isArray(store.invoice_catalog_items) && store.invoice_catalog_items.length > 0)
-          ? store.invoice_catalog_items
-          : getInitialData().invoice_catalog_items;
-        for (const it of itemsToSeed) {
-          await conn.query(
-            `INSERT IGNORE INTO invoice_catalog_items (id, name, description, default_unit_price, category, is_active, display_order)
-             VALUES (?, ?, ?, ?, ?, ?, ?)`,
-            [it.id, it.name, it.description, Number(it.default_unit_price) || 0, it.category || 'Visa Services', it.is_active ?? 1, it.display_order || 0]
-          );
-        }
-        await conn.query(
-          "INSERT INTO settings (setting_key, setting_value) VALUES ('invoice_catalog_seeded', '1') ON DUPLICATE KEY UPDATE setting_value = '1'"
-        );
-      }
-
-      // One-time migration to set MYR as default currency in MySQL if not yet applied
-      const [myrMigRows]: any = await conn.query("SELECT setting_value FROM settings WHERE setting_key = 'default_currency_myr_set' LIMIT 1");
-      if (!Array.isArray(myrMigRows) || myrMigRows.length === 0) {
-        await conn.query("UPDATE invoice_settings SET default_currency = 'MYR' WHERE default_currency = 'USD'");
-        await conn.query("UPDATE invoices SET currency = 'MYR' WHERE currency = 'USD'");
-        await conn.query(
-          "INSERT INTO settings (setting_key, setting_value) VALUES ('default_currency_myr_set', '1') ON DUPLICATE KEY UPDATE setting_value = '1'"
-        );
-      }
-    } catch (e: any) {
-      console.warn('[MySQL] Could not ensure invoice tables:', e.message);
-    }
-    try { await conn.query('CREATE INDEX idx_invoices_client ON invoices(client_id)'); } catch {}
-    try { await conn.query('CREATE INDEX idx_invoices_status ON invoices(status)'); } catch {}
-    try { await conn.query('CREATE INDEX idx_invoices_date ON invoices(issue_date)'); } catch {}
-    try { await conn.query('CREATE INDEX idx_inv_items_inv ON invoice_items(invoice_id)'); } catch {}
-
-    conn.release();
-    await syncFromMySQL(true);
-    return true;
-  } catch (err: any) {
-    isConnectedToMySQL = false;
-    connectionError = err?.message || String(err);
-    console.warn(`[Database] MySQL connection probe failed (${connectionError}). Using local store fallback.`);
+  const now = Date.now();
+  if (!force && !isConnectedToMySQL && lastProbeAttemptTime > 0 && now - lastProbeAttemptTime < PROBE_COOLDOWN_MS) {
     return false;
   }
+  if (inFlightProbePromise) {
+    return inFlightProbePromise;
+  }
+
+  lastProbeAttemptTime = now;
+  inFlightProbePromise = (async () => {
+    const startMs = Date.now();
+    try {
+      const conn = await pool!.getConnection();
+      lastPingMs = Date.now() - startMs;
+      isConnectedToMySQL = true;
+      connectionError = null;
+
+      if (!schemaInitialized) {
+        console.log(`[Database] Connected to MySQL database "${DB_NAME}" at ${DB_HOST}:${DB_PORT} (${lastPingMs}ms)`);
+
+        // 1. Ensure tables exist in parallel
+        await Promise.allSettled([
+          conn.query(`
+            CREATE TABLE IF NOT EXISTS follow_ups (
+              id INT AUTO_INCREMENT PRIMARY KEY,
+              client_id INT NOT NULL,
+              title VARCHAR(255) NOT NULL,
+              reason VARCHAR(150) NOT NULL,
+              channel ENUM('WhatsApp', 'Phone Call', 'WeChat', 'Email', 'SMS') NOT NULL DEFAULT 'WhatsApp',
+              cadence ENUM('1 Month', '2 Months', '3 Months', '6 Months', 'One-time') NOT NULL DEFAULT '1 Month',
+              due_date DATE NOT NULL,
+              notes TEXT DEFAULT NULL,
+              message_template TEXT DEFAULT NULL,
+              status ENUM('Pending', 'Completed', 'Cancelled') NOT NULL DEFAULT 'Pending',
+              priority ENUM('Low', 'Normal', 'High', 'Urgent') NOT NULL DEFAULT 'Normal',
+              task_id INT DEFAULT NULL,
+              assigned_user_id INT DEFAULT NULL,
+              completed_at DATETIME DEFAULT NULL,
+              completed_notes TEXT DEFAULT NULL,
+              created_by_user_id INT DEFAULT NULL,
+              created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+              updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+              INDEX idx_fu_client (client_id),
+              INDEX idx_fu_due (due_date),
+              INDEX idx_fu_status (status),
+              INDEX idx_fu_due_status (due_date, status),
+              INDEX idx_fu_task (task_id)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+          `),
+          conn.query(`
+            CREATE TABLE IF NOT EXISTS invoice_settings (
+              id INT AUTO_INCREMENT PRIMARY KEY,
+              company_name VARCHAR(255) NOT NULL DEFAULT 'SN Travels Agency',
+              company_tagline VARCHAR(255) DEFAULT 'China Visa & Travel Processing Specialists',
+              logo_url TEXT DEFAULT NULL,
+              phone VARCHAR(50) DEFAULT '+971 4 399 2200',
+              whatsapp VARCHAR(50) DEFAULT '+971 50 123 4567',
+              email VARCHAR(191) DEFAULT 'visa@sn-travelsagency.com',
+              website VARCHAR(191) DEFAULT 'sn-travelsagency.com',
+              address TEXT DEFAULT 'Office 402, Al Hudaiba Awards Building, 2nd December St, Dubai, UAE',
+              tax_number VARCHAR(100) DEFAULT NULL,
+              bank_details TEXT DEFAULT NULL,
+              payment_notes TEXT DEFAULT NULL,
+              terms_and_conditions TEXT DEFAULT NULL,
+              default_currency VARCHAR(10) NOT NULL DEFAULT 'MYR',
+              invoice_prefix VARCHAR(20) NOT NULL DEFAULT 'INV-2026-',
+              next_number INT NOT NULL DEFAULT 1001,
+              updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+          `),
+          conn.query(`
+            CREATE TABLE IF NOT EXISTS invoice_catalog_items (
+              id INT AUTO_INCREMENT PRIMARY KEY,
+              name VARCHAR(200) NOT NULL,
+              description TEXT DEFAULT NULL,
+              default_unit_price DECIMAL(10,2) NOT NULL DEFAULT 0.00,
+              category VARCHAR(100) DEFAULT 'Visa Services',
+              is_active TINYINT(1) NOT NULL DEFAULT 1,
+              display_order INT NOT NULL DEFAULT 0,
+              created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+              updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+              INDEX idx_catalog_active (is_active),
+              INDEX idx_catalog_order (display_order)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+          `),
+          conn.query(`
+            CREATE TABLE IF NOT EXISTS invoices (
+              id INT AUTO_INCREMENT PRIMARY KEY,
+              invoice_number VARCHAR(50) NOT NULL UNIQUE,
+              client_id INT NOT NULL,
+              issue_date DATE NOT NULL,
+              due_date DATE DEFAULT NULL,
+              status ENUM('Pending', 'Paid', 'Partial', 'Cancelled') NOT NULL DEFAULT 'Pending',
+              payment_method ENUM('Cash', 'Bank Transfer', 'Credit Card', 'WeChat Pay', 'Alipay', 'Other') DEFAULT NULL,
+              currency VARCHAR(10) NOT NULL DEFAULT 'MYR',
+              subtotal DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+              discount DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+              tax_rate DECIMAL(5,2) NOT NULL DEFAULT 0.00,
+              tax_amount DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+              total_amount DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+              paid_amount DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+              balance_due DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+              notes TEXT DEFAULT NULL,
+              created_by_user_id INT DEFAULT NULL,
+              created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+              updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+              INDEX idx_invoices_client (client_id),
+              INDEX idx_invoices_number (invoice_number),
+              INDEX idx_invoices_status (status),
+              INDEX idx_invoices_date (issue_date)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+          `),
+          conn.query(`
+            CREATE TABLE IF NOT EXISTS invoice_items (
+              id INT AUTO_INCREMENT PRIMARY KEY,
+              invoice_id INT NOT NULL,
+              catalog_item_id INT DEFAULT NULL,
+              description VARCHAR(255) NOT NULL,
+              quantity INT NOT NULL DEFAULT 1,
+              unit_price DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+              total DECIMAL(12,2) NOT NULL DEFAULT 0.00,
+              INDEX idx_inv_items_invoice (invoice_id)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+          `),
+        ]);
+
+        // 2. Check existing indexes in a single query and only create missing ones in parallel
+        try {
+          const [idxRows]: any = await conn.query(
+            `SELECT INDEX_NAME FROM INFORMATION_SCHEMA.STATISTICS WHERE TABLE_SCHEMA = DATABASE()`
+          );
+          const existingIndexes = new Set(
+            Array.isArray(idxRows) ? idxRows.map((r: any) => String(r.INDEX_NAME || r.index_name)) : []
+          );
+
+          const desiredIndexes: Array<[string, string]> = [
+            ['idx_tasks_app_id', 'CREATE INDEX idx_tasks_app_id ON tasks(application_id)'],
+            ['idx_tasks_client_id', 'CREATE INDEX idx_tasks_client_id ON tasks(client_id)'],
+            ['idx_tasks_status', 'CREATE INDEX idx_tasks_status ON tasks(status)'],
+            ['idx_tasks_due', 'CREATE INDEX idx_tasks_due ON tasks(due_date)'],
+            ['idx_tasks_due_status', 'CREATE INDEX idx_tasks_due_status ON tasks(due_date, status)'],
+            ['idx_tasks_client_due', 'CREATE INDEX idx_tasks_client_due ON tasks(client_id, due_date)'],
+            ['idx_apps_client_id', 'CREATE INDEX idx_apps_client_id ON visa_applications(client_id)'],
+            ['idx_apps_status', 'CREATE INDEX idx_apps_status ON visa_applications(status)'],
+            ['idx_apps_delivery', 'CREATE INDEX idx_apps_delivery ON visa_applications(delivery_date)'],
+            ['idx_apps_status_delivery', 'CREATE INDEX idx_apps_status_delivery ON visa_applications(status, delivery_date)'],
+            ['idx_apps_client_status', 'CREATE INDEX idx_apps_client_status ON visa_applications(client_id, status)'],
+            ['idx_app_hist_app_id', 'CREATE INDEX idx_app_hist_app_id ON application_status_history(application_id)'],
+            ['idx_hb_client_id', 'CREATE INDEX idx_hb_client_id ON hotel_bookings(client_id)'],
+            ['idx_hb_status', 'CREATE INDEX idx_hb_status ON hotel_bookings(status)'],
+            ['idx_hb_dates', 'CREATE INDEX idx_hb_dates ON hotel_bookings(check_in_date, check_out_date)'],
+            ['idx_hb_checkout_status', 'CREATE INDEX idx_hb_checkout_status ON hotel_bookings(check_out_date, status)'],
+            ['idx_act_created', 'CREATE INDEX idx_act_created ON activity_logs(created_at)'],
+            ['idx_act_entity', 'CREATE INDEX idx_act_entity ON activity_logs(entity_type, entity_id)'],
+          ];
+
+          const missingQueries = desiredIndexes
+            .filter(([name]) => !existingIndexes.has(name))
+            .map(([, sql]) => conn.query(sql).catch(() => {}));
+
+          if (missingQueries.length > 0) {
+            await Promise.allSettled(missingQueries);
+          }
+        } catch {}
+
+        // 3. Seed initial invoice settings & catalog in background if empty
+        try {
+          const [[invSetRows], [catCountRows], [seededRows], [myrMigRows]]: any = await Promise.all([
+            conn.query('SELECT COUNT(*) as cnt FROM invoice_settings'),
+            conn.query('SELECT COUNT(*) as cnt FROM invoice_catalog_items'),
+            conn.query("SELECT setting_value FROM settings WHERE setting_key = 'invoice_catalog_seeded' LIMIT 1").catch(() => [[]]),
+            conn.query("SELECT setting_value FROM settings WHERE setting_key = 'default_currency_myr_set' LIMIT 1").catch(() => [[]]),
+          ]);
+
+          if (invSetRows && invSetRows[0] && Number(invSetRows[0].cnt) === 0) {
+            const initSet = getInitialData().invoice_settings;
+            await conn.query(
+              `INSERT IGNORE INTO invoice_settings (
+                id, company_name, company_tagline, logo_url, phone, whatsapp, email, website,
+                address, tax_number, bank_details, payment_notes, terms_and_conditions,
+                default_currency, invoice_prefix, next_number
+              ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              [
+                1,
+                initSet.company_name,
+                initSet.company_tagline,
+                initSet.logo_url,
+                initSet.phone,
+                initSet.whatsapp,
+                initSet.email,
+                initSet.website,
+                initSet.address,
+                initSet.tax_number,
+                initSet.bank_details,
+                initSet.payment_notes,
+                initSet.terms_and_conditions,
+                initSet.default_currency,
+                initSet.invoice_prefix,
+                initSet.next_number,
+              ]
+            );
+          }
+
+          const alreadySeeded = Array.isArray(seededRows) && seededRows.length > 0;
+          if (catCountRows && catCountRows[0] && Number(catCountRows[0].cnt) === 0 && !alreadySeeded) {
+            const itemsToSeed =
+              store && Array.isArray(store.invoice_catalog_items) && store.invoice_catalog_items.length > 0
+                ? store.invoice_catalog_items
+                : getInitialData().invoice_catalog_items;
+            if (itemsToSeed.length > 0) {
+              const values = itemsToSeed.map((it) => [
+                it.id,
+                it.name,
+                it.description,
+                Number(it.default_unit_price) || 0,
+                it.category || 'Visa Services',
+                it.is_active ?? 1,
+                it.display_order || 0,
+              ]);
+              await conn.query(
+                `INSERT IGNORE INTO invoice_catalog_items (id, name, description, default_unit_price, category, is_active, display_order) VALUES ?`,
+                [values]
+              );
+            }
+            await conn
+              .query("INSERT INTO settings (setting_key, setting_value) VALUES ('invoice_catalog_seeded', '1') ON DUPLICATE KEY UPDATE setting_value = '1'")
+              .catch(() => {});
+          }
+
+          if (!Array.isArray(myrMigRows) || myrMigRows.length === 0) {
+            await Promise.allSettled([
+              conn.query("UPDATE invoice_settings SET default_currency = 'MYR' WHERE default_currency = 'USD'"),
+              conn.query("UPDATE invoices SET currency = 'MYR' WHERE currency = 'USD'"),
+              conn.query("INSERT INTO settings (setting_key, setting_value) VALUES ('default_currency_myr_set', '1') ON DUPLICATE KEY UPDATE setting_value = '1'"),
+            ]);
+          }
+        } catch (e: any) {
+          console.warn('[MySQL] Initial seed check warning:', e.message);
+        }
+
+        schemaInitialized = true;
+      }
+
+      conn.release();
+      void syncFromMySQL(true);
+      return true;
+    } catch (err: any) {
+      isConnectedToMySQL = false;
+      connectionError = err?.message || String(err);
+      console.warn(`[Database] MySQL connection probe failed (${connectionError}). Using fast local store.`);
+      return false;
+    } finally {
+      inFlightProbePromise = null;
+    }
+  })();
+
+  return inFlightProbePromise;
 }
 
 // Initialize MySQL pool if host and user are configured
@@ -257,17 +298,17 @@ if (DB_HOST && DB_USER) {
       password: DB_PASSWORD,
       database: DB_NAME,
       waitForConnections: true,
-      connectionLimit: 15,
-      maxIdle: 10,
+      connectionLimit: 25,
+      maxIdle: 15,
       idleTimeout: 60000,
       queueLimit: 0,
       enableKeepAlive: true,
-      keepAliveInitialDelay: 10000,
+      keepAliveInitialDelay: 5000,
       dateStrings: true,
-      connectTimeout: 10000,
+      connectTimeout: 4000,
       ssl: DB_SSL ? { rejectUnauthorized: false } : undefined,
     });
-    
+
     (pool as any).on('error', (err: any) => {
       console.warn('[MySQL Pool Error]:', err?.message || err);
       if (err?.code === 'PROTOCOL_CONNECTION_LOST' || err?.code === 'ECONNRESET') {
@@ -276,19 +317,23 @@ if (DB_HOST && DB_USER) {
       }
     });
 
-    // Periodic keep-alive heartbeat ping (every 45s) to keep TCP socket active through firewalls/proxies
+    // Periodic keep-alive heartbeat ping & background sync (every 30s)
     setInterval(async () => {
       if (pool && isConnectedToMySQL) {
+        const t0 = Date.now();
         try {
           await pool.query('/* keep-alive */ SELECT 1');
+          lastPingMs = Date.now() - t0;
         } catch (err: any) {
           console.warn('[MySQL KeepAlive] Ping failed, attempting probe:', err?.message || err);
-          probeMySQLConnection();
+          void probeMySQLConnection(true);
         }
+      } else if (pool && !isConnectedToMySQL) {
+        void probeMySQLConnection(false);
       }
-    }, 45000).unref();
+    }, 30000).unref();
 
-    probeMySQLConnection();
+    void probeMySQLConnection(true);
   } catch (err: any) {
     isConnectedToMySQL = false;
     connectionError = err.message;
@@ -988,15 +1033,41 @@ function loadStore(): StoreData {
   return initial;
 }
 
-function saveStore(dataToSave: StoreData) {
-  try {
-    if (!fs.existsSync(DATA_DIR)) {
-      fs.mkdirSync(DATA_DIR, { recursive: true });
+let saveStoreTimer: ReturnType<typeof setTimeout> | null = null;
+let saveStoreInFlight = false;
+
+function saveStore(dataToSave: StoreData, immediate = false) {
+  if (immediate) {
+    try {
+      if (!fs.existsSync(DATA_DIR)) {
+        fs.mkdirSync(DATA_DIR, { recursive: true });
+      }
+      fs.writeFileSync(DATA_FILE, JSON.stringify(dataToSave), 'utf-8');
+    } catch (err) {
+      console.error('[Database] Failed to write store file:', err);
     }
-    fs.writeFileSync(DATA_FILE, JSON.stringify(dataToSave, null, 2), 'utf-8');
-  } catch (err) {
-    console.error('[Database] Failed to write store file:', err);
+    return;
   }
+
+  // Coalesce frequent writes into a single non-blocking async disk flush
+  if (saveStoreTimer) {
+    clearTimeout(saveStoreTimer);
+  }
+  saveStoreTimer = setTimeout(async () => {
+    saveStoreTimer = null;
+    if (saveStoreInFlight) return;
+    saveStoreInFlight = true;
+    try {
+      if (!fs.existsSync(DATA_DIR)) {
+        await fs.promises.mkdir(DATA_DIR, { recursive: true });
+      }
+      await fs.promises.writeFile(DATA_FILE, JSON.stringify(dataToSave), 'utf-8');
+    } catch (err) {
+      console.error('[Database] Failed to async write store file:', err);
+    } finally {
+      saveStoreInFlight = false;
+    }
+  }, 200);
 }
 
 store = loadStore();
@@ -1118,18 +1189,53 @@ async function deleteClientFromMySQL(id: number, clientIdString?: string): Promi
 }
 
 let lastSyncTime = 0;
-const SYNC_CACHE_TTL_MS = 5000; // 5 seconds cache to prevent hammering MySQL on every sub-second request
+let lastLocalMutationTime = 0;
+const SYNC_CACHE_TTL_MS = 30000; // 30 seconds TTL for background MySQL syncs
 let inFlightSyncPromise: Promise<void> | null = null;
+const pendingWritePromises = new Set<Promise<any>>();
+
+/**
+ * Executes a MySQL write operation in a non-blocking write-through pipeline.
+ * In-memory relational store is already updated synchronously so API responses return in <1ms,
+ * while MySQL queries execute immediately on the connection pool in the background.
+ */
+function runMySQLWrite(task: (activePool: mysql.Pool) => Promise<any>): void {
+  lastLocalMutationTime = Date.now();
+  if (!isConnectedToMySQL || !pool) return;
+  const activePool = pool;
+  const p = (async () => {
+    try {
+      await task(activePool);
+    } catch (err: any) {
+      console.error('[MySQL Write Pipeline Error]:', err?.message || err);
+    }
+  })();
+  pendingWritePromises.add(p);
+  p.finally(() => {
+    pendingWritePromises.delete(p);
+  });
+}
 
 async function syncFromMySQL(force = false): Promise<void> {
   if (!pool) return;
   if (!isConnectedToMySQL) {
-    const connected = await probeMySQLConnection();
+    const connected = await probeMySQLConnection(force);
     if (!connected) return;
   }
+
   const now = Date.now();
   if (!force && (now - lastSyncTime < SYNC_CACHE_TTL_MS)) {
     return; // Serve cached in-memory store immediately
+  }
+
+  // Wait for any in-flight write-through queries to complete before reading from MySQL
+  if (pendingWritePromises.size > 0) {
+    await Promise.allSettled(Array.from(pendingWritePromises));
+  }
+
+  // Avoid clobbering very recent local mutations with a non-forced background sync
+  if (!force && (Date.now() - lastLocalMutationTime < 4000)) {
+    return;
   }
 
   if (inFlightSyncPromise) {
@@ -1137,151 +1243,156 @@ async function syncFromMySQL(force = false): Promise<void> {
   }
 
   inFlightSyncPromise = (async () => {
-
-  const safeQuery = async (sql: string) => {
-    try {
-      const [rows]: any = await pool!.query(sql);
-      return rows;
-    } catch (err: any) {
-      console.warn(`[MySQL Table Sync Warning] (${sql}):`, err?.message || err);
-      return null;
-    }
-  };
-
-  try {
-    const [u, c, cl, cf, cfv, vt, va, ash, t, cm, al, h, hr, hb, s, fu, invS, invCat, inv, invItems] = await Promise.all([
-      safeQuery('SELECT * FROM users'),
-      safeQuery('SELECT * FROM countries ORDER BY display_order ASC, name ASC'),
-      safeQuery('SELECT * FROM clients'),
-      safeQuery('SELECT * FROM client_custom_fields ORDER BY display_order ASC'),
-      safeQuery('SELECT * FROM client_custom_field_values'),
-      safeQuery('SELECT * FROM visa_types'),
-      safeQuery('SELECT * FROM visa_applications'),
-      safeQuery('SELECT * FROM application_status_history'),
-      safeQuery('SELECT * FROM tasks'),
-      safeQuery('SELECT * FROM comments'),
-      safeQuery('SELECT * FROM activity_logs'),
-      safeQuery('SELECT * FROM hotels'),
-      safeQuery('SELECT * FROM hotel_rooms'),
-      safeQuery('SELECT * FROM hotel_bookings'),
-      safeQuery('SELECT * FROM settings'),
-      safeQuery('SELECT * FROM follow_ups'),
-      safeQuery('SELECT * FROM invoice_settings LIMIT 1'),
-      safeQuery('SELECT * FROM invoice_catalog_items ORDER BY display_order ASC, id ASC'),
-      safeQuery('SELECT * FROM invoices ORDER BY id DESC'),
-      safeQuery('SELECT * FROM invoice_items'),
-    ]);
-
-    if (Array.isArray(u) && u.length > 0) store.users = u;
-    if (Array.isArray(c) && c.length > 0) store.countries = c;
-    if (Array.isArray(cl)) {
-      store.clients = cl.map((item: any) => ({
-        ...item,
-        date_of_birth: item.date_of_birth ? String(item.date_of_birth).slice(0, 10) : null,
-      }));
-    }
-    if (Array.isArray(cf) && cf.length > 0) store.client_custom_fields = cf;
-    if (Array.isArray(cfv)) store.client_custom_field_values = cfv;
-    if (Array.isArray(vt) && vt.length > 0) store.visa_types = vt;
-    if (Array.isArray(va)) {
-      store.visa_applications = va.map((item: any) => ({
-        ...item,
-        delivery_date: item.delivery_date ? String(item.delivery_date).slice(0, 10) : null,
-      }));
-    }
-    if (Array.isArray(ash)) store.application_status_history = ash;
-    if (Array.isArray(t)) {
-      store.tasks = t.map((item: any) => ({
-        ...item,
-        due_date: item.due_date ? String(item.due_date).slice(0, 10) : new Date().toISOString().slice(0, 10),
-      }));
-    }
-    if (Array.isArray(cm)) store.comments = cm;
-    if (Array.isArray(al)) store.activity_logs = al;
-    if (Array.isArray(h) && h.length > 0) store.hotels = h;
-    if (Array.isArray(hr)) store.hotel_rooms = hr;
-    if (Array.isArray(hb)) {
-      store.hotel_bookings = hb.map((item: any) => ({
-        ...item,
-        check_in_date: item.check_in_date ? String(item.check_in_date).slice(0, 10) : new Date().toISOString().slice(0, 10),
-        check_out_date: item.check_out_date ? String(item.check_out_date).slice(0, 10) : new Date().toISOString().slice(0, 10),
-      }));
-    }
-    if (Array.isArray(fu)) {
-      store.follow_ups = fu.map((item: any) => ({
-        ...item,
-        due_date: item.due_date ? String(item.due_date).slice(0, 10) : new Date().toISOString().slice(0, 10),
-      }));
-    }
-    if (Array.isArray(s) && s.length > 0) store.settings = s;
-
-    if (Array.isArray(invS) && invS.length > 0) {
-      store.invoice_settings = {
-        ...invS[0],
-        next_number: Number(invS[0].next_number) || 1001,
-      };
-    }
-    if (Array.isArray(invCat)) {
-      store.invoice_catalog_items = invCat.map((item: any) => ({
-        ...item,
-        default_unit_price: Number(item.default_unit_price) || 0,
-        is_active: Number(item.is_active ?? 1),
-        display_order: Number(item.display_order) || 0,
-      }));
-    }
-    if (Array.isArray(inv)) {
-      store.invoices = inv.map((item: any) => ({
-        ...item,
-        issue_date: item.issue_date ? String(item.issue_date).slice(0, 10) : new Date().toISOString().slice(0, 10),
-        due_date: item.due_date ? String(item.due_date).slice(0, 10) : null,
-        subtotal: Number(item.subtotal) || 0,
-        discount: Number(item.discount) || 0,
-        tax_rate: Number(item.tax_rate) || 0,
-        tax_amount: Number(item.tax_amount) || 0,
-        total_amount: Number(item.total_amount) || 0,
-        paid_amount: Number(item.paid_amount) || 0,
-        balance_due: Number(item.balance_due) || 0,
-      }));
-    }
-    if (Array.isArray(invItems)) {
-      store.invoice_items = invItems.map((item: any) => ({
-        ...item,
-        quantity: Number(item.quantity) || 1,
-        unit_price: Number(item.unit_price) || 0,
-        total: Number(item.total) || 0,
-      }));
-    }
-
-    // Recalculate nextIds safely
-    store.nextIds = {
-      users: Math.max(...store.users.map(x => x.id), 0) + 1,
-      countries: Math.max(...store.countries.map(x => x.id), 0) + 1,
-      clients: Math.max(...store.clients.map(x => x.id), 0) + 1,
-      client_custom_fields: Math.max(...store.client_custom_fields.map(x => x.id), 0) + 1,
-      client_custom_field_values: Math.max(...store.client_custom_field_values.map(x => x.id || 0), 0) + 1,
-      visa_types: Math.max(...store.visa_types.map(x => x.id), 0) + 1,
-      visa_applications: Math.max(...store.visa_applications.map(x => x.id), 0) + 1,
-      application_status_history: Math.max(...store.application_status_history.map(x => x.id || 0), 0) + 1,
-      tasks: Math.max(...store.tasks.map(x => x.id), 0) + 1,
-      comments: Math.max(...store.comments.map(x => x.id || 0), 0) + 1,
-      activity_logs: Math.max(...store.activity_logs.map(x => x.id || 0), 0) + 1,
-      hotels: Math.max(...(store.hotels || []).map(x => x.id), 0) + 1,
-      hotel_rooms: Math.max(...(store.hotel_rooms || []).map(x => x.id), 0) + 1,
-      hotel_bookings: Math.max(...(store.hotel_bookings || []).map(x => x.id), 0) + 1,
-      follow_ups: Math.max(...(store.follow_ups || []).map(x => x.id), 0) + 1,
-      settings: Math.max(...(store.settings || []).map(x => x.id), 0) + 1,
-      invoice_catalog_items: Math.max(...(store.invoice_catalog_items || []).map(x => x.id), 0) + 1,
-      invoices: Math.max(...(store.invoices || []).map(x => x.id), 0) + 1,
-      invoice_items: Math.max(...(store.invoice_items || []).map(x => x.id), 0) + 1,
+    const syncStart = Date.now();
+    const safeQuery = async (sql: string) => {
+      try {
+        const [rows]: any = await pool!.query(sql);
+        return rows;
+      } catch (err: any) {
+        console.warn(`[MySQL Table Sync Warning] (${sql}):`, err?.message || err);
+        return null;
+      }
     };
 
-    lastSyncTime = Date.now();
-    saveStore(store);
-  } catch (err: any) {
-    console.warn('[Database] Sync from MySQL encountered an issue:', err.message);
-  } finally {
-    inFlightSyncPromise = null;
-  }
+    try {
+      const [u, c, cl, cf, cfv, vt, va, ash, t, cm, al, h, hr, hb, s, fu, invS, invCat, inv, invItems] = await Promise.all([
+        safeQuery('SELECT * FROM users'),
+        safeQuery('SELECT * FROM countries ORDER BY display_order ASC, name ASC'),
+        safeQuery('SELECT * FROM clients'),
+        safeQuery('SELECT * FROM client_custom_fields ORDER BY display_order ASC'),
+        safeQuery('SELECT * FROM client_custom_field_values'),
+        safeQuery('SELECT * FROM visa_types'),
+        safeQuery('SELECT * FROM visa_applications'),
+        safeQuery('SELECT * FROM application_status_history'),
+        safeQuery('SELECT * FROM tasks'),
+        safeQuery('SELECT * FROM comments'),
+        safeQuery('SELECT * FROM activity_logs ORDER BY id DESC LIMIT 500'),
+        safeQuery('SELECT * FROM hotels'),
+        safeQuery('SELECT * FROM hotel_rooms'),
+        safeQuery('SELECT * FROM hotel_bookings'),
+        safeQuery('SELECT * FROM settings'),
+        safeQuery('SELECT * FROM follow_ups'),
+        safeQuery('SELECT * FROM invoice_settings LIMIT 1'),
+        safeQuery('SELECT * FROM invoice_catalog_items ORDER BY display_order ASC, id ASC'),
+        safeQuery('SELECT * FROM invoices ORDER BY id DESC'),
+        safeQuery('SELECT * FROM invoice_items'),
+      ]);
+
+      // If a local write occurred while the SELECT queries were in flight, abort overwriting memory unless forced
+      if (!force && lastLocalMutationTime > syncStart) {
+        return;
+      }
+
+      if (Array.isArray(u) && u.length > 0) store.users = u;
+      if (Array.isArray(c) && c.length > 0) store.countries = c;
+      if (Array.isArray(cl)) {
+        store.clients = cl.map((item: any) => ({
+          ...item,
+          date_of_birth: item.date_of_birth ? String(item.date_of_birth).slice(0, 10) : null,
+        }));
+      }
+      if (Array.isArray(cf) && cf.length > 0) store.client_custom_fields = cf;
+      if (Array.isArray(cfv)) store.client_custom_field_values = cfv;
+      if (Array.isArray(vt) && vt.length > 0) store.visa_types = vt;
+      if (Array.isArray(va)) {
+        store.visa_applications = va.map((item: any) => ({
+          ...item,
+          delivery_date: item.delivery_date ? String(item.delivery_date).slice(0, 10) : null,
+        }));
+      }
+      if (Array.isArray(ash)) store.application_status_history = ash;
+      if (Array.isArray(t)) {
+        store.tasks = t.map((item: any) => ({
+          ...item,
+          due_date: item.due_date ? String(item.due_date).slice(0, 10) : new Date().toISOString().slice(0, 10),
+        }));
+      }
+      if (Array.isArray(cm)) store.comments = cm;
+      if (Array.isArray(al)) store.activity_logs = al;
+      if (Array.isArray(h) && h.length > 0) store.hotels = h;
+      if (Array.isArray(hr)) store.hotel_rooms = hr;
+      if (Array.isArray(hb)) {
+        store.hotel_bookings = hb.map((item: any) => ({
+          ...item,
+          check_in_date: item.check_in_date ? String(item.check_in_date).slice(0, 10) : new Date().toISOString().slice(0, 10),
+          check_out_date: item.check_out_date ? String(item.check_out_date).slice(0, 10) : new Date().toISOString().slice(0, 10),
+        }));
+      }
+      if (Array.isArray(fu)) {
+        store.follow_ups = fu.map((item: any) => ({
+          ...item,
+          due_date: item.due_date ? String(item.due_date).slice(0, 10) : new Date().toISOString().slice(0, 10),
+        }));
+      }
+      if (Array.isArray(s) && s.length > 0) store.settings = s;
+
+      if (Array.isArray(invS) && invS.length > 0) {
+        store.invoice_settings = {
+          ...invS[0],
+          next_number: Number(invS[0].next_number) || 1001,
+        };
+      }
+      if (Array.isArray(invCat)) {
+        store.invoice_catalog_items = invCat.map((item: any) => ({
+          ...item,
+          default_unit_price: Number(item.default_unit_price) || 0,
+          is_active: Number(item.is_active ?? 1),
+          display_order: Number(item.display_order) || 0,
+        }));
+      }
+      if (Array.isArray(inv)) {
+        store.invoices = inv.map((item: any) => ({
+          ...item,
+          issue_date: item.issue_date ? String(item.issue_date).slice(0, 10) : new Date().toISOString().slice(0, 10),
+          due_date: item.due_date ? String(item.due_date).slice(0, 10) : null,
+          subtotal: Number(item.subtotal) || 0,
+          discount: Number(item.discount) || 0,
+          tax_rate: Number(item.tax_rate) || 0,
+          tax_amount: Number(item.tax_amount) || 0,
+          total_amount: Number(item.total_amount) || 0,
+          paid_amount: Number(item.paid_amount) || 0,
+          balance_due: Number(item.balance_due) || 0,
+        }));
+      }
+      if (Array.isArray(invItems)) {
+        store.invoice_items = invItems.map((item: any) => ({
+          ...item,
+          quantity: Number(item.quantity) || 1,
+          unit_price: Number(item.unit_price) || 0,
+          total: Number(item.total) || 0,
+        }));
+      }
+
+      // Recalculate nextIds safely
+      store.nextIds = {
+        users: Math.max(...store.users.map(x => x.id), 0) + 1,
+        countries: Math.max(...store.countries.map(x => x.id), 0) + 1,
+        clients: Math.max(...store.clients.map(x => x.id), 0) + 1,
+        client_custom_fields: Math.max(...store.client_custom_fields.map(x => x.id), 0) + 1,
+        client_custom_field_values: Math.max(...store.client_custom_field_values.map(x => x.id || 0), 0) + 1,
+        visa_types: Math.max(...store.visa_types.map(x => x.id), 0) + 1,
+        visa_applications: Math.max(...store.visa_applications.map(x => x.id), 0) + 1,
+        application_status_history: Math.max(...store.application_status_history.map(x => x.id || 0), 0) + 1,
+        tasks: Math.max(...store.tasks.map(x => x.id), 0) + 1,
+        comments: Math.max(...store.comments.map(x => x.id || 0), 0) + 1,
+        activity_logs: Math.max(...store.activity_logs.map(x => x.id || 0), 0) + 1,
+        hotels: Math.max(...(store.hotels || []).map(x => x.id), 0) + 1,
+        hotel_rooms: Math.max(...(store.hotel_rooms || []).map(x => x.id), 0) + 1,
+        hotel_bookings: Math.max(...(store.hotel_bookings || []).map(x => x.id), 0) + 1,
+        follow_ups: Math.max(...(store.follow_ups || []).map(x => x.id), 0) + 1,
+        settings: Math.max(...(store.settings || []).map(x => x.id), 0) + 1,
+        invoice_catalog_items: Math.max(...(store.invoice_catalog_items || []).map(x => x.id), 0) + 1,
+        invoices: Math.max(...(store.invoices || []).map(x => x.id), 0) + 1,
+        invoice_items: Math.max(...(store.invoice_items || []).map(x => x.id), 0) + 1,
+      };
+
+      lastSyncTime = Date.now();
+      saveStore(store);
+    } catch (err: any) {
+      console.warn('[Database] Sync from MySQL encountered an issue:', err.message);
+    } finally {
+      inFlightSyncPromise = null;
+    }
   })();
   return inFlightSyncPromise;
 }
@@ -1290,8 +1401,24 @@ async function syncFromMySQL(force = false): Promise<void> {
 // Database Interface Service
 // --------------------------------------------------------------------------
 export const dbService = {
+  /**
+   * Triggers a non-blocking stale-while-revalidate MySQL sync in the background
+   * so HTTP API requests return in <1ms from memory without waiting on network I/O.
+   */
+  triggerBackgroundSync() {
+    if (!pool) return;
+    const now = Date.now();
+    if (now - lastSyncTime >= SYNC_CACHE_TTL_MS && !inFlightSyncPromise) {
+      void syncFromMySQL(false).catch(() => {});
+    }
+  },
+
   async syncFromMySQL(force = false) {
-    await syncFromMySQL(force);
+    if (force) {
+      await syncFromMySQL(true);
+    } else {
+      this.triggerBackgroundSync();
+    }
     return this.getStatus();
   },
 
@@ -1303,7 +1430,8 @@ export const dbService = {
       database: DB_NAME,
       user: DB_USER || 'Not Configured',
       connection_error: connectionError,
-      engine: isConnectedToMySQL ? 'MySQL 8.x / MariaDB' : 'Embedded Relational (phpMyAdmin Schema Ready)',
+      ping_ms: lastPingMs,
+      engine: isConnectedToMySQL ? 'MySQL 8.x / MariaDB (Write-Through Cached)' : 'Embedded Relational (phpMyAdmin Schema Ready)',
       records: {
         clients: store.clients.length,
         applications: store.visa_applications.length,
@@ -1442,7 +1570,7 @@ export const dbService = {
 
   // Clients
   getClients(search?: string, country?: string) {
-    let list = [...store.clients];
+    let list = store.clients;
     if (search) {
       const q = search.toLowerCase().trim();
       list = list.filter(c =>
@@ -1455,33 +1583,50 @@ export const dbService = {
       );
     }
     if (country) {
-      list = list.filter(c => c.country.toLowerCase() === country.toLowerCase());
+      const cLower = country.toLowerCase();
+      list = list.filter(c => c.country.toLowerCase() === cLower);
     }
 
-    // Enrich with active visa application and next task
-    return list.map(client => {
-      const apps = store.visa_applications.filter(a => a.client_id === client.id);
-      const activeApps = apps.filter(a => a.status !== 'Returned');
-      const activeApp = activeApps[activeApps.length - 1] || null; // Latest active (non-returned)
-      let activeAppType = null;
-      if (activeApp) {
-        const vt = store.visa_types.find(v => v.id === activeApp.visa_type_id);
-        activeAppType = vt ? vt.name : null;
-      }
+    // Pre-index visa types, applications, and pending tasks by client_id in O(N) time
+    const visaTypeMap = new Map<number, string>();
+    for (const vt of store.visa_types) {
+      visaTypeMap.set(vt.id, vt.name);
+    }
 
-      const clientTasks = store.tasks
-        .filter(t => t.client_id === client.id && t.status === 'Pending')
-        .sort((a, b) => new Date(a.due_date).getTime() - new Date(b.due_date).getTime());
-      const nextTask = clientTasks[0] || null;
+    const appCountByClient = new Map<number, number>();
+    const latestActiveAppByClient = new Map<number, VisaApplication>();
+    for (const app of store.visa_applications) {
+      appCountByClient.set(app.client_id, (appCountByClient.get(app.client_id) || 0) + 1);
+      if (app.status !== 'Returned') {
+        const existing = latestActiveAppByClient.get(app.client_id);
+        if (!existing || app.id >= existing.id) {
+          latestActiveAppByClient.set(app.client_id, app);
+        }
+      }
+    }
+
+    const nextTaskByClient = new Map<number, Task>();
+    for (const t of store.tasks) {
+      if (t.client_id && t.status === 'Pending') {
+        const cur = nextTaskByClient.get(t.client_id);
+        if (!cur || t.due_date < cur.due_date) {
+          nextTaskByClient.set(t.client_id, t);
+        }
+      }
+    }
+
+    return list.map(client => {
+      const activeApp = latestActiveAppByClient.get(client.id) || null;
+      const nextTask = nextTaskByClient.get(client.id) || null;
 
       return {
         ...client,
-        application_count: apps.length,
+        application_count: appCountByClient.get(client.id) || 0,
         active_application: activeApp ? {
           id: activeApp.id,
           application_id: activeApp.application_id,
           status: activeApp.status,
-          visa_type: activeAppType,
+          visa_type: visaTypeMap.get(activeApp.visa_type_id) || null,
           delivery_date: activeApp.delivery_date,
         } : null,
         next_task: nextTask ? {
@@ -1761,8 +1906,9 @@ export const dbService = {
 
     store.clients.unshift(client);
 
-    // Save custom fields
+    // Save custom fields in a single bulk query
     if (data.custom_fields) {
+      const bulkCustomValues: Array<[number, number, string]> = [];
       for (const [fieldIdStr, val] of Object.entries(data.custom_fields)) {
         const fieldId = parseInt(fieldIdStr, 10);
         if (val !== undefined && val !== null && String(val).trim() !== '') {
@@ -1773,16 +1919,18 @@ export const dbService = {
             field_value: String(val),
             created_at: now,
           });
-
-          if (isConnectedToMySQL && pool) {
-            await pool.query(
-              `INSERT INTO client_custom_field_values (client_id, field_id, field_value, created_at, updated_at)
-               VALUES (?, ?, ?, NOW(), NOW())
-               ON DUPLICATE KEY UPDATE field_value = VALUES(field_value), updated_at = NOW()`,
-              [id, fieldId, String(val)]
-            ).catch(err => console.error('[MySQL] Error saving custom field in MySQL:', err.message));
-          }
+          bulkCustomValues.push([id, fieldId, String(val)]);
         }
+      }
+      if (isConnectedToMySQL && pool && bulkCustomValues.length > 0) {
+        const placeholders = bulkCustomValues.map(() => '(?, ?, ?, NOW(), NOW())').join(', ');
+        const flatParams = bulkCustomValues.flat();
+        await pool.query(
+          `INSERT INTO client_custom_field_values (client_id, field_id, field_value, created_at, updated_at)
+           VALUES ${placeholders}
+           ON DUPLICATE KEY UPDATE field_value = VALUES(field_value), updated_at = NOW()`,
+          flatParams
+        ).catch(err => console.error('[MySQL] Error saving custom fields in MySQL:', err.message));
       }
     }
 
@@ -1841,8 +1989,10 @@ export const dbService = {
       }
     }
 
-    // Update custom fields
+    // Update custom fields in batch
     if (data.custom_fields) {
+      const upsertRows: Array<[number, number, string]> = [];
+      const deleteFieldIds: number[] = [];
       for (const [fieldIdStr, val] of Object.entries(data.custom_fields)) {
         const fieldId = parseInt(fieldIdStr, 10);
         const existing = store.client_custom_field_values.find(v => v.client_id === id && v.field_id === fieldId);
@@ -1858,18 +2008,29 @@ export const dbService = {
           });
         }
 
-        if (isConnectedToMySQL && pool) {
-          if (val !== undefined && val !== null && String(val).trim() !== '') {
-            await pool.query(
-              `INSERT INTO client_custom_field_values (client_id, field_id, field_value, created_at, updated_at)
-               VALUES (?, ?, ?, NOW(), NOW())
-               ON DUPLICATE KEY UPDATE field_value = VALUES(field_value), updated_at = NOW()`,
-              [id, fieldId, String(val)]
-            ).catch(err => console.error('[MySQL] Error updating custom field in MySQL:', err.message));
-          } else {
-            await pool.query('DELETE FROM client_custom_field_values WHERE client_id = ? AND field_id = ?', [id, fieldId])
-              .catch(err => console.error('[MySQL] Error removing custom field in MySQL:', err.message));
-          }
+        if (val !== undefined && val !== null && String(val).trim() !== '') {
+          upsertRows.push([id, fieldId, String(val)]);
+        } else {
+          deleteFieldIds.push(fieldId);
+        }
+      }
+
+      if (isConnectedToMySQL && pool) {
+        if (upsertRows.length > 0) {
+          const placeholders = upsertRows.map(() => '(?, ?, ?, NOW(), NOW())').join(', ');
+          const flatParams = upsertRows.flat();
+          await pool.query(
+            `INSERT INTO client_custom_field_values (client_id, field_id, field_value, created_at, updated_at)
+             VALUES ${placeholders}
+             ON DUPLICATE KEY UPDATE field_value = VALUES(field_value), updated_at = NOW()`,
+            flatParams
+          ).catch(err => console.error('[MySQL] Error updating custom fields in MySQL:', err.message));
+        }
+        if (deleteFieldIds.length > 0) {
+          await pool.query(
+            `DELETE FROM client_custom_field_values WHERE client_id = ? AND field_id IN (${deleteFieldIds.map(() => '?').join(',')})`,
+            [id, ...deleteFieldIds]
+          ).catch(err => console.error('[MySQL] Error removing custom fields in MySQL:', err.message));
         }
       }
     }
@@ -1935,6 +2096,15 @@ export const dbService = {
   getApplications(filters?: { status?: string; visa_type_id?: number; staff_id?: number; search?: string }) {
     let list = [...store.visa_applications];
 
+    const clientById = new Map<number, Client>();
+    for (const c of store.clients) clientById.set(c.id, c);
+
+    const vtById = new Map<number, VisaType>();
+    for (const vt of store.visa_types) vtById.set(vt.id, vt);
+
+    const userById = new Map<number, User>();
+    for (const u of store.users) userById.set(u.id, u);
+
     if (filters?.status) {
       list = list.filter(a => a.status === filters.status);
     }
@@ -1947,8 +2117,8 @@ export const dbService = {
     if (filters?.search) {
       const q = filters.search.toLowerCase().trim();
       list = list.filter(a => {
-        const client = store.clients.find(c => c.id === a.client_id);
-        const vt = store.visa_types.find(v => v.id === a.visa_type_id);
+        const client = clientById.get(a.client_id);
+        const vt = vtById.get(a.visa_type_id);
         return a.application_id.toLowerCase().includes(q) ||
           (client && (client.full_name.toLowerCase().includes(q) || client.passport_number.toLowerCase().includes(q))) ||
           (vt && vt.name.toLowerCase().includes(q));
@@ -1956,9 +2126,9 @@ export const dbService = {
     }
 
     return list.map(app => {
-      const client = store.clients.find(c => c.id === app.client_id);
-      const vt = store.visa_types.find(v => v.id === app.visa_type_id);
-      const staff = app.assigned_user_id ? store.users.find(u => u.id === app.assigned_user_id) : null;
+      const client = clientById.get(app.client_id);
+      const vt = vtById.get(app.visa_type_id);
+      const staff = app.assigned_user_id ? userById.get(app.assigned_user_id) : null;
       return {
         ...app,
         client_name: client?.full_name || 'Unknown',
@@ -2494,10 +2664,19 @@ export const dbService = {
     if (filters?.client_id) list = list.filter(t => t.client_id === Number(filters.client_id));
     if (filters?.due_date) list = list.filter(t => t.due_date === filters.due_date);
 
+    const clientById = new Map<number, Client>();
+    for (const c of store.clients) clientById.set(c.id, c);
+
+    const appById = new Map<number, VisaApplication>();
+    for (const a of store.visa_applications) appById.set(a.id, a);
+
+    const userById = new Map<number, User>();
+    for (const u of store.users) userById.set(u.id, u);
+
     return list.map(t => {
-      const client = t.client_id ? store.clients.find(c => c.id === t.client_id) : null;
-      const app = t.application_id ? store.visa_applications.find(a => a.id === t.application_id) : null;
-      const user = t.assigned_user_id ? store.users.find(u => u.id === t.assigned_user_id) : null;
+      const client = t.client_id ? clientById.get(t.client_id) : null;
+      const app = t.application_id ? appById.get(t.application_id) : null;
+      const user = t.assigned_user_id ? userById.get(t.assigned_user_id) : null;
       return {
         ...t,
         client_name: client?.full_name || null,
@@ -4947,8 +5126,16 @@ export const dbService = {
             newItem.display_order,
           ]
         );
-        for (const it of sorted) {
-          await pool.query('UPDATE invoice_catalog_items SET display_order = ? WHERE id = ?', [it.display_order, it.id]);
+        if (sorted.length > 0) {
+          const cases = sorted.map(() => 'WHEN ? THEN ?').join(' ');
+          const ids = sorted.map(it => it.id);
+          const params: number[] = [];
+          for (const it of sorted) params.push(it.id, it.display_order);
+          params.push(...ids);
+          await pool.query(
+            `UPDATE invoice_catalog_items SET display_order = CASE id ${cases} END WHERE id IN (${ids.map(() => '?').join(',')})`,
+            params
+          );
         }
       } catch (err: any) {
         console.warn('[MySQL] Failed to insert invoice_catalog_item:', err.message);
@@ -4993,14 +5180,17 @@ export const dbService = {
     store.invoice_catalog_items = sorted;
     saveStore(store);
 
-    if (pool && isConnectedToMySQL) {
+    if (pool && isConnectedToMySQL && sorted.length > 0) {
       try {
-        for (const it of sorted) {
-          await pool.query(
-            'UPDATE invoice_catalog_items SET display_order = ? WHERE id = ?',
-            [it.display_order, it.id]
-          );
-        }
+        const cases = sorted.map(() => 'WHEN ? THEN ?').join(' ');
+        const ids = sorted.map(it => it.id);
+        const params: number[] = [];
+        for (const it of sorted) params.push(it.id, it.display_order);
+        params.push(...ids);
+        await pool.query(
+          `UPDATE invoice_catalog_items SET display_order = CASE id ${cases} END WHERE id IN (${ids.map(() => '?').join(',')})`,
+          params
+        );
       } catch (err: any) {
         console.warn('[MySQL] Failed to reorder invoice_catalog_items:', err.message);
       }
@@ -5110,10 +5300,26 @@ export const dbService = {
     if (!store.invoices) store.invoices = [];
     if (!store.invoice_items) store.invoice_items = [];
 
+    const clientById = new Map<number, Client>();
+    for (const c of store.clients) clientById.set(c.id, c);
+
+    const userById = new Map<number, User>();
+    for (const u of store.users) userById.set(u.id, u);
+
+    const itemsByInvoiceId = new Map<number, InvoiceItem[]>();
+    for (const it of store.invoice_items) {
+      let arr = itemsByInvoiceId.get(it.invoice_id);
+      if (!arr) {
+        arr = [];
+        itemsByInvoiceId.set(it.invoice_id, arr);
+      }
+      arr.push(it);
+    }
+
     let list = store.invoices.map(inv => {
-      const client = store.clients.find(c => c.id === inv.client_id);
-      const items = store.invoice_items.filter(it => it.invoice_id === inv.id);
-      const user = inv.created_by_user_id ? store.users.find(u => u.id === inv.created_by_user_id) : null;
+      const client = clientById.get(inv.client_id);
+      const items = itemsByInvoiceId.get(inv.id) || [];
+      const user = inv.created_by_user_id ? userById.get(inv.created_by_user_id) : null;
 
       return {
         ...inv,
@@ -5313,19 +5519,21 @@ export const dbService = {
           ]
         );
 
-        for (const it of preparedItems) {
+        if (preparedItems.length > 0) {
+          const placeholders = preparedItems.map(() => '(?, ?, ?, ?, ?, ?, ?)').join(', ');
+          const flatParams = preparedItems.flatMap(it => [
+            it.id,
+            it.invoice_id,
+            it.catalog_item_id,
+            it.description,
+            it.quantity,
+            it.unit_price,
+            it.total,
+          ]);
           await pool.query(
             `INSERT INTO invoice_items (id, invoice_id, catalog_item_id, description, quantity, unit_price, total)
-             VALUES (?, ?, ?, ?, ?, ?, ?)`,
-            [
-              it.id,
-              it.invoice_id,
-              it.catalog_item_id,
-              it.description,
-              it.quantity,
-              it.unit_price,
-              it.total,
-            ]
+             VALUES ${placeholders}`,
+            flatParams
           );
         }
 
@@ -5473,19 +5681,21 @@ export const dbService = {
         if (Array.isArray(data.items)) {
           await pool.query('DELETE FROM invoice_items WHERE invoice_id = ?', [id]);
           const currentItems = store.invoice_items.filter(it => it.invoice_id === id);
-          for (const it of currentItems) {
+          if (currentItems.length > 0) {
+            const placeholders = currentItems.map(() => '(?, ?, ?, ?, ?, ?, ?)').join(', ');
+            const flatParams = currentItems.flatMap(it => [
+              it.id,
+              it.invoice_id,
+              it.catalog_item_id,
+              it.description,
+              it.quantity,
+              it.unit_price,
+              it.total,
+            ]);
             await pool.query(
               `INSERT INTO invoice_items (id, invoice_id, catalog_item_id, description, quantity, unit_price, total)
-               VALUES (?, ?, ?, ?, ?, ?, ?)`,
-              [
-                it.id,
-                it.invoice_id,
-                it.catalog_item_id,
-                it.description,
-                it.quantity,
-                it.unit_price,
-                it.total,
-              ]
+               VALUES ${placeholders}`,
+              flatParams
             );
           }
         }

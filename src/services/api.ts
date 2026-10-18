@@ -619,7 +619,22 @@ class ApiService {
     });
   }
 
-  // Dashboard & Activity
+  // Unified Bootstrap & Dashboard
+  async getBootstrapData(): Promise<{
+    metrics: DashboardMetrics;
+    clients: Client[];
+    applications: VisaApplication[];
+    tasks: Task[];
+    hotels: Hotel[];
+    hotelBookings: HotelBooking[];
+    followUps: FollowUp[];
+    visaTypes: VisaType[];
+    countries: Country[];
+    customFields: CustomField[];
+  }> {
+    return this.request('/bootstrap');
+  }
+
   async getDashboardMetrics(): Promise<DashboardMetrics> {
     return this.request<DashboardMetrics>('/dashboard');
   }

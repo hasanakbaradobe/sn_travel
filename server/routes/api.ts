@@ -93,18 +93,14 @@ apiRouter.get('/events', (_req: Request, res: Response) => {
   });
 });
 
-// Middleware: Disable client/proxy HTTP caching and perform smart non-blocking MySQL sync
-apiRouter.use(async (_req: Request, res: Response, next: NextFunction) => {
+// Middleware: Disable client/proxy HTTP caching and trigger non-blocking background MySQL sync
+apiRouter.use((_req: Request, res: Response, next: NextFunction) => {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   res.setHeader('Pragma', 'no-cache');
   res.setHeader('Expires', '0');
   res.setHeader('Surrogate-Control', 'no-store');
 
-  try {
-    await dbService.syncFromMySQL(false);
-  } catch (err: any) {
-    // Non-blocking sync error catch
-  }
+  dbService.triggerBackgroundSync();
   next();
 });
 
@@ -318,6 +314,22 @@ apiRouter.get('/auth/me', (req: Request, res: Response) => {
       last_login_at: user.last_login_at || null,
       created_at: user.created_at,
     },
+  });
+});
+
+// Unified Bootstrap Endpoint — Fetches all core workspace datasets in 1 HTTP request
+apiRouter.get('/bootstrap', (_req: Request, res: Response) => {
+  return res.json({
+    metrics: dbService.getDashboardMetrics(),
+    clients: dbService.getClients(),
+    applications: dbService.getApplications(),
+    tasks: dbService.getTasks(),
+    hotels: dbService.getHotels(),
+    hotelBookings: dbService.getHotelBookings(),
+    followUps: dbService.getFollowUps(),
+    visaTypes: dbService.getVisaTypes(),
+    countries: dbService.getCountries(),
+    customFields: dbService.getCustomFields(),
   });
 });
 
@@ -1145,7 +1157,11 @@ apiRouter.get('/activity', (req: Request, res: Response) => {
 // --------------------------------------------------------------------------
 apiRouter.get('/db/status', async (req: Request, res: Response) => {
   const force = req.query.force === 'true';
-  await dbService.syncFromMySQL(force);
+  if (force) {
+    await dbService.syncFromMySQL(true);
+  } else {
+    dbService.triggerBackgroundSync();
+  }
   const status = dbService.getStatus();
   return res.json(status);
 });

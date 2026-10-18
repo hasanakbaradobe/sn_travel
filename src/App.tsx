@@ -4,7 +4,7 @@
  * Internal Staff Portal for Clients, Applications, Tasks, Calendar, and Roles.
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Header } from './components/Header';
 import { Sidebar, NavTab } from './components/Sidebar';
 import { DashboardView } from './pages/DashboardView';
@@ -82,7 +82,7 @@ export default function App() {
   const [globalSearch, setGlobalSearch] = useState('');
 
   // Secret Login URL & Gatekeeper State
-  const [secretGateChecking, setSecretGateChecking] = useState(true);
+  const [secretGateChecking, setSecretGateChecking] = useState(!Boolean(api.getCurrentUser()));
   const [secretGatePassed, setSecretGatePassed] = useState(false);
   const [verifiedSecretKey, setVerifiedSecretKey] = useState<string | null>(null);
 
@@ -132,7 +132,7 @@ export default function App() {
 
   // Authentication State
   const [currentUser, setCurrentUser] = useState<User | null>(api.getCurrentUser());
-  const [authChecking, setAuthChecking] = useState(true);
+  const [authChecking, setAuthChecking] = useState(!Boolean(api.getCurrentUser()));
 
   // Data State
   const [users, setUsers] = useState<User[]>([]);
@@ -147,70 +147,78 @@ export default function App() {
   const [dbStatus, setDbStatus] = useState<DatabaseStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const [profileRefreshKey, setProfileRefreshKey] = useState(0);
+  const inFlightRefreshRef = useRef<Promise<void> | null>(null);
 
-  // Load all primary data (supports silent background sync to prevent flickering & tab switching)
+  // Load all primary data in a single unified bootstrap call (with in-flight deduplication)
   const refreshAllData = async (silent: boolean = false) => {
     if (!api.getCurrentUser()) {
       return;
     }
 
-    try {
-      if (!silent) {
-        setLoading(true);
-      }
-
-      // Priority 1: Instant Dashboard Boot (Metrics & Database Health)
-      const [mtrRes, dbsRes] = await Promise.allSettled([
-        api.getDashboardMetrics(),
-        api.getDbStatus(),
-      ]);
-
-      if (mtrRes.status === 'fulfilled') setMetrics(mtrRes.value);
-      if (dbsRes.status === 'fulfilled') setDbStatus(dbsRes.value);
-
-      // Immediately unblock dashboard screen for near-instant rendering
-      if (!silent) {
-        setLoading(false);
-      }
-
-      // Priority 2: Concurrent Background Hydration for secondary tabs
-      const [
-        clsRes,
-        appsRes,
-        tsksRes,
-        vtsRes,
-        usrsRes,
-        htlsRes,
-        hbkgsRes,
-        fusRes,
-      ] = await Promise.allSettled([
-        api.getClients(),
-        api.getApplications(),
-        api.getTasks(),
-        api.getVisaTypes(true),
-        api.getUsers(),
-        api.getHotels(false),
-        api.getHotelBookings(),
-        api.getFollowUps(),
-      ]);
-
-      if (clsRes.status === 'fulfilled') setClients(clsRes.value);
-      if (appsRes.status === 'fulfilled') setApplications(appsRes.value);
-      if (tsksRes.status === 'fulfilled') setTasks(tsksRes.value);
-      if (vtsRes.status === 'fulfilled') setVisaTypes(vtsRes.value);
-      if (usrsRes.status === 'fulfilled') setUsers(usrsRes.value);
-      if (htlsRes.status === 'fulfilled') setHotels(htlsRes.value);
-      if (hbkgsRes.status === 'fulfilled') setHotelBookings(hbkgsRes.value);
-      if (fusRes.status === 'fulfilled') setFollowUps(fusRes.value);
-
-      setProfileRefreshKey((prev) => prev + 1);
-    } catch (err: any) {
-      console.warn('[SN Travels] Non-fatal issue during refreshAllData:', err);
-    } finally {
-      if (!silent) {
-        setLoading(false);
-      }
+    if (inFlightRefreshRef.current) {
+      return inFlightRefreshRef.current;
     }
+
+    const promise = (async () => {
+      try {
+        if (!silent) {
+          setLoading(true);
+        }
+
+        const [bootRes, dbsRes, usrsRes] = await Promise.allSettled([
+          api.getBootstrapData(),
+          api.getDbStatus(),
+          api.getUsers(),
+        ]);
+
+        if (bootRes.status === 'fulfilled') {
+          const data = bootRes.value;
+          if (data.metrics) setMetrics(data.metrics);
+          if (Array.isArray(data.clients)) setClients(data.clients);
+          if (Array.isArray(data.applications)) setApplications(data.applications);
+          if (Array.isArray(data.tasks)) setTasks(data.tasks);
+          if (Array.isArray(data.visaTypes)) setVisaTypes(data.visaTypes.filter((v) => v.is_active !== 0));
+          if (Array.isArray(data.hotels)) setHotels(data.hotels);
+          if (Array.isArray(data.hotelBookings)) setHotelBookings(data.hotelBookings);
+          if (Array.isArray(data.followUps)) setFollowUps(data.followUps);
+        } else {
+          // Fallback if bootstrap fails
+          const [mtrRes, clsRes, appsRes, tsksRes, vtsRes, htlsRes, hbkgsRes, fusRes] = await Promise.allSettled([
+            api.getDashboardMetrics(),
+            api.getClients(),
+            api.getApplications(),
+            api.getTasks(),
+            api.getVisaTypes(true),
+            api.getHotels(false),
+            api.getHotelBookings(),
+            api.getFollowUps(),
+          ]);
+          if (mtrRes.status === 'fulfilled') setMetrics(mtrRes.value);
+          if (clsRes.status === 'fulfilled') setClients(clsRes.value);
+          if (appsRes.status === 'fulfilled') setApplications(appsRes.value);
+          if (tsksRes.status === 'fulfilled') setTasks(tsksRes.value);
+          if (vtsRes.status === 'fulfilled') setVisaTypes(vtsRes.value);
+          if (htlsRes.status === 'fulfilled') setHotels(htlsRes.value);
+          if (hbkgsRes.status === 'fulfilled') setHotelBookings(hbkgsRes.value);
+          if (fusRes.status === 'fulfilled') setFollowUps(fusRes.value);
+        }
+
+        if (dbsRes.status === 'fulfilled') setDbStatus(dbsRes.value);
+        if (usrsRes.status === 'fulfilled') setUsers(usrsRes.value);
+
+        setProfileRefreshKey((prev) => prev + 1);
+      } catch (err: any) {
+        console.warn('[SN Travels] Non-fatal issue during refreshAllData:', err);
+      } finally {
+        if (!silent) {
+          setLoading(false);
+        }
+        inFlightRefreshRef.current = null;
+      }
+    })();
+
+    inFlightRefreshRef.current = promise;
+    return promise;
   };
 
   // Helper to extract candidate secret key strictly from the browser URL
@@ -285,24 +293,28 @@ export default function App() {
       const savedUser = api.getCurrentUser();
       if (!savedUser) {
         setAuthChecking(false);
+        await checkSecretGate();
         return;
       }
+
+      setSecretGateChecking(false);
+      // Fire initial data hydration immediately in parallel with session verification
+      void refreshAllData();
 
       try {
         const verified = await api.getMe();
         setCurrentUser(verified);
-        refreshAllData();
       } catch (e) {
         // Invalid or expired token
         api.setCurrentUser(null);
         setCurrentUser(null);
+        await checkSecretGate();
       } finally {
         setAuthChecking(false);
       }
     };
 
     verifySession();
-    checkSecretGate();
     return () => unsub();
   }, []);
 
@@ -759,7 +771,7 @@ export default function App() {
     navigateTo('clients', newClient.id);
   };
 
-  if (authChecking || secretGateChecking) {
+  if (authChecking || (!currentUser && secretGateChecking)) {
     return (
       <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center text-white font-sans">
         <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-sky-600 to-sky-400 flex items-center justify-center font-black font-serif text-2xl mb-4 shadow-xl shadow-sky-600/30 animate-pulse">
