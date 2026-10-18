@@ -627,7 +627,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       setCatalogItemToDelete(null);
       showFeedback('Invoice field preset deleted');
     } catch (err: any) {
-      alert(err.message || 'Failed to delete field preset');
+      showFeedback(err.message || 'Failed to delete field preset');
     } finally {
       setDeletingCatalogItem(false);
     }
@@ -656,7 +656,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       showFeedback('Custom client profile field created successfully');
       loadData();
     } catch (err: any) {
-      alert(err.message || 'Failed to create field');
+      showFeedback(err.message || 'Failed to create field');
     }
   };
 
@@ -831,7 +831,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
   const handleToggleUserActive = async (user: User) => {
     if (user.id === currentUser?.id) {
-      alert('You cannot deactivate your own account.');
+      showFeedback('You cannot deactivate your own account.');
       return;
     }
     try {
@@ -841,7 +841,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       showFeedback(`User "${user.name}" status updated`);
       loadData();
     } catch (err: any) {
-      alert(err.message || 'Failed to update user status');
+      showFeedback(err.message || 'Failed to update user status');
     }
   };
 
@@ -902,7 +902,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       loadData();
       if (onHotelsUpdated) onHotelsUpdated();
     } catch (err: any) {
-      alert(err.message || 'Failed to save hotel');
+      showFeedback(err.message || 'Failed to save hotel');
     }
   };
 
@@ -975,7 +975,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       loadData();
       if (onHotelsUpdated) onHotelsUpdated();
     } catch (err: any) {
-      alert(err.message || 'Failed to save room type');
+      showFeedback(err.message || 'Failed to save room type');
     }
   };
 
@@ -1106,7 +1106,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const handleExecutePurge = async () => {
     const trimmed = purgeConfirmationText.trim().toUpperCase();
     if (trimmed !== 'PURGE' && trimmed !== 'DELETE') {
-      alert('Please type PURGE in the confirmation box to authorize permanent deletion.');
+      showFeedback('Please type PURGE in the confirmation box to authorize permanent deletion.');
       return;
     }
 
@@ -1126,7 +1126,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       if (onDataPurged) onDataPurged();
       if (onHotelsUpdated) onHotelsUpdated();
     } catch (err: any) {
-      alert(err.message || 'Failed to purge data');
+      showFeedback(err.message || 'Failed to purge data');
     } finally {
       setPurgingData(false);
     }

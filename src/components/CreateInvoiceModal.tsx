@@ -95,79 +95,92 @@ export const CreateInvoiceModal: React.FC<CreateInvoiceModalProps> = ({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [isClientDropdownOpen]);
 
-  // Load Settings and Preset Fields
-  useEffect(() => {
-    if (!isOpen) return;
+  const initializedSessionRef = useRef<string | null>(null);
 
-    Promise.allSettled([
-      api.getInvoiceSettings(),
-      api.getInvoiceCatalog(true),
-    ]).then(([settingsRes, catalogRes]) => {
-      if (settingsRes.status === 'fulfilled') {
-        const s = settingsRes.value;
-        setSettings(s);
-        if (!invoiceToEdit) {
-          setCurrency(s.default_currency || 'MYR');
-          setNotes(s.payment_notes || '');
-          if (s.invoice_prefix && s.next_number) {
-            setInvoiceNumber(`${s.invoice_prefix}${s.next_number}`);
-          }
+  // Initialize form state and load settings/catalog only when modal opens or target invoice changes
+  useEffect(() => {
+    if (!isOpen) {
+      initializedSessionRef.current = null;
+      return;
+    }
+
+    const sessionKey = invoiceToEdit ? `edit-${invoiceToEdit.id}` : `new-${initialClientId || 'none'}`;
+    const isNewSession = initializedSessionRef.current !== sessionKey;
+    initializedSessionRef.current = sessionKey;
+
+    if (isNewSession) {
+      setError(null);
+      setClientSearch('');
+      setIsClientDropdownOpen(false);
+
+      if (invoiceToEdit) {
+        setClientId(invoiceToEdit.client_id);
+        setInvoiceNumber(invoiceToEdit.invoice_number);
+        setIssueDate(invoiceToEdit.issue_date);
+        setDueDate(invoiceToEdit.due_date || '');
+        setStatus(invoiceToEdit.status);
+        setPaymentMethod(invoiceToEdit.payment_method || '');
+        setCurrency(invoiceToEdit.currency || 'MYR');
+        setDiscount(Number(invoiceToEdit.discount) || 0);
+        setPaidAmount(Number(invoiceToEdit.paid_amount) || 0);
+        setNotes(invoiceToEdit.notes || '');
+
+        if (invoiceToEdit.items && invoiceToEdit.items.length > 0) {
+          setItems(
+            invoiceToEdit.items.map(it => ({
+              catalog_item_id: it.catalog_item_id || null,
+              description: it.description,
+              quantity: Number(it.quantity) || 1,
+              unit_price: Number(it.unit_price) || 0,
+              total:
+                Number(it.total) ||
+                Number(((Number(it.quantity) || 1) * (Number(it.unit_price) || 0)).toFixed(2)),
+            }))
+          );
+        } else {
+          setItems([{ catalog_item_id: null, description: '', quantity: 1, unit_price: 0, total: 0 }]);
         }
-      }
-      if (catalogRes.status === 'fulfilled') {
-        const sorted = [...catalogRes.value].sort(
-          (a, b) => (a.display_order || 999) - (b.display_order || 999) || a.id - b.id
-        );
-        setCatalogItems(sorted);
-      }
-    });
-  }, [isOpen, invoiceToEdit]);
-
-  // Initialize form state when modal opens
-  useEffect(() => {
-    if (!isOpen) return;
-    setError(null);
-    setClientSearch('');
-    setIsClientDropdownOpen(false);
-
-    if (invoiceToEdit) {
-      setClientId(invoiceToEdit.client_id);
-      setInvoiceNumber(invoiceToEdit.invoice_number);
-      setIssueDate(invoiceToEdit.issue_date);
-      setDueDate(invoiceToEdit.due_date || '');
-      setStatus(invoiceToEdit.status);
-      setPaymentMethod(invoiceToEdit.payment_method || '');
-      setCurrency(invoiceToEdit.currency || 'MYR');
-      setDiscount(Number(invoiceToEdit.discount) || 0);
-      setPaidAmount(Number(invoiceToEdit.paid_amount) || 0);
-      setNotes(invoiceToEdit.notes || '');
-
-      if (invoiceToEdit.items && invoiceToEdit.items.length > 0) {
-        setItems(
-          invoiceToEdit.items.map(it => ({
-            catalog_item_id: it.catalog_item_id || null,
-            description: it.description,
-            quantity: Number(it.quantity) || 1,
-            unit_price: Number(it.unit_price) || 0,
-            total:
-              Number(it.total) ||
-              Number(((Number(it.quantity) || 1) * (Number(it.unit_price) || 0)).toFixed(2)),
-          }))
-        );
       } else {
+        setClientId(initialClientId || '');
+        const today = new Date().toISOString().slice(0, 10);
+        setIssueDate(today);
+        setDueDate('');
+        setStatus('Pending');
+        setPaymentMethod('Bank Transfer');
+        setCurrency(settings?.default_currency || 'MYR');
+        setDiscount(0);
+        setPaidAmount(0);
+        setNotes(settings?.payment_notes || '');
+        if (settings?.invoice_prefix && settings?.next_number) {
+          setInvoiceNumber(`${settings.invoice_prefix}${settings.next_number}`);
+        } else {
+          setInvoiceNumber('');
+        }
         setItems([{ catalog_item_id: null, description: '', quantity: 1, unit_price: 0, total: 0 }]);
       }
-    } else {
-      setClientId(initialClientId || '');
-      const today = new Date().toISOString().slice(0, 10);
-      setIssueDate(today);
-      setDueDate('');
-      setStatus('Pending');
-      setPaymentMethod('Bank Transfer');
-      setCurrency(settings?.default_currency || 'MYR');
-      setDiscount(0);
-      setPaidAmount(0);
-      setItems([{ catalog_item_id: null, description: '', quantity: 1, unit_price: 0, total: 0 }]);
+
+      Promise.allSettled([
+        api.getInvoiceSettings(),
+        api.getInvoiceCatalog(true),
+      ]).then(([settingsRes, catalogRes]) => {
+        if (settingsRes.status === 'fulfilled') {
+          const s = settingsRes.value;
+          setSettings(s);
+          if (!invoiceToEdit) {
+            setCurrency(prev => prev || s.default_currency || 'MYR');
+            setNotes(prev => prev || s.payment_notes || '');
+            if (s.invoice_prefix && s.next_number) {
+              setInvoiceNumber(prev => prev || `${s.invoice_prefix}${s.next_number}`);
+            }
+          }
+        }
+        if (catalogRes.status === 'fulfilled') {
+          const sorted = [...catalogRes.value].sort(
+            (a, b) => (a.display_order || 999) - (b.display_order || 999) || a.id - b.id
+          );
+          setCatalogItems(sorted);
+        }
+      });
     }
   }, [isOpen, invoiceToEdit, initialClientId]);
 
@@ -498,6 +511,7 @@ export const CreateInvoiceModal: React.FC<CreateInvoiceModalProps> = ({
                   setStatus(st);
                   if (st === 'Paid') setPaidAmount(totalAmount);
                   else if (st === 'Pending' || st === 'Cancelled') setPaidAmount(0);
+                  else if (st === 'Partial' && paidAmount >= totalAmount) setPaidAmount(0);
                 }}
                 className="w-full text-xs bg-white border border-slate-300 rounded-lg px-2.5 py-2 font-semibold text-slate-800 focus:ring-2 focus:ring-sky-500"
               >

@@ -4714,6 +4714,28 @@ export const dbService = {
           store.settings = parsed.settings || store.settings;
           store.nextIds = parsed.nextIds || store.nextIds;
 
+          // Ensure nextIds are strictly greater than any restored row IDs
+          const maxIdOf = (arr?: any[]) =>
+            Array.isArray(arr) ? arr.reduce((m, r) => Math.max(m, Number(r?.id) || 0), 0) + 1 : 1;
+          store.nextIds.users = Math.max(store.nextIds.users || 1, maxIdOf(store.users));
+          store.nextIds.clients = Math.max(store.nextIds.clients || 1, maxIdOf(store.clients));
+          store.nextIds.custom_fields = Math.max(store.nextIds.custom_fields || 1, maxIdOf(store.client_custom_fields));
+          store.nextIds.custom_values = Math.max(store.nextIds.custom_values || 1, maxIdOf(store.client_custom_field_values));
+          store.nextIds.visa_types = Math.max(store.nextIds.visa_types || 1, maxIdOf(store.visa_types));
+          store.nextIds.countries = Math.max(store.nextIds.countries || 1, maxIdOf(store.countries));
+          store.nextIds.applications = Math.max(store.nextIds.applications || 1, maxIdOf(store.visa_applications));
+          store.nextIds.status_history = Math.max(store.nextIds.status_history || 1, maxIdOf(store.application_status_history));
+          store.nextIds.tasks = Math.max(store.nextIds.tasks || 1, maxIdOf(store.tasks));
+          store.nextIds.follow_ups = Math.max(store.nextIds.follow_ups || 1, maxIdOf(store.follow_ups));
+          store.nextIds.comments = Math.max(store.nextIds.comments || 1, maxIdOf(store.comments));
+          store.nextIds.activity_logs = Math.max(store.nextIds.activity_logs || 1, maxIdOf(store.activity_logs));
+          store.nextIds.hotels = Math.max(store.nextIds.hotels || 1, maxIdOf(store.hotels));
+          store.nextIds.hotel_rooms = Math.max(store.nextIds.hotel_rooms || 1, maxIdOf(store.hotel_rooms));
+          store.nextIds.hotel_bookings = Math.max(store.nextIds.hotel_bookings || 1, maxIdOf(store.hotel_bookings));
+          store.nextIds.invoice_catalog_items = Math.max(store.nextIds.invoice_catalog_items || 1, maxIdOf(store.invoice_catalog_items));
+          store.nextIds.invoices = Math.max(store.nextIds.invoices || 1, maxIdOf(store.invoices));
+          store.nextIds.invoice_items = Math.max(store.nextIds.invoice_items || 1, maxIdOf(store.invoice_items));
+
           saveStore(store);
 
           this.logActivity(
@@ -4877,7 +4899,9 @@ export const dbService = {
       store.invoice_catalog_items = getInitialData().invoice_catalog_items;
     }
     const now = new Date().toISOString();
-    const id = (store.nextIds.invoice_catalog_items = (store.nextIds.invoice_catalog_items || 10) + 1);
+    const maxExistingId = store.invoice_catalog_items.reduce((max, it) => Math.max(max, Number(it.id) || 0), 0);
+    const id = Math.max(Number(store.nextIds.invoice_catalog_items) || 1, maxExistingId + 1);
+    store.nextIds.invoice_catalog_items = id + 1;
     const maxOrder = store.invoice_catalog_items.reduce((max, it) => Math.max(max, Number(it.display_order) || 0), 0);
     const desiredOrder =
       data.display_order !== undefined && Number(data.display_order) > 0
@@ -5156,7 +5180,9 @@ export const dbService = {
     if (!store.invoice_settings) store.invoice_settings = getInitialData().invoice_settings;
 
     const now = new Date().toISOString();
-    const id = (store.nextIds.invoices = (store.nextIds.invoices || 10) + 1);
+    const maxInvId = store.invoices.reduce((max, iv) => Math.max(max, Number(iv.id) || 0), 0);
+    const id = Math.max(Number(store.nextIds.invoices) || 1, maxInvId + 1);
+    store.nextIds.invoices = id + 1;
 
     // Generate or validate unique Invoice Number and advance next_number
     const prefix = store.invoice_settings.invoice_prefix || 'INV-2026-';
@@ -5182,11 +5208,13 @@ export const dbService = {
     }
 
     const itemsInput: any[] = Array.isArray(data.items) ? data.items : [];
-    
+    const maxItemId = store.invoice_items.reduce((max, it) => Math.max(max, Number(it.id) || 0), 0);
+    let nextItemId = Math.max(Number(store.nextIds.invoice_items) || 1, maxItemId + 1);
+
     // Calculate items totals
     let calculatedSubtotal = 0;
     const preparedItems: InvoiceItem[] = itemsInput.map((it) => {
-      const itemId = (store.nextIds.invoice_items = (store.nextIds.invoice_items || 20) + 1);
+      const itemId = nextItemId++;
       const qty = Math.max(1, Number(it.quantity) || 1);
       const unitPrice = Math.max(0, Number(it.unit_price) || 0);
       const lineTotal = Number((qty * unitPrice).toFixed(2));
@@ -5202,6 +5230,7 @@ export const dbService = {
         total: lineTotal,
       };
     });
+    store.nextIds.invoice_items = nextItemId;
 
     const subtotal = data.subtotal !== undefined ? Number(data.subtotal) : Number(calculatedSubtotal.toFixed(2));
     const discount = Math.max(0, Number(data.discount) || 0);
@@ -5344,9 +5373,11 @@ export const dbService = {
       // Remove previous items
       store.invoice_items = (store.invoice_items || []).filter(it => it.invoice_id !== id);
 
+      const maxItemId = store.invoice_items.reduce((max, it) => Math.max(max, Number(it.id) || 0), 0);
+      let nextItemId = Math.max(Number(store.nextIds.invoice_items) || 1, maxItemId + 1);
       let calculatedSubtotal = 0;
       const newItems: InvoiceItem[] = data.items.map((it: any) => {
-        const itemId = (store.nextIds.invoice_items = (store.nextIds.invoice_items || 20) + 1);
+        const itemId = nextItemId++;
         const qty = Math.max(1, Number(it.quantity) || 1);
         const unitPrice = Math.max(0, Number(it.unit_price) || 0);
         const lineTotal = Number((qty * unitPrice).toFixed(2));
@@ -5362,6 +5393,7 @@ export const dbService = {
           total: lineTotal,
         };
       });
+      store.nextIds.invoice_items = nextItemId;
 
       newItems.forEach(it => store.invoice_items.push(it));
       inv.subtotal = Number(calculatedSubtotal.toFixed(2));

@@ -32,10 +32,12 @@ export const CreateFollowUpModal: React.FC<CreateFollowUpModalProps> = ({
   onSuccess,
 }) => {
   const [selectedClientId, setSelectedClientId] = useState<number | ''>(preSelectedClientId || '');
+  const [selectedClientSnapshot, setSelectedClientSnapshot] = useState<Client | null>(null);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [clientSearchQuery, setClientSearchQuery] = useState('');
   const searchInputRef = useRef<HTMLInputElement>(null);
   const searchContainerRef = useRef<HTMLDivElement>(null);
+  const wasOpenRef = useRef(false);
 
   const [cadence, setCadence] = useState<'1 Month' | '2 Months' | 'Custom'>('1 Month');
   const [dueDate, setDueDate] = useState('');
@@ -68,7 +70,21 @@ export const CreateFollowUpModal: React.FC<CreateFollowUpModalProps> = ({
 
   const selectedClient = useMemo(() => {
     if (!selectedClientId) return null;
-    return clients.find((c) => c.id === Number(selectedClientId)) || null;
+    const found = clients.find((c) => Number(c.id) === Number(selectedClientId));
+    if (found) return found;
+    if (selectedClientSnapshot && Number(selectedClientSnapshot.id) === Number(selectedClientId)) {
+      return selectedClientSnapshot;
+    }
+    return null;
+  }, [selectedClientId, clients, selectedClientSnapshot]);
+
+  // Keep snapshot updated when client list has fresher details for the selected client
+  useEffect(() => {
+    if (!selectedClientId) return;
+    const found = clients.find((c) => Number(c.id) === Number(selectedClientId));
+    if (found) {
+      setSelectedClientSnapshot(found);
+    }
   }, [selectedClientId, clients]);
 
   // Filter clients by search query (name, passport, phone, client_id, country)
@@ -100,24 +116,34 @@ export const CreateFollowUpModal: React.FC<CreateFollowUpModalProps> = ({
   };
 
   useEffect(() => {
-    if (isOpen) {
-      setError(null);
-      setClientSearchQuery('');
-      setCadence('1 Month');
-      setDueDate(getDatePlusDays(30));
-
-      if (preSelectedClientId) {
-        setSelectedClientId(preSelectedClientId);
-        setIsSearchOpen(false);
-        const cObj = clients.find((c) => c.id === Number(preSelectedClientId));
-        setMessage(makeDefaultMessage(cObj?.full_name || ''));
-      } else {
-        setSelectedClientId('');
-        setIsSearchOpen(true);
-        setMessage(makeDefaultMessage(''));
-      }
+    if (!isOpen) {
+      wasOpenRef.current = false;
+      return;
     }
-  }, [isOpen, preSelectedClientId, clients]);
+    if (wasOpenRef.current) {
+      return;
+    }
+    wasOpenRef.current = true;
+
+    setError(null);
+    setClientSearchQuery('');
+    setCadence('1 Month');
+    setDueDate(getDatePlusDays(30));
+
+    if (preSelectedClientId) {
+      setSelectedClientId(preSelectedClientId);
+      setIsSearchOpen(false);
+      const cObj = clients.find((c) => Number(c.id) === Number(preSelectedClientId)) || null;
+      setSelectedClientSnapshot(cObj);
+      setMessage(makeDefaultMessage(cObj?.full_name || ''));
+    } else {
+      setSelectedClientId('');
+      setSelectedClientSnapshot(null);
+      setIsSearchOpen(true);
+      setMessage(makeDefaultMessage(''));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, preSelectedClientId]);
 
   const handleCadenceSelect = (selected: '1 Month' | '2 Months' | 'Custom') => {
     setCadence(selected);
@@ -129,10 +155,11 @@ export const CreateFollowUpModal: React.FC<CreateFollowUpModalProps> = ({
   };
 
   const handleClientChange = (clientId: number) => {
+    const cObj = clients.find((c) => Number(c.id) === Number(clientId)) || null;
     setSelectedClientId(clientId);
+    setSelectedClientSnapshot(cObj);
     setIsSearchOpen(false);
     setClientSearchQuery('');
-    const cObj = clients.find((c) => c.id === clientId);
     if (cObj) {
       setMessage(makeDefaultMessage(cObj.full_name));
     }

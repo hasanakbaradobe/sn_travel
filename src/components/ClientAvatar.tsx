@@ -78,13 +78,13 @@ export const ClientAvatar: React.FC<ClientAvatarProps> = ({
             setShowLightbox(true);
           }
         }}
-        title={allFailed && photoUrl ? 'Photo link could not be loaded. If using Google Drive, make sure link sharing is set to "Anyone with the link".' : name}
+        title={allFailed && photoUrl ? 'Photo link could not be loaded. If using Google Drive, make sure link sharing is set to "Anyone with the link".' : effectiveName}
       >
         {currentSrc ? (
           <>
             <img
               src={currentSrc}
-              alt={name}
+              alt={effectiveName}
               referrerPolicy="no-referrer"
               className="w-full h-full object-cover object-center transition duration-200 group-hover:scale-105"
               onError={handleImageError}
@@ -119,7 +119,7 @@ export const ClientAvatar: React.FC<ClientAvatarProps> = ({
             <div className="flex items-center justify-between pb-2 border-b border-slate-100">
               <div className="flex items-center gap-2">
                 <ImageIcon className="w-4 h-4 text-sky-600" />
-                <span className="font-bold text-sm text-slate-900">{name} — Profile Photo</span>
+                <span className="font-bold text-sm text-slate-900">{effectiveName} — Profile Photo</span>
               </div>
               <button
                 onClick={() => setShowLightbox(false)}
@@ -132,7 +132,7 @@ export const ClientAvatar: React.FC<ClientAvatarProps> = ({
             <div className="rounded-xl overflow-hidden bg-slate-100 max-h-[70vh] flex items-center justify-center p-2 border border-slate-200">
               <img
                 src={currentSrc}
-                alt={name}
+                alt={effectiveName}
                 referrerPolicy="no-referrer"
                 className="w-full h-auto max-h-[65vh] object-contain rounded-lg shadow-xs"
               />

@@ -39,7 +39,7 @@ export const CompleteFollowUpModal: React.FC<CompleteFollowUpModalProps> = ({
       d.setDate(d.getDate() + 30);
       setCustomDate(d.toISOString().split('T')[0]);
     }
-  }, [isOpen, followUp]);
+  }, [isOpen, followUp?.id]);
 
   if (!isOpen || !followUp) return null;
 

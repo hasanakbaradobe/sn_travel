@@ -64,6 +64,9 @@ export function broadcastDataChange(eventType: string = 'data_changed', data?: a
   sseClients.forEach((clientRes) => {
     try {
       clientRes.write(payload);
+      if (typeof (clientRes as any).flush === 'function') {
+        (clientRes as any).flush();
+      }
     } catch {
       sseClients.delete(clientRes);
     }
@@ -80,6 +83,9 @@ apiRouter.get('/events', (_req: Request, res: Response) => {
   }
 
   res.write(`data: ${JSON.stringify({ type: 'connected', timestamp: Date.now() })}\n\n`);
+  if (typeof (res as any).flush === 'function') {
+    (res as any).flush();
+  }
   sseClients.add(res);
 
   _req.on('close', () => {

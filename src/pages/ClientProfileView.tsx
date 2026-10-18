@@ -99,6 +99,8 @@ export const ClientProfileView: React.FC<ClientProfileViewProps> = ({
   const [deletingClient, setDeletingClient] = useState(false);
   const [appToDelete, setAppToDelete] = useState<{ id: number; application_id: string } | null>(null);
   const [deletingApp, setDeletingApp] = useState(false);
+  const [followUpToDelete, setFollowUpToDelete] = useState<FollowUp | null>(null);
+  const [deletingFollowUp, setDeletingFollowUp] = useState(false);
   const [profileScanLoading, setProfileScanLoading] = useState(false);
   const [profileScanMsg, setProfileScanMsg] = useState<string | null>(null);
   const [profileError, setProfileError] = useState<string | null>(null);
@@ -250,14 +252,19 @@ export const ClientProfileView: React.FC<ClientProfileViewProps> = ({
     }
   };
 
-  const handleDeleteFollowUp = async (followUpId: number) => {
-    if (!window.confirm('Are you sure you want to delete this follow-up reminder?')) return;
+  const handleDeleteFollowUp = async () => {
+    if (!followUpToDelete) return;
+    setDeletingFollowUp(true);
     try {
-      await api.deleteFollowUp(followUpId);
+      await api.deleteFollowUp(followUpToDelete.id);
+      setFollowUpToDelete(null);
       fetchClientData(true);
       if (onRefreshData) onRefreshData();
     } catch (err: any) {
       console.error('Failed to delete follow-up', err);
+      setProfileError(err.message || 'Failed to delete follow-up reminder');
+    } finally {
+      setDeletingFollowUp(false);
     }
   };
 
@@ -1132,17 +1139,20 @@ export const ClientProfileView: React.FC<ClientProfileViewProps> = ({
               {client.invoices && client.invoices.length > 0 ? (
                 (() => {
                   const clientInvoices = client.invoices;
-                  const totalInvoiced = clientInvoices.reduce((s, i) => s + (Number(i.total_amount) || 0), 0);
+                  const activeInvoices = clientInvoices.filter((i) => i.status !== 'Cancelled');
+                  const rawCur = clientInvoices[0]?.currency || 'MYR';
+                  const curLabel = rawCur === 'MYR' ? 'RM' : rawCur;
+                  const totalInvoiced = activeInvoices.reduce((s, i) => s + (Number(i.total_amount) || 0), 0);
                   const totalPaid = clientInvoices.reduce((s, i) => s + (Number(i.paid_amount) || 0), 0);
-                  const balanceDue = clientInvoices.reduce((s, i) => s + (Number(i.balance_due) || 0), 0);
+                  const balanceDue = activeInvoices.reduce((s, i) => s + (Number(i.balance_due) || 0), 0);
 
                   return (
                     <div className="text-xs space-y-1.5">
                       <div className="flex items-center justify-between font-mono pt-0.5">
-                        <span className="text-slate-500 text-[11px]">Billed: <strong className="text-slate-800">${totalInvoiced.toFixed(2)}</strong></span>
-                        <span className="text-emerald-700 text-[11px]">Paid: <strong>${totalPaid.toFixed(2)}</strong></span>
+                        <span className="text-slate-500 text-[11px]">Billed: <strong className="text-slate-800">{curLabel} {totalInvoiced.toFixed(2)}</strong></span>
+                        <span className="text-emerald-700 text-[11px]">Paid: <strong>{curLabel} {totalPaid.toFixed(2)}</strong></span>
                         <span className={`text-[11px] font-bold ${balanceDue > 0 ? 'text-amber-800' : 'text-slate-400'}`}>
-                          Due: ${balanceDue.toFixed(2)}
+                          Due: {curLabel} {balanceDue.toFixed(2)}
                         </span>
                       </div>
                       <button
@@ -1680,7 +1690,7 @@ export const ClientProfileView: React.FC<ClientProfileViewProps> = ({
                       )}
 
                       <button
-                        onClick={() => handleDeleteFollowUp(f.id)}
+                        onClick={() => setFollowUpToDelete(f)}
                         className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition cursor-pointer"
                         title="Delete follow-up reminder"
                       >
@@ -2070,6 +2080,16 @@ export const ClientProfileView: React.FC<ClientProfileViewProps> = ({
           setInvoiceToDelete(null);
         }}
         isLoading={deletingInvoice}
+      />
+
+      <ConfirmDeleteModal
+        isOpen={Boolean(followUpToDelete)}
+        title="Delete Follow-up Reminder?"
+        message={`Are you sure you want to delete the reminder "${followUpToDelete?.title || ''}" for ${client.full_name}? This will also remove its linked task from the Calendar.`}
+        confirmLabel="Delete Reminder"
+        onConfirm={handleDeleteFollowUp}
+        onClose={() => setFollowUpToDelete(null)}
+        loading={deletingFollowUp}
       />
     </div>
   );

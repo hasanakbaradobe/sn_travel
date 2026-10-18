@@ -12,9 +12,15 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// HTTP Response Compression (Gzip / Deflate)
+// HTTP Response Compression (Gzip / Deflate — skip Server-Sent Events stream)
 app.use(compression({
   threshold: 1024,
+  filter: (req, res) => {
+    if (req.path === '/api/events' || req.headers.accept?.includes('text/event-stream')) {
+      return false;
+    }
+    return compression.filter(req, res);
+  },
 }));
 
 // Security Headers & Request Hygiene

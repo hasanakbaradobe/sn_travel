@@ -87,7 +87,8 @@ export const NewHotelBookingModal: React.FC<NewHotelBookingModalProps> = ({
       setTotalPrice('');
       setErrorMsg(null);
     }
-  }, [isOpen, clientId, hotels, selectedHotelId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isOpen, clientId]);
 
   // Load room types whenever hotel changes
   useEffect(() => {
@@ -134,7 +135,16 @@ export const NewHotelBookingModal: React.FC<NewHotelBookingModalProps> = ({
     return days >= 0 ? days : 0;
   }, [checkInDate, checkOutDate]);
 
-  // Auto-update price when room type or nights change
+  // Auto-update price when room type, nights, or roomCount change
+  useEffect(() => {
+    if (!isOpen || useCustomRoom || !selectedRoomTypeId) return;
+    const room = hotelRooms.find((r) => r.id === selectedRoomTypeId);
+    if (room?.price_per_night && nights > 0) {
+      setTotalPrice(String(room.price_per_night * nights * roomCount));
+    }
+  }, [isOpen, useCustomRoom, selectedRoomTypeId, hotelRooms, nights, roomCount]);
+
+  // Auto-update price when room type is manually selected
   const handleRoomSelect = (roomId: number) => {
     setSelectedRoomTypeId(roomId);
     setUseCustomRoom(false);
@@ -264,7 +274,7 @@ export const NewHotelBookingModal: React.FC<NewHotelBookingModalProps> = ({
             </label>
             <ClientSelectSearch
               clients={clients}
-              selectedClientId={selectedClientId}
+              selectedClientId={selectedClientId || ''}
               onSelectClient={(cid) => setSelectedClientId(cid ? Number(cid) : null)}
               placeholder="Search customer by name, passport number, or CL-ID..."
               required
