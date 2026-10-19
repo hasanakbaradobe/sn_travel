@@ -97,7 +97,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
       ? [
           {
             id: 'public-website' as NavTab,
-            label: 'Public Website Management',
+            label: 'Public Website',
             icon: <Globe className="w-5 h-5" />,
           },
         ]
@@ -150,7 +150,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 onSelectTab(item.id);
                 onCloseMobile();
               }}
-              className={`w-full relative flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-150 group cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 active:scale-[0.99] ${
+              className={`w-full relative flex items-center justify-between px-3 py-2.5 rounded-xl text-sm font-medium text-left transition-all duration-150 group cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 active:scale-[0.99] ${
                 isActive
                   ? 'bg-sky-600/90 text-white shadow-sm shadow-sky-950/40 font-semibold'
                   : 'text-slate-300 hover:bg-slate-800/70 hover:text-white'
@@ -159,11 +159,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
               {isActive && (
                 <span className="absolute left-1 top-2.5 bottom-2.5 w-1 bg-sky-300 rounded-full" />
               )}
-              <div className="flex items-center gap-3 pl-1.5">
-                <span className={isActive ? 'text-white' : 'text-slate-400 group-hover:text-slate-200 transition-colors'}>
+              <div className="flex items-center gap-3 pl-1.5 min-w-0 text-left">
+                <span className={`shrink-0 ${isActive ? 'text-white' : 'text-slate-400 group-hover:text-slate-200 transition-colors'}`}>
                   {item.icon}
                 </span>
-                <span className="tracking-tight">{item.label}</span>
+                <span className="tracking-tight truncate whitespace-nowrap">{item.label}</span>
               </div>
               {item.badge !== undefined && (
                 <span

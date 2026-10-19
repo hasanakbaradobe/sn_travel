@@ -27,6 +27,8 @@ import {
   MapPin,
   DownloadCloud,
   FolderKanban,
+  Smartphone,
+  Monitor,
 } from 'lucide-react';
 import { api } from '../services/api';
 import {
@@ -91,6 +93,7 @@ export const PublicWebsiteManagementView: React.FC<PublicWebsiteManagementViewPr
 
   // Draft Preview State
   const [previewOpen, setPreviewOpen] = useState(false);
+  const [previewDeviceMode, setPreviewDeviceMode] = useState<'desktop' | 'mobile'>('desktop');
   const [previewSnapshot, setPreviewSnapshot] = useState<PublicWebsiteSnapshot | null>(null);
   const [loadingPreview, setLoadingPreview] = useState(false);
 
@@ -430,19 +433,78 @@ export const PublicWebsiteManagementView: React.FC<PublicWebsiteManagementViewPr
     }
   };
 
-  // Full-screen Draft Preview Mode
+  // Full-screen Draft Preview Mode (with Mobile / Desktop Simulator Toggle)
   if (previewOpen) {
     return (
-      <PublicHotelWebsiteRenderer
-        snapshot={previewSnapshot}
-        isPreview={true}
-        onExitPreview={() => {
-          if (typeof window !== 'undefined' && window.location.hash.startsWith('#hotel/')) {
-            window.history.replaceState(null, '', window.location.pathname + window.location.search);
-          }
-          setPreviewOpen(false);
-        }}
-      />
+      <div className="min-h-screen bg-slate-900">
+        {/* Device Switcher Bar */}
+        <div className="bg-slate-950 border-b border-slate-800 px-4 py-2 flex items-center justify-between text-xs text-slate-300">
+          <div className="flex items-center gap-2">
+            <span className="font-semibold text-amber-400">Live Website Preview</span>
+            <span className="text-slate-600">·</span>
+            <div className="inline-flex items-center bg-slate-900 border border-slate-700 rounded-lg p-0.5">
+              <button
+                type="button"
+                onClick={() => setPreviewDeviceMode('mobile')}
+                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-semibold transition cursor-pointer ${
+                  previewDeviceMode === 'mobile'
+                    ? 'bg-amber-600 text-white'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <Smartphone className="w-3.5 h-3.5" />
+                <span>Mobile Client View (390px)</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setPreviewDeviceMode('desktop')}
+                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-semibold transition cursor-pointer ${
+                  previewDeviceMode === 'desktop'
+                    ? 'bg-amber-600 text-white'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <Monitor className="w-3.5 h-3.5" />
+                <span>Desktop View</span>
+              </button>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              if (typeof window !== 'undefined' && window.location.hash.startsWith('#hotel/')) {
+                window.history.replaceState(null, '', window.location.pathname + window.location.search);
+              }
+              setPreviewOpen(false);
+            }}
+            className="px-3 py-1 rounded-lg bg-white text-slate-900 font-semibold hover:bg-amber-100 transition cursor-pointer"
+          >
+            Exit Preview
+          </button>
+        </div>
+
+        {previewDeviceMode === 'mobile' ? (
+          <div className="py-6 px-2 flex justify-center bg-slate-900 min-h-[calc(100vh-45px)]">
+            <div className="w-full max-w-[395px] bg-[#FAF8F5] rounded-[32px] border-[8px] border-slate-800 shadow-2xl overflow-hidden relative">
+              <PublicHotelWebsiteRenderer
+                snapshot={previewSnapshot}
+                isPreview={false}
+              />
+            </div>
+          </div>
+        ) : (
+          <PublicHotelWebsiteRenderer
+            snapshot={previewSnapshot}
+            isPreview={true}
+            onExitPreview={() => {
+              if (typeof window !== 'undefined' && window.location.hash.startsWith('#hotel/')) {
+                window.history.replaceState(null, '', window.location.pathname + window.location.search);
+              }
+              setPreviewOpen(false);
+            }}
+          />
+        )}
+      </div>
     );
   }
 
@@ -469,15 +531,15 @@ export const PublicWebsiteManagementView: React.FC<PublicWebsiteManagementViewPr
     { id: 'dashboard', label: 'Overview', icon: <Globe className="w-4 h-4" /> },
     {
       id: 'hotels',
-      label: `Hotels Directory (${hotelsList.length})`,
+      label: `Hotels (${hotelsList.length})`,
       icon: <Building2 className="w-4 h-4" />,
     },
-    { id: 'rooms', label: `All Room Types (${cmsData.rooms.length})`, icon: <BedDouble className="w-4 h-4" /> },
-    { id: 'general', label: 'Brand & Contact', icon: <FolderKanban className="w-4 h-4" /> },
+    { id: 'rooms', label: `Rooms (${cmsData.rooms.length})`, icon: <BedDouble className="w-4 h-4" /> },
+    { id: 'general', label: 'Brand Info', icon: <FolderKanban className="w-4 h-4" /> },
     { id: 'homepage', label: 'Homepage', icon: <Layout className="w-4 h-4" /> },
     { id: 'facilities', label: `Facilities (${cmsData.facilities.length})`, icon: <Sparkles className="w-4 h-4" /> },
     { id: 'gallery', label: `Gallery (${cmsData.gallery.length})`, icon: <ImageIcon className="w-4 h-4" /> },
-    { id: 'pages', label: 'Pages & Nav', icon: <FileText className="w-4 h-4" /> },
+    { id: 'pages', label: 'Pages', icon: <FileText className="w-4 h-4" /> },
     { id: 'faqs', label: `FAQs (${cmsData.faqs.length})`, icon: <HelpCircle className="w-4 h-4" /> },
     { id: 'seo', label: 'SEO & Domain', icon: <Search className="w-4 h-4" /> },
     { id: 'history', label: 'Publish History', icon: <History className="w-4 h-4" /> },
@@ -486,36 +548,41 @@ export const PublicWebsiteManagementView: React.FC<PublicWebsiteManagementViewPr
   return (
     <div className="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto space-y-6">
       {/* Top Header & Primary Actions */}
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-4 border-b border-slate-200">
-        <div>
-          <div className="flex items-center gap-2 text-xs text-slate-500 mb-1">
-            <span>Multi-Hotel Public Website CMS</span>
-            <span aria-hidden="true">·</span>
-            <span>Automatic Dedicated Hotel Pages & Room Showcases</span>
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-sky-600 text-white flex items-center justify-center shadow-sm shrink-0">
+            <Globe className="w-5 h-5" />
           </div>
-          <h1 className="text-2xl font-bold text-slate-900 tracking-tight">
-            {settingsForm.hotel_name || 'Public Hotel Collection & Directory CMS'}
-          </h1>
+          <div>
+            <h1 className="text-xl sm:text-2xl font-bold text-slate-900 tracking-tight">
+              Public Website & Hotel Directory
+            </h1>
+            <p className="text-xs sm:text-sm text-slate-500">
+              {settingsForm.hotel_name
+                ? `${settingsForm.hotel_name} · Manage public hotels, room showcases, and Netlify deployments`
+                : 'Manage public hotels, dedicated hotel pages, room pictures, and Netlify deployments'}
+            </p>
+          </div>
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5">
           <button
             onClick={handleSyncFromCrm}
             disabled={syncingCrm}
-            className="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-semibold text-sky-700 bg-sky-50 border border-sky-200 hover:bg-sky-100 rounded-lg transition cursor-pointer whitespace-nowrap shrink-0"
+            className="inline-flex items-center gap-2 px-3.5 py-2.5 text-xs sm:text-sm font-semibold text-slate-700 bg-white border border-slate-200 hover:border-sky-400 hover:text-sky-800 rounded-xl transition cursor-pointer whitespace-nowrap shadow-2xs shrink-0"
             title="Import partner hotels & room types from your CRM Hotels tab"
           >
-            <DownloadCloud className={`w-4 h-4 ${syncingCrm ? 'animate-bounce' : ''}`} />
-            <span>{syncingCrm ? 'Syncing CRM Hotels...' : 'Sync Hotels from CRM'}</span>
+            <DownloadCloud className={`w-4 h-4 text-sky-600 ${syncingCrm ? 'animate-bounce' : ''}`} />
+            <span>{syncingCrm ? 'Syncing...' : 'Sync CRM Hotels'}</span>
           </button>
 
           <button
             onClick={() => handleOpenPreview()}
             disabled={loadingPreview}
-            className="inline-flex items-center gap-2 px-4 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-lg transition cursor-pointer whitespace-nowrap shrink-0"
+            className="inline-flex items-center gap-2 px-3.5 py-2.5 text-xs sm:text-sm font-semibold text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 rounded-xl transition cursor-pointer whitespace-nowrap shadow-2xs shrink-0"
           >
             <Eye className="w-4 h-4 text-slate-500" />
-            <span>{loadingPreview ? 'Loading Preview...' : 'Preview Draft Website'}</span>
+            <span>{loadingPreview ? 'Loading...' : 'Preview Draft'}</span>
           </button>
 
           {settingsForm.public_site_url && (
@@ -523,18 +590,18 @@ export const PublicWebsiteManagementView: React.FC<PublicWebsiteManagementViewPr
               href={settingsForm.public_site_url}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-2 px-4 py-2 text-xs font-medium text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-lg transition whitespace-nowrap shrink-0"
+              className="inline-flex items-center gap-2 px-3.5 py-2.5 text-xs sm:text-sm font-semibold text-slate-700 bg-white border border-slate-200 hover:bg-slate-50 rounded-xl transition whitespace-nowrap shadow-2xs shrink-0"
             >
-              <span>View Live Site</span>
+              <span>Live Site</span>
               <ExternalLink className="w-3.5 h-3.5 text-slate-400" />
             </a>
           )}
 
           <button
             onClick={() => setPublishModalOpen(true)}
-            className="inline-flex items-center gap-2 px-4 py-2 text-xs font-semibold text-white bg-sky-600 hover:bg-sky-700 rounded-lg transition cursor-pointer whitespace-nowrap shrink-0"
+            className="inline-flex items-center gap-2 px-4 py-2.5 text-xs sm:text-sm font-semibold text-white bg-sky-600 hover:bg-sky-700 rounded-xl shadow-sm transition cursor-pointer whitespace-nowrap shrink-0"
           >
-            <Send className="w-3.5 h-3.5" />
+            <Send className="w-4 h-4" />
             <span>Publish Changes</span>
           </button>
         </div>
@@ -566,15 +633,15 @@ export const PublicWebsiteManagementView: React.FC<PublicWebsiteManagementViewPr
       )}
 
       {/* Navigation Tabs */}
-      <div className="flex items-center gap-1 p-1 bg-slate-100 rounded-xl overflow-x-auto no-scrollbar">
+      <div className="flex flex-wrap items-center gap-1.5 p-1.5 bg-slate-100 border border-slate-200/80 rounded-xl">
         {tabs.map((tab) => (
           <button
             key={tab.id}
             onClick={() => setActiveTab(tab.id)}
-            className={`inline-flex items-center gap-2 px-3.5 py-2 text-xs font-medium rounded-lg transition cursor-pointer whitespace-nowrap shrink-0 ${
+            className={`inline-flex items-center gap-2 px-3 py-2 text-xs font-medium rounded-lg transition cursor-pointer whitespace-nowrap shrink-0 ${
               activeTab === tab.id
                 ? 'bg-white text-slate-900 shadow-2xs font-semibold'
-                : 'text-slate-600 hover:text-slate-900'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-white/50'
             }`}
           >
             {tab.icon}
@@ -894,41 +961,41 @@ export const PublicWebsiteManagementView: React.FC<PublicWebsiteManagementViewPr
                           </div>
 
                           <div className="space-y-1">
-                            <div className="flex flex-wrap items-center gap-2">
+                            <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
                               <h3 className="text-base font-bold text-slate-900">{hotel.name}</h3>
-                              <span className="inline-flex items-center gap-0.5 text-amber-500 text-xs font-semibold">
+                              <span className="inline-flex items-center gap-0.5 text-amber-500 font-semibold">
                                 {Array.from({ length: Math.min(5, Math.max(1, hotel.star_rating || 5)) }).map(
                                   (_, i) => (
                                     <Star key={i} className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
                                   )
                                 )}
                               </span>
-                              <span
-                                className={`px-2 py-0.5 text-[11px] font-semibold rounded-md ${
-                                  hotel.is_visible
-                                    ? 'bg-emerald-50 text-emerald-700 border border-emerald-200'
-                                    : 'bg-slate-100 text-slate-600 border border-slate-200'
-                                }`}
-                              >
+                              <span aria-hidden="true">·</span>
+                              <span className={hotel.is_visible ? 'text-emerald-700 font-semibold' : 'text-slate-500'}>
                                 {hotel.is_visible ? 'Published on Site' : 'Hidden'}
                               </span>
                               {hotel.crm_hotel_id && (
-                                <span className="px-2 py-0.5 text-[11px] font-medium bg-sky-50 text-sky-700 border border-sky-200 rounded-md">
-                                  Synced from CRM
-                                </span>
+                                <>
+                                  <span aria-hidden="true">·</span>
+                                  <span className="text-sky-700 font-medium">Synced from CRM</span>
+                                </>
                               )}
                             </div>
 
-                            <div className="flex flex-wrap items-center gap-3 text-xs text-slate-600">
+                            <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
                               {(hotel.city || hotel.country || hotel.address) && (
-                                <span className="inline-flex items-center gap-1">
-                                  <MapPin className="w-3.5 h-3.5 text-slate-400" />
-                                  {[hotel.city, hotel.country].filter(Boolean).join(', ') || hotel.address}
-                                </span>
+                                <>
+                                  <span className="inline-flex items-center gap-1">
+                                    <MapPin className="w-3.5 h-3.5 text-slate-400" />
+                                    {[hotel.city, hotel.country].filter(Boolean).join(', ') || hotel.address}
+                                  </span>
+                                  <span aria-hidden="true">·</span>
+                                </>
                               )}
-                              <span className="font-mono text-[11px] text-slate-500 bg-white px-2 py-0.5 rounded border border-slate-200">
-                                Page URL: #hotel/{hotel.slug}
+                              <span className="font-mono text-slate-500">
+                                #hotel/{hotel.slug}
                               </span>
+                              <span aria-hidden="true">·</span>
                               <span className="font-semibold text-slate-800">
                                 {hotelRooms.length} Room Type{hotelRooms.length === 1 ? '' : 's'}
                               </span>
@@ -1246,14 +1313,15 @@ export const PublicWebsiteManagementView: React.FC<PublicWebsiteManagementViewPr
                             )}
                           </div>
                           <div>
-                            <div className="flex flex-wrap items-center gap-2">
+                            <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
                               <h3 className="text-sm font-bold text-slate-900">{room.name}</h3>
                               {parentHotel && (
-                                <span className="px-2 py-0.5 text-[11px] font-semibold bg-slate-100 text-slate-700 rounded border border-slate-200">
-                                  {parentHotel.name}
-                                </span>
+                                <>
+                                  <span aria-hidden="true">·</span>
+                                  <span className="font-semibold text-slate-700">{parentHotel.name}</span>
+                                </>
                               )}
-                              <span className="text-xs text-slate-500">
+                              <span>
                                 · {room.is_visible ? 'Visible' : 'Hidden'}
                                 {room.is_featured ? ' · Featured' : ''}
                               </span>

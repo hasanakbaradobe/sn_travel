@@ -8,6 +8,74 @@
     <meta property="og:title" content="Official Hotel Website" />
     <meta property="og:description" content="Official hotel website with accommodation details, facilities, photo gallery, and direct contact information." />
     <meta property="og:type" content="website" />
+    <style>
+      /* Suppress any host-injected badges, widgets, or overlays outside #root */
+      body > :not(#root):not(script):not(style):not(link),
+      a[href*="netlify.com"],
+      a[href*="netlify.app"][target="_blank"]:not(#root *),
+      iframe[src*="netlify"],
+      iframe[title*="Netlify"],
+      [id*="netlify"],
+      [class*="netlify"],
+      [data-netlify],
+      netlify-drawer,
+      netlify-badge {
+        display: none !important;
+        visibility: hidden !important;
+        opacity: 0 !important;
+        pointer-events: none !important;
+        width: 0 !important;
+        height: 0 !important;
+        position: fixed !important;
+        left: -9999px !important;
+        z-index: -9999 !important;
+      }
+    </style>
+    <script>
+      (function () {
+        function removeInjectedBadges() {
+          try {
+            // 1. Remove any non-app element injected directly into <body> outside #root
+            if (document.body) {
+              var bodyChildren = Array.prototype.slice.call(document.body.children);
+              for (var i = 0; i < bodyChildren.length; i++) {
+                var el = bodyChildren[i];
+                var tag = (el.tagName || '').toUpperCase();
+                if (el.id !== 'root' && tag !== 'SCRIPT' && tag !== 'STYLE' && tag !== 'LINK') {
+                  el.remove();
+                }
+              }
+            }
+            // 2. Remove any link, button, or badge mentioning "Powered by Netlify"
+            var allNodes = document.querySelectorAll('a, div, span, aside, footer, iframe, button');
+            for (var j = 0; j < allNodes.length; j++) {
+              var node = allNodes[j];
+              if (node.id === 'root' || (document.getElementById('root') && document.getElementById('root').contains(node))) {
+                continue;
+              }
+              var txt = (node.textContent || '').trim().toLowerCase();
+              var href = (node.getAttribute && (node.getAttribute('href') || node.getAttribute('src')) || '').toLowerCase();
+              if (txt.indexOf('powered by netlify') !== -1 || href.indexOf('netlify.com') !== -1 || href.indexOf('app.netlify.com') !== -1) {
+                node.remove();
+              }
+            }
+          } catch (e) {}
+        }
+
+        if (typeof MutationObserver !== 'undefined') {
+          var observer = new MutationObserver(function () {
+            removeInjectedBadges();
+          });
+          observer.observe(document.documentElement, { childList: true, subtree: true });
+        }
+        window.addEventListener('DOMContentLoaded', removeInjectedBadges);
+        window.addEventListener('load', function () {
+          removeInjectedBadges();
+          setTimeout(removeInjectedBadges, 500);
+          setTimeout(removeInjectedBadges, 2000);
+        });
+      })();
+    </script>
   </head>
   <body class="bg-stone-50 text-stone-900 antialiased">
     <div id="root"></div>
