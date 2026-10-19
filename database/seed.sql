@@ -151,27 +151,21 @@ INSERT INTO `activity_logs` (`id`, `user_id`, `action`, `entity_type`, `entity_i
 (3, 2, 'STATUS_CHANGE', 'APPLICATION', 1, 'Changed status to Online Review Completed. Set delivery date and created delivery task.', NOW());
 
 -- --------------------------------------------------------
--- Seed Hotels & Rooms
+-- Seed Hotels (9 Kuala Lumpur Hotels - Rooms & Pictures to be added later)
 -- --------------------------------------------------------
+TRUNCATE TABLE `hotel_rooms`;
 TRUNCATE TABLE `hotels`;
 INSERT INTO `hotels` (`id`, `name`, `city`, `address`, `star_rating`, `phone`, `email`, `notes`, `is_active`, `created_at`) VALUES
-(1, 'Grand Hyatt Shanghai', 'Shanghai', 'Jin Mao Tower, 88 Century Avenue, Pudong New Area', 5, '+86 21 5049 1234', 'shanghai.grand@hyatt.com', 'Prime business location in Pudong with panoramic Bund views', 1, NOW()),
-(2, 'The Peninsula Beijing', 'Beijing', '8 Goldfish Lane, Wangfujing, Dongcheng District', 5, '+86 10 8516 2888', 'pbj@peninsula.com', 'Located in central Beijing minutes from Tiananmen and Forbidden City', 1, NOW()),
-(3, 'Four Seasons Hotel Guangzhou', 'Guangzhou', '5 Zhujiang West Road, Tianhe District', 5, '+86 20 8883 3888', 'guangzhou@fourseasons.com', 'Next to Canton Fair transit and IFC Tower', 1, NOW()),
-(4, 'JW Marriott Hotel Beijing Central', 'Beijing', '18 Xuanwumen Outer Street, Xicheng District', 5, '+86 10 6391 6666', 'jw.beijing@marriott.com', 'Convenient for commercial trade travelers and government affairs', 1, NOW()),
-(5, 'Holiday Inn Express Shanghai Pudong', 'Shanghai', 'No. 399 Pudian Road, Pudong', 4, '+86 21 5830 8888', 'shanghai@hiexpress.com', 'Budget-friendly corporate partner with fast subway access', 1, NOW());
+(1, 'Axon BukitBintang with pavilion by AQSA', 'Kuala Lumpur', 'Bukit Bintang, Kuala Lumpur, Malaysia (0.4 km from Bukit Bintang)', 4, '', '', 'Booking.com Score: 7.7 Good (280 reviews) | Ranked #2 of 6 apartments in Kuala Lumpur | Free Wi-Fi, Swimming pool, Parking, Kitchen, Airport shuttle | Starting rate: RM 182/night (Total RM 727 + RM 217 taxes & charges) | No prepayment needed – pay at the property', 1, NOW()),
+(2, 'Sky Suites KLCC Homestay by BIRDY STAY', 'Kuala Lumpur', 'Kuala Lumpur City-Centre (KLCC), Kuala Lumpur, Malaysia (0.4 km from Petronas Twin Towers)', 3, '', '', 'Booking.com Score: 7.2 Good (505 reviews) | Ranked #2 of 15 homestays in Kuala Lumpur | Free Wi-Fi, Family rooms, Non-smoking rooms | Starting rate: RM 105/night (Total RM 419 + RM 102 taxes & charges) | Prepayment needed', 1, NOW()),
+(3, 'KLCC Sky Villa Suites Scarletz Brickz By M Suites', 'Kuala Lumpur', 'Kuala Lumpur City-Centre (KLCC), Kuala Lumpur, Malaysia (0.5 km from Petronas Twin Towers)', 4, '', '', 'Booking.com Score: 7.9 Good (294 reviews) | Free Wi-Fi, Swimming pool, Parking, Fitness centre, Spa, Bar | Starting rate: RM 114/night (Total RM 457 + RM 202 taxes & charges)', 1, NOW()),
+(4, 'Tropicana The Residence Suites KLCC', 'Kuala Lumpur', 'Kuala Lumpur City-Centre (KLCC), Kuala Lumpur, Malaysia (0.2 km from Petronas Twin Towers)', 5, '', '', 'Booking.com Score: 8.6 Fabulous (1,123 reviews) | Free Wi-Fi, Swimming pool, Parking, Restaurant, Fitness centre, 24-hour front desk | Starting rate: RM 262/night (Total RM 1,049 + RM 164 taxes & charges)', 1, NOW()),
+(5, 'Urban Living Residence Kuala Lumpur', 'Kuala Lumpur', 'Chow Kit, Kuala Lumpur, Malaysia (0.6 km from Putra World Trade Centre)', 4, '', '', 'Booking.com Score: 7.7 Good (257 reviews) | Free Wi-Fi, Swimming pool, Parking, Fitness centre | Starting rate: RM 63/night (Total RM 253 + RM 79 taxes & charges) | Free cancellation', 1, NOW()),
+(6, 'Ceylonz Suites by MyKey', 'Kuala Lumpur', 'Bukit Bintang, Kuala Lumpur, Malaysia (0.7 km from Kuala Lumpur Tower)', 4, '', '', 'Booking.com Score: 8.1 Very good (13,596 reviews) | Ranked #3 of 6 apartments in Kuala Lumpur | Free Wi-Fi, Swimming pool, Parking, Restaurant, Fitness centre, Bar | Starting rate: RM 122/night (Total RM 488 + RM 79 taxes & charges)', 1, NOW()),
+(7, 'Sunway Putra Hotel Kuala Lumpur', 'Kuala Lumpur', 'Chow Kit, Kuala Lumpur, Malaysia (0.1 km from Putra World Trade Centre)', 5, '', '', 'Booking.com Score: 8.5 Very good (9,432 reviews) | Ranked #5 of 24 hotels in Kuala Lumpur | Free Wi-Fi, Swimming pool, Parking, Restaurant, Fitness centre, Bar | Starting rate: RM 284/night (Total RM 1,134 + RM 151 taxes & charges) | Free cancellation', 1, NOW()),
+(8, 'Riveria City Kuala Lumpur Sentral by Archos Room', 'Kuala Lumpur', 'Brickfields (KL Sentral), Kuala Lumpur, Malaysia (0.7 km from KL Sentral)', 4, '', '', 'Booking.com Score: 7.6 Good (214 reviews) | Free Wi-Fi, Swimming pool, Parking, Fitness centre | Starting rate: RM 101/night (Total RM 406 + RM 91 taxes & charges) | Free cancellation', 1, NOW()),
+(9, 'Swing & Pillows @ Imbi Bukit Bintang formerly known as Hotel 99 Kuala Lumpur', 'Kuala Lumpur', 'Bukit Bintang, Kuala Lumpur, Malaysia (1.9 km from Petronas Twin Towers)', 3, '', '', 'Booking.com Score: 7.2 Good (516 reviews) | Free Wi-Fi, 24-hour front desk, Non-smoking rooms, Lift, Laundry | Starting rate: RM 64/night (Total RM 257 + RM 26 taxes & charges)', 1, NOW());
 
-TRUNCATE TABLE `hotel_rooms`;
-INSERT INTO `hotel_rooms` (`id`, `hotel_id`, `name`, `price_per_night`, `currency`, `capacity`, `description`, `is_active`, `created_at`) VALUES
-(1, 1, 'Grand King Room', 220.00, 'USD', 2, 'Spacious 40 sqm king bed with city view and marble bath', 1, NOW()),
-(2, 1, 'Club River View Twin', 310.00, 'USD', 2, 'Twin beds with Huangpu River views and Grand Club lounge access', 1, NOW()),
-(3, 1, 'Executive Suite', 450.00, 'USD', 3, 'Separate living area and panoramic skyline views', 1, NOW()),
-(4, 2, 'Superior King Suite', 290.00, 'USD', 2, 'Elegant Chinese silk design with dressing room', 1, NOW()),
-(5, 2, 'Premier Twin Suite', 350.00, 'USD', 2, 'Two twin beds with traditional courtyard feel', 1, NOW()),
-(6, 3, 'Tower View King Room', 240.00, 'USD', 2, 'High-floor floor-to-ceiling windows overlooking Canton Tower', 1, NOW()),
-(7, 3, 'Deluxe Executive Twin', 320.00, 'USD', 2, 'Executive lounge perks with complimentary breakfast & tea', 1, NOW()),
-(8, 4, 'Deluxe Business King', 180.00, 'USD', 2, 'High-speed internet and spacious ergonomic workstation', 1, NOW()),
-(9, 5, 'Standard Queen Room', 95.00, 'USD', 2, 'Clean modern room with breakfast included', 1, NOW());
 
 TRUNCATE TABLE `hotel_bookings`;
 INSERT INTO `hotel_bookings` (`id`, `booking_reference`, `client_id`, `hotel_id`, `room_type_id`, `room_type_name`, `check_in_date`, `check_out_date`, `guest_count`, `room_count`, `status`, `comment`, `special_requests`, `total_price`, `currency`, `checkout_task_id`, `created_by_user_id`, `created_at`) VALUES

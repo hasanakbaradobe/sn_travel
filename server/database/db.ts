@@ -285,6 +285,41 @@ async function probeMySQLConnection(force = false): Promise<boolean> {
               conn.query("INSERT INTO settings (setting_key, setting_value) VALUES ('default_currency_myr_set', '1') ON DUPLICATE KEY UPDATE setting_value = '1'"),
             ]);
           }
+
+          // One-time migration: Replace old hotels with the 9 Kuala Lumpur hotels & clear old rooms
+          const [klMigRows]: any = await conn
+            .query("SELECT setting_value FROM settings WHERE setting_key = 'kl_9_hotels_migrated_v1' LIMIT 1")
+            .catch(() => [[]]);
+          if (!Array.isArray(klMigRows) || klMigRows.length === 0) {
+            const klHotels = getInitialData().hotels;
+            await conn.query('SET FOREIGN_KEY_CHECKS = 0').catch(() => {});
+            await conn.query('DELETE FROM hotel_rooms').catch(() => {});
+            await conn.query('DELETE FROM hotels').catch(() => {});
+            const hotelValues = klHotels.map((h) => [
+              h.id,
+              h.name,
+              h.city,
+              h.address,
+              h.star_rating || 3,
+              h.phone || null,
+              h.email || null,
+              h.notes || null,
+              1,
+            ]);
+            await conn.query(
+              `INSERT INTO hotels (id, name, city, address, star_rating, phone, email, notes, is_active) VALUES ?`,
+              [hotelValues]
+            );
+            await conn.query('SET FOREIGN_KEY_CHECKS = 1').catch(() => {});
+            await conn
+              .query("INSERT INTO settings (setting_key, setting_value) VALUES ('kl_9_hotels_migrated_v1', '1') ON DUPLICATE KEY UPDATE setting_value = '1'")
+              .catch(() => {});
+            store.hotels = klHotels;
+            store.hotel_rooms = [];
+            store.nextIds.hotels = 10;
+            store.nextIds.hotel_rooms = 1;
+            saveStore(store, true);
+          }
         } catch (e: any) {
           console.warn('[MySQL] Initial seed check warning:', e.message);
         }
@@ -751,87 +786,130 @@ function getInitialData(): StoreData {
     hotels: [
       {
         id: 1,
-        name: 'Grand Hyatt Shanghai',
-        city: 'Shanghai',
-        address: 'Jin Mao Tower, 88 Century Avenue, Pudong New Area',
-        star_rating: 5,
-        phone: '+86 21 5049 1234',
-        email: 'shanghai.grand@hyatt.com',
-        notes: 'Prime commercial district hotel in Pudong with panoramic Bund views',
+        name: 'Axon BukitBintang with pavilion by AQSA',
+        city: 'Kuala Lumpur',
+        address: 'Axon residence, 5 jalan walter granier, Bukit Bintang, Kuala Lumpur, Malaysia',
+        star_rating: 3,
+        phone: null,
+        email: null,
+        notes: 'Opened in 2026 · Rating 8.3 Very good ("Great location", "Clean and tidy"). Starting from RM 101/night. Highlights: Indoor rooftop pool, Free gym, Ideal location, Garden, Free Sauna, Private parking. 280m to Bukit Bintang Metro Station, 800m to Pavilion Kuala Lumpur, 1.8 km to Petronas Twin Towers.',
         is_active: 1,
         created_at: now,
         updated_at: now,
       },
       {
         id: 2,
-        name: 'The Peninsula Beijing',
-        city: 'Beijing',
-        address: '8 Goldfish Lane, Wangfujing, Dongcheng District',
-        star_rating: 5,
-        phone: '+86 10 8516 2888',
-        email: 'pbj@peninsula.com',
-        notes: 'Located in central Beijing minutes from Tiananmen and Forbidden City',
+        name: 'Empire Bukit Bintang',
+        city: 'Kuala Lumpur',
+        address: 'Bukit Bintang, Kuala Lumpur, Malaysia (190m · Near Petronas Twin Towers)',
+        star_rating: 3,
+        phone: null,
+        email: null,
+        notes: 'Rating 9.1 Great (39 reviews) · Starting from RM 94/night (Total RM 203 for 2 nights incl. taxes & fees). 190m straight-line distance · Near Petronas Twin Towers. Free Cancellation & Excellent service.',
         is_active: 1,
         created_at: now,
         updated_at: now,
       },
       {
         id: 3,
-        name: 'Four Seasons Hotel Guangzhou',
-        city: 'Guangzhou',
-        address: '5 Zhujiang West Road, Tianhe District',
-        star_rating: 5,
-        phone: '+86 20 8883 3888',
-        email: 'guangzhou@fourseasons.com',
-        notes: 'Next to Canton Fair transit and Guangzhou International Finance Center',
+        name: 'Star Mews Hotel Changkat Bukit Bintang',
+        city: 'Kuala Lumpur',
+        address: 'Changkat Bukit Bintang, Kuala Lumpur, Malaysia (240m · Near Petronas Twin Towers)',
+        star_rating: 3,
+        phone: null,
+        email: null,
+        notes: 'Rating 8.1 Very good (55 reviews) · Starting from RM 109/night (Total RM 235 for 2 nights incl. taxes & fees). 240m straight-line distance · Near Petronas Twin Towers. Features on-site Bar.',
         is_active: 1,
         created_at: now,
         updated_at: now,
       },
       {
         id: 4,
-        name: 'JW Marriott Hotel Beijing Central',
-        city: 'Beijing',
-        address: '18 Xuanwumen Outer Street, Xicheng District',
-        star_rating: 5,
-        phone: '+86 10 6391 6666',
-        email: 'jw.beijing@marriott.com',
-        notes: 'Convenient for commercial trade travelers and government meetings',
+        name: 'Swing & Pillows @ ICC Pudu Kuala Lumpur',
+        city: 'Kuala Lumpur',
+        address: 'ICC Pudu, Kuala Lumpur, Malaysia (740m · Near Bukit Bintang Metro Station)',
+        star_rating: 2,
+        phone: null,
+        email: null,
+        notes: 'Rating 8.7 Very good (289 reviews) · Starting from RM 68/night (Total RM 148 for 2 nights incl. taxes & fees). 740m straight-line distance · Near Bukit Bintang Metro Station. Excellent service.',
         is_active: 1,
         created_at: now,
         updated_at: now,
       },
       {
         id: 5,
-        name: 'Holiday Inn Express Shanghai Pudong',
-        city: 'Shanghai',
-        address: 'No. 399 Pudian Road, Pudong',
+        name: 'Kingston Hotel 4 @ Hulo Bukit Bintang',
+        city: 'Kuala Lumpur',
+        address: 'Hulo Bukit Bintang, Kuala Lumpur, Malaysia (810m · Near Zepp Kuala Lumpur)',
+        star_rating: 3,
+        phone: null,
+        email: null,
+        notes: 'Rating 8.4 Very good (440 reviews) · Starting from RM 70/night (Total RM 151 for 2 nights incl. taxes & fees). 810m straight-line distance · Near Zepp Kuala Lumpur. Ideal location.',
+        is_active: 1,
+        created_at: now,
+        updated_at: now,
+      },
+      {
+        id: 6,
+        name: 'Prescott Hotel Bukit Bintang',
+        city: 'Kuala Lumpur',
+        address: 'Bukit Bintang, Kuala Lumpur, Malaysia (610m · Near Bukit Bintang Metro Station)',
+        star_rating: 3,
+        phone: null,
+        email: null,
+        notes: 'Rating 8.3 Very good (1,429 reviews) · Starting from RM 78/night (Total RM 176 for 2 nights incl. taxes & fees). 610m straight-line distance · Near Bukit Bintang Metro Station. Features on-site Cafe.',
+        is_active: 1,
+        created_at: now,
+        updated_at: now,
+      },
+      {
+        id: 7,
+        name: 'Dynasty Hotel by ibilik @ Kuala Lumpur',
+        city: 'Kuala Lumpur',
+        address: 'Titiwangsa, Kuala Lumpur, Malaysia (3.6 km · Near Titiwangsa)',
         star_rating: 4,
-        phone: '+86 21 5830 8888',
-        email: 'shanghai@hiexpress.com',
-        notes: 'Clean modern corporate partner with fast subway access',
+        phone: null,
+        email: null,
+        notes: 'Rating 8.3 Very good (34 reviews) · Starting from RM 137/night (Total RM 296 for 2 nights incl. taxes & fees). 3.6 km straight-line distance · Near Titiwangsa. Ideal location.',
+        is_active: 1,
+        created_at: now,
+        updated_at: now,
+      },
+      {
+        id: 8,
+        name: 'SS Grey Hotel',
+        city: 'Kuala Lumpur',
+        address: 'Bukit Bintang, Kuala Lumpur, Malaysia (<100m · Near Petronas Twin Towers)',
+        star_rating: 3,
+        phone: null,
+        email: null,
+        notes: 'Rating 8.5 Very good (278 reviews) · Starting from RM 93/night (Total RM 201 for 2 nights incl. taxes & fees). <100m straight-line distance · Near Petronas Twin Towers. Ideal location.',
+        is_active: 1,
+        created_at: now,
+        updated_at: now,
+      },
+      {
+        id: 9,
+        name: 'Swing & Pillows @ Imbi Bukit Bintang',
+        city: 'Kuala Lumpur',
+        address: 'Imbi, Bukit Bintang, Kuala Lumpur, Malaysia (650m · Near Petronas Twin Towers)',
+        star_rating: 2,
+        phone: null,
+        email: null,
+        notes: 'Rating 8.7 Very good (195 reviews) · Starting from RM 69/night (Total RM 149 for 2 nights incl. taxes & fees). 650m straight-line distance · Near Petronas Twin Towers. Excellent service.',
         is_active: 1,
         created_at: now,
         updated_at: now,
       },
     ],
-    hotel_rooms: [
-      { id: 1, hotel_id: 1, name: 'Grand King Room', price_per_night: 220, currency: 'USD', capacity: 2, description: '40 sqm king bed with city skyline view and marble bath', is_active: 1, created_at: now, updated_at: now },
-      { id: 2, hotel_id: 1, name: 'Club River View Twin', price_per_night: 310, currency: 'USD', capacity: 2, description: 'Twin beds with Huangpu River views and Grand Club lounge', is_active: 1, created_at: now, updated_at: now },
-      { id: 3, hotel_id: 1, name: 'Executive Suite', price_per_night: 450, currency: 'USD', capacity: 3, description: 'Living room and panoramic skyline vistas', is_active: 1, created_at: now, updated_at: now },
-      { id: 4, hotel_id: 2, name: 'Superior King Suite', price_per_night: 290, currency: 'USD', capacity: 2, description: 'Chinese silk artistry with private dressing area', is_active: 1, created_at: now, updated_at: now },
-      { id: 5, hotel_id: 2, name: 'Premier Twin Suite', price_per_night: 350, currency: 'USD', capacity: 2, description: 'Two twin beds with traditional courtyard aesthetics', is_active: 1, created_at: now, updated_at: now },
-      { id: 6, hotel_id: 3, name: 'Tower View King Room', price_per_night: 240, currency: 'USD', capacity: 2, description: 'Floor-to-ceiling windows overlooking Canton Tower', is_active: 1, created_at: now, updated_at: now },
-      { id: 7, hotel_id: 3, name: 'Deluxe Executive Twin', price_per_night: 320, currency: 'USD', capacity: 2, description: 'Executive lounge perks with complimentary breakfast', is_active: 1, created_at: now, updated_at: now },
-      { id: 8, hotel_id: 4, name: 'Deluxe Business King', price_per_night: 180, currency: 'USD', capacity: 2, description: 'Spacious desk and high-speed executive WiFi', is_active: 1, created_at: now, updated_at: now },
-      { id: 9, hotel_id: 5, name: 'Standard Queen Room', price_per_night: 95, currency: 'USD', capacity: 2, description: 'Clean modern room with buffet breakfast included', is_active: 1, created_at: now, updated_at: now },
-    ],
+    hotel_rooms: [],
     hotel_bookings: [],
     follow_ups: [],
     settings: [
       { id: 1, setting_key: 'agency_name', setting_value: 'SN Travels Agency', updated_at: now },
       { id: 2, setting_key: 'secret_login_enabled', setting_value: '1', updated_at: now },
       { id: 3, setting_key: 'secret_login_key', setting_value: 'sn-secure-staff-2026', updated_at: now },
+      { id: 4, setting_key: 'kl_9_hotels_migrated_v1', setting_value: '1', updated_at: now },
     ],
     invoice_settings: {
       id: 1,
@@ -953,11 +1031,11 @@ function getInitialData(): StoreData {
       tasks: 1,
       comments: 1,
       activity_logs: 1,
-      hotels: 6,
-      hotel_rooms: 10,
+      hotels: 10,
+      hotel_rooms: 1,
       hotel_bookings: 1,
       follow_ups: 1,
-      settings: 4,
+      settings: 5,
       invoice_catalog_items: 9,
       invoices: 4,
       invoice_items: 8,
@@ -1059,8 +1137,25 @@ function loadStore(): StoreData {
         });
         needsSave = true;
       }
+      const hasKlHotelsMigration = (parsed.settings || []).some((s: any) => s.setting_key === 'kl_9_hotels_migrated_v1');
+      if (!hasKlHotelsMigration) {
+        const init = getInitialData();
+        parsed.hotels = init.hotels;
+        parsed.hotel_rooms = [];
+        parsed.nextIds = parsed.nextIds || {};
+        parsed.nextIds.hotels = 10;
+        parsed.nextIds.hotel_rooms = 1;
+        parsed.settings = parsed.settings || [];
+        parsed.settings.push({
+          id: (parsed.nextIds.settings = (parsed.nextIds.settings || 10) + 1),
+          setting_key: 'kl_9_hotels_migrated_v1',
+          setting_value: '1',
+          updated_at: new Date().toISOString(),
+        });
+        needsSave = true;
+      }
       if (needsSave) {
-        saveStore(parsed);
+        saveStore(parsed, true);
       }
       return parsed;
     }

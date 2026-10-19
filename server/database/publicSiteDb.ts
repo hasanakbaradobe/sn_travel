@@ -645,6 +645,324 @@ function getDefaultPages(now: string): PublicSitePage[] {
   ];
 }
 
+function getInitialKualaLumpurPublicHotels(now: string): PublicSiteHotel[] {
+  return [
+    {
+      id: 1,
+      crm_hotel_id: 1,
+      name: 'Axon BukitBintang with pavilion by AQSA',
+      slug: 'axon-bukitbintang-with-pavilion-by-aqsa',
+      city: 'Kuala Lumpur',
+      country: 'Malaysia',
+      address: 'Axon residence, 5 jalan walter granier, Bukit Bintang, Kuala Lumpur, Malaysia',
+      star_rating: 3,
+      short_description:
+        'Opened in 2026 · 8.3 Very good ("Great location", "Clean and tidy"). 280m to Bukit Bintang Metro Station, 800m to Pavilion Kuala Lumpur, 1.8 km to Petronas Twin Towers.',
+      full_description:
+        'Axon BukitBintang with pavilion by AQSA is a modern 3-star residence opened in 2026 in the heart of Bukit Bintang, Kuala Lumpur (5 Jalan Walter Granier). Rated 8.3 Very good for its clean, tidy rooms and prime location just 280m from Bukit Bintang Metro Station, 800m from Pavilion Kuala Lumpur, and 1.8 km from Petronas Twin Towers. Highlights include an indoor rooftop pool, free gym, garden, free sauna, and private parking.',
+      featured_image_url: '',
+      gallery_images: [],
+      amenities: [
+        'Indoor Rooftop Pool',
+        'Free Gym',
+        'Garden',
+        'Free Sauna',
+        'Private Parking',
+        'Free High-Speed Wi-Fi',
+      ],
+      check_in_time: '14:00',
+      check_out_time: '12:00',
+      cancellation_policy: 'Contact reservations for flexible booking and cancellation terms.',
+      contact_phone: '',
+      whatsapp_number: '',
+      contact_email: '',
+      google_maps_url: '',
+      google_maps_embed_url: '',
+      starting_price: 101,
+      currency: 'MYR',
+      is_featured: 1,
+      is_visible: 1,
+      display_order: 1,
+      created_at: now,
+      updated_at: now,
+    },
+    {
+      id: 2,
+      crm_hotel_id: 2,
+      name: 'Empire Bukit Bintang',
+      slug: 'empire-bukit-bintang',
+      city: 'Kuala Lumpur',
+      country: 'Malaysia',
+      address: 'Bukit Bintang, Kuala Lumpur, Malaysia (190m · Near Petronas Twin Towers)',
+      star_rating: 3,
+      short_description:
+        '9.1 Great (39 reviews) · 190m straight-line distance · Near Petronas Twin Towers · Free Cancellation & Excellent service.',
+      full_description:
+        'Empire Bukit Bintang is a highly rated 3-star hotel (9.1 Great) ideally situated in Bukit Bintang, Kuala Lumpur, near the iconic Petronas Twin Towers. Known for its excellent guest service and convenient city-center access.',
+      featured_image_url: '',
+      gallery_images: [],
+      amenities: [
+        'Free Cancellation',
+        'Excellent Service',
+        '24-Hour Front Desk',
+        'Free High-Speed Wi-Fi',
+        'Air Conditioning',
+      ],
+      check_in_time: '14:00',
+      check_out_time: '12:00',
+      cancellation_policy: 'Free cancellation available on eligible room rates.',
+      contact_phone: '',
+      whatsapp_number: '',
+      contact_email: '',
+      google_maps_url: '',
+      google_maps_embed_url: '',
+      starting_price: 94,
+      currency: 'MYR',
+      is_featured: 1,
+      is_visible: 1,
+      display_order: 2,
+      created_at: now,
+      updated_at: now,
+    },
+    {
+      id: 3,
+      crm_hotel_id: 3,
+      name: 'Star Mews Hotel Changkat Bukit Bintang',
+      slug: 'star-mews-hotel-changkat-bukit-bintang',
+      city: 'Kuala Lumpur',
+      country: 'Malaysia',
+      address: 'Changkat Bukit Bintang, Kuala Lumpur, Malaysia (240m · Near Petronas Twin Towers)',
+      star_rating: 3,
+      short_description:
+        '8.1 Very good (55 reviews) · 240m straight-line distance · Near Petronas Twin Towers · On-site Bar.',
+      full_description:
+        'Star Mews Hotel Changkat Bukit Bintang is a stylish 3-star boutique hotel located in vibrant Changkat Bukit Bintang, Kuala Lumpur, near the Petronas Twin Towers. Rated 8.1 Very good by guests.',
+      featured_image_url: '',
+      gallery_images: [],
+      amenities: ['Bar', 'Free High-Speed Wi-Fi', 'Air Conditioning', '24-Hour Front Desk'],
+      check_in_time: '14:00',
+      check_out_time: '12:00',
+      cancellation_policy: 'Contact reservations for booking and cancellation details.',
+      contact_phone: '',
+      whatsapp_number: '',
+      contact_email: '',
+      google_maps_url: '',
+      google_maps_embed_url: '',
+      starting_price: 109,
+      currency: 'MYR',
+      is_featured: 1,
+      is_visible: 1,
+      display_order: 3,
+      created_at: now,
+      updated_at: now,
+    },
+    {
+      id: 4,
+      crm_hotel_id: 4,
+      name: 'Swing & Pillows @ ICC Pudu Kuala Lumpur',
+      slug: 'swing-pillows-icc-pudu-kuala-lumpur',
+      city: 'Kuala Lumpur',
+      country: 'Malaysia',
+      address: 'ICC Pudu, Kuala Lumpur, Malaysia (740m · Near Bukit Bintang Metro Station)',
+      star_rating: 2,
+      short_description:
+        '8.7 Very good (289 reviews) · 740m straight-line distance · Near Bukit Bintang Metro Station · Excellent service.',
+      full_description:
+        'Swing & Pillows @ ICC Pudu Kuala Lumpur offers comfortable, value-friendly accommodation near Bukit Bintang Metro Station (740m). Rated 8.7 Very good across 289 guest reviews for its excellent service and clean rooms.',
+      featured_image_url: '',
+      gallery_images: [],
+      amenities: ['Excellent Service', 'Free High-Speed Wi-Fi', 'Air Conditioning', 'Daily Housekeeping'],
+      check_in_time: '14:00',
+      check_out_time: '12:00',
+      cancellation_policy: 'Contact reservations for booking and cancellation details.',
+      contact_phone: '',
+      whatsapp_number: '',
+      contact_email: '',
+      google_maps_url: '',
+      google_maps_embed_url: '',
+      starting_price: 68,
+      currency: 'MYR',
+      is_featured: 1,
+      is_visible: 1,
+      display_order: 4,
+      created_at: now,
+      updated_at: now,
+    },
+    {
+      id: 5,
+      crm_hotel_id: 5,
+      name: 'Kingston Hotel 4 @ Hulo Bukit Bintang',
+      slug: 'kingston-hotel-4-hulo-bukit-bintang',
+      city: 'Kuala Lumpur',
+      country: 'Malaysia',
+      address: 'Hulo Bukit Bintang, Kuala Lumpur, Malaysia (810m · Near Zepp Kuala Lumpur)',
+      star_rating: 3,
+      short_description:
+        '8.4 Very good (440 reviews) · 810m straight-line distance · Near Zepp Kuala Lumpur · Ideal location.',
+      full_description:
+        'Kingston Hotel 4 @ Hulo Bukit Bintang is a 3-star boutique hotel in Bukit Bintang near Zepp Kuala Lumpur. Rated 8.4 Very good across 440 reviews for its architectural charm and ideal location.',
+      featured_image_url: '',
+      gallery_images: [],
+      amenities: ['Ideal Location', 'Free High-Speed Wi-Fi', 'Air Conditioning', '24-Hour Front Desk'],
+      check_in_time: '14:00',
+      check_out_time: '12:00',
+      cancellation_policy: 'Contact reservations for booking and cancellation details.',
+      contact_phone: '',
+      whatsapp_number: '',
+      contact_email: '',
+      google_maps_url: '',
+      google_maps_embed_url: '',
+      starting_price: 70,
+      currency: 'MYR',
+      is_featured: 1,
+      is_visible: 1,
+      display_order: 5,
+      created_at: now,
+      updated_at: now,
+    },
+    {
+      id: 6,
+      crm_hotel_id: 6,
+      name: 'Prescott Hotel Bukit Bintang',
+      slug: 'prescott-hotel-bukit-bintang',
+      city: 'Kuala Lumpur',
+      country: 'Malaysia',
+      address: 'Bukit Bintang, Kuala Lumpur, Malaysia (610m · Near Bukit Bintang Metro Station)',
+      star_rating: 3,
+      short_description:
+        '8.3 Very good (1,429 reviews) · 610m straight-line distance · Near Bukit Bintang Metro Station · Cafe.',
+      full_description:
+        'Prescott Hotel Bukit Bintang is a popular 3-star hotel in Kuala Lumpur near Bukit Bintang Metro Station (610m). Rated 8.3 Very good by over 1,429 guests and saved by over 8,200 travelers, featuring an on-site cafe and comfortable rooms.',
+      featured_image_url: '',
+      gallery_images: [],
+      amenities: ['Cafe', 'Free High-Speed Wi-Fi', 'Air Conditioning', '24-Hour Front Desk'],
+      check_in_time: '14:00',
+      check_out_time: '12:00',
+      cancellation_policy: 'Contact reservations for booking and cancellation details.',
+      contact_phone: '',
+      whatsapp_number: '',
+      contact_email: '',
+      google_maps_url: '',
+      google_maps_embed_url: '',
+      starting_price: 78,
+      currency: 'MYR',
+      is_featured: 1,
+      is_visible: 1,
+      display_order: 6,
+      created_at: now,
+      updated_at: now,
+    },
+    {
+      id: 7,
+      crm_hotel_id: 7,
+      name: 'Dynasty Hotel by ibilik @ Kuala Lumpur',
+      slug: 'dynasty-hotel-by-ibilik-kuala-lumpur',
+      city: 'Kuala Lumpur',
+      country: 'Malaysia',
+      address: 'Titiwangsa, Kuala Lumpur, Malaysia (3.6 km · Near Titiwangsa)',
+      star_rating: 4,
+      short_description:
+        '8.3 Very good (34 reviews) · 4-Star Hotel · 3.6 km straight-line distance · Near Titiwangsa · Ideal location.',
+      full_description:
+        'Dynasty Hotel by ibilik @ Kuala Lumpur is a 4-star high-rise hotel located near Titiwangsa in Kuala Lumpur. Rated 8.3 Very good for its spacious accommodation and ideal city connectivity.',
+      featured_image_url: '',
+      gallery_images: [],
+      amenities: [
+        'Ideal Location',
+        'Swimming Pool',
+        'Free High-Speed Wi-Fi',
+        'Air Conditioning',
+        '24-Hour Front Desk',
+      ],
+      check_in_time: '14:00',
+      check_out_time: '12:00',
+      cancellation_policy: 'Contact reservations for booking and cancellation details.',
+      contact_phone: '',
+      whatsapp_number: '',
+      contact_email: '',
+      google_maps_url: '',
+      google_maps_embed_url: '',
+      starting_price: 137,
+      currency: 'MYR',
+      is_featured: 1,
+      is_visible: 1,
+      display_order: 7,
+      created_at: now,
+      updated_at: now,
+    },
+    {
+      id: 8,
+      crm_hotel_id: 8,
+      name: 'SS Grey Hotel',
+      slug: 'ss-grey-hotel',
+      city: 'Kuala Lumpur',
+      country: 'Malaysia',
+      address: 'Bukit Bintang, Kuala Lumpur, Malaysia (<100m · Near Petronas Twin Towers)',
+      star_rating: 3,
+      short_description:
+        '8.5 Very good (278 reviews) · <100m from Bukit Bintang search center · Near Petronas Twin Towers · Ideal location.',
+      full_description:
+        'SS Grey Hotel is a 3-star hotel in the heart of Bukit Bintang, Kuala Lumpur (<100m from center, near Petronas Twin Towers). Rated 8.5 Very good across 278 reviews for its unbeatable central location and guest comfort.',
+      featured_image_url: '',
+      gallery_images: [],
+      amenities: [
+        'Ideal Location',
+        'Lounge Area',
+        'Free High-Speed Wi-Fi',
+        'Air Conditioning',
+        '24-Hour Front Desk',
+      ],
+      check_in_time: '14:00',
+      check_out_time: '12:00',
+      cancellation_policy: 'Contact reservations for booking and cancellation details.',
+      contact_phone: '',
+      whatsapp_number: '',
+      contact_email: '',
+      google_maps_url: '',
+      google_maps_embed_url: '',
+      starting_price: 93,
+      currency: 'MYR',
+      is_featured: 1,
+      is_visible: 1,
+      display_order: 8,
+      created_at: now,
+      updated_at: now,
+    },
+    {
+      id: 9,
+      crm_hotel_id: 9,
+      name: 'Swing & Pillows @ Imbi Bukit Bintang',
+      slug: 'swing-pillows-imbi-bukit-bintang',
+      city: 'Kuala Lumpur',
+      country: 'Malaysia',
+      address: 'Imbi, Bukit Bintang, Kuala Lumpur, Malaysia (650m · Near Petronas Twin Towers)',
+      star_rating: 2,
+      short_description:
+        '8.7 Very good (195 reviews) · 650m straight-line distance · Near Petronas Twin Towers · Excellent service.',
+      full_description:
+        'Swing & Pillows @ Imbi Bukit Bintang is a 2-star hotel in Imbi, Bukit Bintang, Kuala Lumpur (650m from center, near Petronas Twin Towers). Rated 8.7 Very good across 195 reviews and saved by 860 travelers for its excellent service and value.',
+      featured_image_url: '',
+      gallery_images: [],
+      amenities: ['Excellent Service', 'Free High-Speed Wi-Fi', 'Air Conditioning', 'Daily Housekeeping'],
+      check_in_time: '14:00',
+      check_out_time: '12:00',
+      cancellation_policy: 'Contact reservations for booking and cancellation details.',
+      contact_phone: '',
+      whatsapp_number: '',
+      contact_email: '',
+      google_maps_url: '',
+      google_maps_embed_url: '',
+      starting_price: 69,
+      currency: 'MYR',
+      is_featured: 1,
+      is_visible: 1,
+      display_order: 9,
+      created_at: now,
+      updated_at: now,
+    },
+  ];
+}
+
 function getInitialStore(): PublicSiteStore {
   const now = new Date().toISOString();
   return {
@@ -665,16 +983,16 @@ function getInitialStore(): PublicSiteStore {
       whatsapp_number: '',
       contact_email: '',
       address_line: '',
-      city: '',
-      country: '',
+      city: 'Kuala Lumpur',
+      country: 'Malaysia',
       postal_code: '',
       google_maps_url: '',
       google_maps_embed_url: '',
       social_links: {},
       reservation_url: '',
       reservation_button_text: 'Enquire Now',
-      check_in_time: '',
-      check_out_time: '',
+      check_in_time: '14:00',
+      check_out_time: '12:00',
       cancellation_policy: '',
       general_policies: '',
       footer_text: '',
@@ -707,7 +1025,7 @@ function getInitialStore(): PublicSiteStore {
       updated_at: now,
     },
     pages: getDefaultPages(now),
-    hotels: [],
+    hotels: getInitialKualaLumpurPublicHotels(now),
     rooms: [],
     facilities: [],
     gallery: [],
@@ -715,7 +1033,7 @@ function getInitialStore(): PublicSiteStore {
     snapshots: [],
     publications: [],
     nextIds: {
-      hotels: 1,
+      hotels: 10,
       rooms: 1,
       facilities: 1,
       gallery: 1,
@@ -735,7 +1053,7 @@ function loadStore(): PublicSiteStore {
       const raw = fs.readFileSync(STORE_PATH, 'utf-8');
       const parsed = JSON.parse(raw);
       const initial = getInitialStore();
-      return {
+      const loaded: PublicSiteStore & { kl_9_hotels_migrated_v1?: boolean } = {
         ...initial,
         ...parsed,
         settings: { ...initial.settings, ...(parsed.settings || {}) },
@@ -751,11 +1069,22 @@ function loadStore(): PublicSiteStore {
         publications: Array.isArray(parsed.publications) ? parsed.publications : [],
         nextIds: { ...initial.nextIds, ...(parsed.nextIds || {}) },
       };
+
+      if (!parsed.kl_9_hotels_migrated_v1) {
+        loaded.hotels = getInitialKualaLumpurPublicHotels(new Date().toISOString());
+        loaded.rooms = [];
+        loaded.nextIds.hotels = 10;
+        loaded.nextIds.rooms = 1;
+        loaded.kl_9_hotels_migrated_v1 = true;
+        saveStore(loaded);
+      }
+      return loaded;
     }
   } catch (err) {
     console.warn('[PublicSiteCMS] Failed to read local store, initializing clean store:', err);
   }
-  const fresh = getInitialStore();
+  const fresh = getInitialStore() as PublicSiteStore & { kl_9_hotels_migrated_v1?: boolean };
+  fresh.kl_9_hotels_migrated_v1 = true;
   saveStore(fresh);
   return fresh;
 }
@@ -1103,66 +1432,111 @@ async function ensureMySQLTablesAndSync(): Promise<void> {
           }
         }
 
-        if (Array.isArray(hotelRows) && hotelRows.length > 0) {
-          store.hotels = hotelRows.map((h: any) => ({
-            id: Number(h.id),
-            crm_hotel_id: h.crm_hotel_id !== null && h.crm_hotel_id !== undefined ? Number(h.crm_hotel_id) : null,
-            name: h.name || '',
-            slug: h.slug || '',
-            city: h.city || '',
-            country: h.country || '',
-            address: h.address || '',
-            star_rating: Number(h.star_rating ?? 5),
-            short_description: h.short_description || '',
-            full_description: h.full_description || '',
-            featured_image_url: h.featured_image_url || '',
-            gallery_images: safeJsonParse(h.gallery_images_json, []),
-            amenities: safeJsonParse(h.amenities_json, []),
-            check_in_time: h.check_in_time || '14:00',
-            check_out_time: h.check_out_time || '12:00',
-            cancellation_policy: h.cancellation_policy || '',
-            contact_phone: h.contact_phone || '',
-            whatsapp_number: h.whatsapp_number || '',
-            contact_email: h.contact_email || '',
-            google_maps_url: h.google_maps_url || '',
-            google_maps_embed_url: h.google_maps_embed_url || '',
-            starting_price: h.starting_price !== null && h.starting_price !== undefined ? Number(h.starting_price) : null,
-            currency: h.currency || 'USD',
-            is_featured: Number(h.is_featured ?? 1),
-            is_visible: Number(h.is_visible ?? 1),
-            display_order: Number(h.display_order || 1),
-            created_at: h.created_at ? new Date(h.created_at).toISOString() : new Date().toISOString(),
-            updated_at: h.updated_at ? new Date(h.updated_at).toISOString() : new Date().toISOString(),
-          }));
-          store.nextIds.hotels = Math.max(store.nextIds.hotels, ...store.hotels.map(h => h.id + 1));
-        }
+        // One-time MySQL migration for public_site_hotels & public_site_rooms to replace old hotels with the 9 KL hotels
+        const [pubKlMigRows]: any = await conn
+          .query("SELECT setting_value FROM settings WHERE setting_key = 'public_kl_9_hotels_migrated_v1' LIMIT 1")
+          .catch(() => [[]]);
+        const needsPubKlMigration = !Array.isArray(pubKlMigRows) || pubKlMigRows.length === 0;
 
-        if (Array.isArray(roomRows) && roomRows.length > 0) {
-          store.rooms = roomRows.map((r: any) => ({
-            id: Number(r.id),
-            hotel_id: Number(r.hotel_id ?? 0),
-            crm_room_id: r.crm_room_id !== null && r.crm_room_id !== undefined ? Number(r.crm_room_id) : null,
-            name: r.name || '',
-            slug: r.slug || '',
-            short_description: r.short_description || '',
-            full_description: r.full_description || '',
-            featured_image_url: r.featured_image_url || '',
-            gallery_images: safeJsonParse(r.gallery_images_json, []),
-            capacity: r.capacity || '',
-            bed_type: r.bed_type || '',
-            room_size: r.room_size || '',
-            amenities: safeJsonParse(r.amenities_json, []),
-            optional_price: r.optional_price !== null && r.optional_price !== undefined ? Number(r.optional_price) : null,
-            currency: r.currency || 'USD',
-            price_note: r.price_note || 'per night (indicative)',
-            enquiry_url: r.enquiry_url || '',
-            is_featured: Number(r.is_featured ?? 0),
-            is_visible: Number(r.is_visible ?? 1),
-            display_order: Number(r.display_order || 1),
-            created_at: r.created_at ? new Date(r.created_at).toISOString() : new Date().toISOString(),
-            updated_at: r.updated_at ? new Date(r.updated_at).toISOString() : new Date().toISOString(),
-          }));
-          store.nextIds.rooms = Math.max(store.nextIds.rooms, ...store.rooms.map(r => r.id + 1));
+        if (needsPubKlMigration) {
+          const klPubHotels = getInitialKualaLumpurPublicHotels(new Date().toISOString());
+          await conn.query('DELETE FROM public_site_rooms').catch(() => {});
+          await conn.query('DELETE FROM public_site_hotels').catch(() => {});
+          for (const h of klPubHotels) {
+            await conn
+              .query(
+                `INSERT INTO public_site_hotels (
+                  id, crm_hotel_id, name, slug, city, country, address, star_rating,
+                  short_description, full_description, featured_image_url, gallery_images_json,
+                  amenities_json, check_in_time, check_out_time, cancellation_policy,
+                  contact_phone, whatsapp_number, contact_email, google_maps_url, google_maps_embed_url,
+                  starting_price, currency, is_featured, is_visible, display_order
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                [
+                  h.id, h.crm_hotel_id, h.name, h.slug, h.city, h.country, h.address, h.star_rating,
+                  h.short_description, h.full_description, h.featured_image_url,
+                  JSON.stringify(h.gallery_images), JSON.stringify(h.amenities),
+                  h.check_in_time, h.check_out_time, h.cancellation_policy,
+                  h.contact_phone, h.whatsapp_number, h.contact_email,
+                  h.google_maps_url, h.google_maps_embed_url,
+                  h.starting_price, h.currency, h.is_featured, h.is_visible, h.display_order,
+                ]
+              )
+              .catch(() => {});
+          }
+          await conn
+            .query("INSERT INTO settings (setting_key, setting_value) VALUES ('public_kl_9_hotels_migrated_v1', '1') ON DUPLICATE KEY UPDATE setting_value = '1'")
+            .catch(() => {});
+          store.hotels = klPubHotels;
+          store.rooms = [];
+          store.nextIds.hotels = 10;
+          store.nextIds.rooms = 1;
+          (store as any).kl_9_hotels_migrated_v1 = true;
+          saveStore(store);
+        } else {
+          if (Array.isArray(hotelRows) && hotelRows.length > 0) {
+            store.hotels = hotelRows.map((h: any) => ({
+              id: Number(h.id),
+              crm_hotel_id: h.crm_hotel_id !== null && h.crm_hotel_id !== undefined ? Number(h.crm_hotel_id) : null,
+              name: h.name || '',
+              slug: h.slug || '',
+              city: h.city || '',
+              country: h.country || '',
+              address: h.address || '',
+              star_rating: Number(h.star_rating ?? 5),
+              short_description: h.short_description || '',
+              full_description: h.full_description || '',
+              featured_image_url: h.featured_image_url || '',
+              gallery_images: safeJsonParse(h.gallery_images_json, []),
+              amenities: safeJsonParse(h.amenities_json, []),
+              check_in_time: h.check_in_time || '14:00',
+              check_out_time: h.check_out_time || '12:00',
+              cancellation_policy: h.cancellation_policy || '',
+              contact_phone: h.contact_phone || '',
+              whatsapp_number: h.whatsapp_number || '',
+              contact_email: h.contact_email || '',
+              google_maps_url: h.google_maps_url || '',
+              google_maps_embed_url: h.google_maps_embed_url || '',
+              starting_price: h.starting_price !== null && h.starting_price !== undefined ? Number(h.starting_price) : null,
+              currency: h.currency || 'USD',
+              is_featured: Number(h.is_featured ?? 1),
+              is_visible: Number(h.is_visible ?? 1),
+              display_order: Number(h.display_order || 1),
+              created_at: h.created_at ? new Date(h.created_at).toISOString() : new Date().toISOString(),
+              updated_at: h.updated_at ? new Date(h.updated_at).toISOString() : new Date().toISOString(),
+            }));
+            store.nextIds.hotels = Math.max(store.nextIds.hotels, ...store.hotels.map(h => h.id + 1));
+          }
+
+          if (Array.isArray(roomRows)) {
+            store.rooms = roomRows.map((r: any) => ({
+              id: Number(r.id),
+              hotel_id: Number(r.hotel_id ?? 0),
+              crm_room_id: r.crm_room_id !== null && r.crm_room_id !== undefined ? Number(r.crm_room_id) : null,
+              name: r.name || '',
+              slug: r.slug || '',
+              short_description: r.short_description || '',
+              full_description: r.full_description || '',
+              featured_image_url: r.featured_image_url || '',
+              gallery_images: safeJsonParse(r.gallery_images_json, []),
+              capacity: r.capacity || '',
+              bed_type: r.bed_type || '',
+              room_size: r.room_size || '',
+              amenities: safeJsonParse(r.amenities_json, []),
+              optional_price: r.optional_price !== null && r.optional_price !== undefined ? Number(r.optional_price) : null,
+              currency: r.currency || 'USD',
+              price_note: r.price_note || 'per night (indicative)',
+              enquiry_url: r.enquiry_url || '',
+              is_featured: Number(r.is_featured ?? 0),
+              is_visible: Number(r.is_visible ?? 1),
+              display_order: Number(r.display_order || 1),
+              created_at: r.created_at ? new Date(r.created_at).toISOString() : new Date().toISOString(),
+              updated_at: r.updated_at ? new Date(r.updated_at).toISOString() : new Date().toISOString(),
+            }));
+            if (store.rooms.length > 0) {
+              store.nextIds.rooms = Math.max(store.nextIds.rooms, ...store.rooms.map(r => r.id + 1));
+            }
+          }
         }
 
         if (Array.isArray(facilityRows) && facilityRows.length > 0) {
