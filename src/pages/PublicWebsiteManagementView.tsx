@@ -76,6 +76,484 @@ const AVAILABLE_ICONS = [
   { value: 'Building2', label: 'Concierge / Hotel' },
 ];
 
+function extractDriveIdFromShareUrl(rawUrl?: string | null): string | null {
+  if (!rawUrl || typeof rawUrl !== 'string') return null;
+  const trimmed = rawUrl.trim();
+  if (!trimmed) return null;
+
+  const m1 = trimmed.match(/(?:drive|docs)\.google\.com\/file\/d\/([a-zA-Z0-9_-]+)/i);
+  if (m1 && m1[1]) return m1[1];
+
+  const m2 = trimmed.match(
+    /(?:drive|docs|drive\.usercontent)\.google\.com\/(?:open|uc|thumbnail|download)\?(?:[^#]*&)?id=([a-zA-Z0-9_-]+)/i
+  );
+  if (m2 && m2[1]) return m2[1];
+
+  const m3 = trimmed.match(/lh3\.googleusercontent\.com\/(?:u\/\d+\/)?d\/([a-zA-Z0-9_-]+)/i);
+  if (m3 && m3[1]) return m3[1];
+
+  return null;
+}
+
+function normalizeInstantGoogleShareUrl(rawUrl: string): {
+  normalizedUrl: string;
+  wasConverted: boolean;
+  needsServerResolve: boolean;
+} {
+  const trimmed = (rawUrl || '').trim();
+  if (!trimmed) {
+    return { normalizedUrl: '', wasConverted: false, needsServerResolve: false };
+  }
+
+  const driveId = extractDriveIdFromShareUrl(trimmed);
+  if (driveId) {
+    const directUrl = `https://lh3.googleusercontent.com/d/${driveId}`;
+    return {
+      normalizedUrl: directUrl,
+      wasConverted: directUrl !== trimmed,
+      needsServerResolve: true,
+    };
+  }
+
+  if (/google\.com\/imgres\?/i.test(trimmed)) {
+    try {
+      const parsed = new URL(trimmed);
+      const imgurl = parsed.searchParams.get('imgurl');
+      if (imgurl && /^https?:\/\//i.test(imgurl)) {
+        return {
+          normalizedUrl: imgurl.trim(),
+          wasConverted: true,
+          needsServerResolve: false,
+        };
+      }
+    } catch {}
+  }
+
+  if (
+    /photos\.app\.goo\.gl|photos\.google\.com\/share|images\.app\.goo\.gl|goo\.gl\/images|drive\.google\.com\/drive\/(?:u\/\d+\/)?folders\//i.test(
+      trimmed
+    )
+  ) {
+    return {
+      normalizedUrl: trimmed,
+      wasConverted: false,
+      needsServerResolve: true,
+    };
+  }
+
+  if (/dropbox\.com\/.+/i.test(trimmed) && trimmed.includes('dl=0')) {
+    return {
+      normalizedUrl: trimmed.replace('dl=0', 'raw=1'),
+      wasConverted: true,
+      needsServerResolve: false,
+    };
+  }
+
+  return { normalizedUrl: trimmed, wasConverted: false, needsServerResolve: false };
+}
+
+function getPreviewCandidates(url?: string | null): string[] {
+  const raw = (url || '').trim();
+  if (!raw) return [];
+  if (raw.startsWith('data:image/')) return [raw];
+
+  const driveId = extractDriveIdFromShareUrl(raw);
+  if (driveId) {
+    return [
+      `/api/proxy-image?url=${encodeURIComponent(`https://lh3.googleusercontent.com/d/${driveId}`)}&fallback=404`,
+      `https://lh3.googleusercontent.com/d/${driveId}`,
+      `https://drive.google.com/thumbnail?id=${driveId}&sz=w1600`,
+      `https://drive.google.com/uc?export=view&id=${driveId}`,
+    ];
+  }
+
+  if (/^https?:\/\//i.test(raw)) {
+    return [
+      `/api/proxy-image?url=${encodeURIComponent(raw)}&fallback=404`,
+      raw,
+    ];
+  }
+
+  return [raw];
+}
+
+const SmartCmsPreviewImage: React.FC<{
+  url?: string | null;
+  alt: string;
+  className?: string;
+  fallbackIcon?: React.ReactNode;
+}> = ({ url, alt, className = 'w-full h-full object-cover', fallbackIcon }) => {
+  const candidates = React.useMemo(() => getPreviewCandidates(url), [url]);
+  const [idx, setIdx] = useState(0);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    setIdx(0);
+    setFailed(false);
+  }, [url]);
+
+  if (!url || !url.trim() || failed || candidates.length === 0) {
+    return (
+      <div className="w-full h-full flex items-center justify-center text-slate-400 bg-slate-100">
+        {fallbackIcon || <ImageIcon className="w-5 h-5" />}
+      </div>
+    );
+  }
+
+  return (
+    <img
+      src={candidates[idx]}
+      alt={alt}
+      referrerPolicy="no-referrer"
+      className={className}
+      onError={() => {
+        if (idx + 1 < candidates.length) {
+          setIdx((prev) => prev + 1);
+        } else {
+          setFailed(true);
+        }
+      }}
+    />
+  );
+};
+
+const GoogleShareImageField: React.FC<{
+  label: string;
+  value: string;
+  onChange: (newUrl: string) => void;
+  placeholder?: string;
+  required?: boolean;
+  helperSaveHint?: string;
+  allowUpload?: boolean;
+  previewAspect?: 'wide' | 'square';
+}> = ({
+  label,
+  value,
+  onChange,
+  placeholder = 'Paste Google Drive share link, Google Photos link, or image URL...',
+  required = false,
+  helperSaveHint,
+  allowUpload = true,
+  previewAspect = 'wide',
+}) => {
+  const [resolving, setResolving] = useState(false);
+  const [statusInfo, setStatusInfo] = useState<{
+    type: 'success' | 'warning' | 'error';
+    text: string;
+  } | null>(null);
+
+  const handleResolveUrl = async (inputUrl: string) => {
+    const trimmed = (inputUrl || '').trim();
+    if (!trimmed) {
+      setStatusInfo(null);
+      return;
+    }
+
+    const { normalizedUrl, wasConverted, needsServerResolve } =
+      normalizeInstantGoogleShareUrl(trimmed);
+
+    if (wasConverted && normalizedUrl !== value) {
+      onChange(normalizedUrl);
+    }
+
+    if (!needsServerResolve && !wasConverted) {
+      return;
+    }
+
+    try {
+      setResolving(true);
+      const res = await api.resolveGoogleShareLink(trimmed);
+      if (res.resolved_url) {
+        onChange(res.resolved_url);
+      }
+      setStatusInfo({
+        type: res.accessible ? 'success' : 'warning',
+        text: res.message,
+      });
+    } catch (err: any) {
+      if (wasConverted) {
+        setStatusInfo({
+          type: 'success',
+          text: 'Converted Google share link to direct picture URL.',
+        });
+      } else {
+        setStatusInfo({
+          type: 'error',
+          text: err.message || 'Could not pull picture from link.',
+        });
+      }
+    } finally {
+      setResolving(false);
+    }
+  };
+
+  const handleUploadFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        const maxW = 1400;
+        const scale = img.width > maxW ? maxW / img.width : 1;
+        canvas.width = Math.round(img.width * scale);
+        canvas.height = Math.round(img.height * scale);
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+          const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+          onChange(dataUrl);
+          setStatusInfo({
+            type: 'success',
+            text: `Uploaded picture (${canvas.width}×${canvas.height}px).`,
+          });
+        }
+      };
+      if (typeof reader.result === 'string') {
+        img.src = reader.result;
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const driveId = extractDriveIdFromShareUrl(value);
+
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <label className="block text-xs font-semibold text-slate-700">{label}</label>
+        <div className="flex items-center gap-1.5">
+          {value && !value.startsWith('data:image/') && (
+            <button
+              type="button"
+              onClick={() => handleResolveUrl(value)}
+              disabled={resolving}
+              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-sky-50 hover:bg-sky-100 border border-sky-200 text-sky-800 text-[11px] font-semibold cursor-pointer transition"
+              title="Pull picture from Google Drive / Google Photos share link"
+            >
+              <RefreshCw className={`w-3 h-3 ${resolving ? 'animate-spin' : ''}`} />
+              <span>{resolving ? 'Pulling...' : 'Pull Picture'}</span>
+            </button>
+          )}
+          {allowUpload && (
+            <label className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-800 text-[11px] font-semibold cursor-pointer transition">
+              <ImageIcon className="w-3.5 h-3.5" />
+              <span>Upload Picture</span>
+              <input
+                type="file"
+                accept="image/*"
+                className="hidden"
+                onChange={handleUploadFile}
+              />
+            </label>
+          )}
+        </div>
+      </div>
+
+      <input
+        type="text"
+        required={required}
+        value={value}
+        onChange={(e) => {
+          const nextVal = e.target.value;
+          const { normalizedUrl, wasConverted, needsServerResolve } =
+            normalizeInstantGoogleShareUrl(nextVal);
+          onChange(wasConverted ? normalizedUrl : nextVal);
+          if (wasConverted || needsServerResolve) {
+            handleResolveUrl(nextVal);
+          } else {
+            setStatusInfo(null);
+          }
+        }}
+        onPaste={(e) => {
+          const pasted = e.clipboardData?.getData('text') || '';
+          if (pasted.trim()) {
+            setTimeout(() => {
+              handleResolveUrl(pasted.trim());
+            }, 30);
+          }
+        }}
+        placeholder={placeholder}
+        className="w-full px-3.5 py-2 text-sm bg-white border border-slate-300 rounded-lg focus:outline-none focus:border-slate-900"
+      />
+
+      {statusInfo && (
+        <div
+          className={`text-[11px] px-2.5 py-1.5 rounded-lg border flex items-center gap-1.5 ${
+            statusInfo.type === 'success'
+              ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+              : statusInfo.type === 'warning'
+              ? 'bg-amber-50 border-amber-200 text-amber-800'
+              : 'bg-rose-50 border-rose-200 text-rose-800'
+          }`}
+        >
+          <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+          <span>{statusInfo.text}</span>
+        </div>
+      )}
+
+      {value && (
+        <div className="flex items-center gap-3 p-2.5 rounded-lg bg-slate-50 border border-slate-200">
+          <div
+            className={`${
+              previewAspect === 'square' ? 'w-14 h-14' : 'w-24 h-14'
+            } rounded-md border border-slate-200 bg-slate-900 overflow-hidden shrink-0`}
+          >
+            <SmartCmsPreviewImage
+              url={value}
+              alt={label}
+              className={`w-full h-full ${
+                previewAspect === 'square' ? 'object-contain p-1' : 'object-cover'
+              }`}
+            />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-xs font-semibold text-slate-800">
+              {driveId
+                ? `Google Share Link Picture Connected (ID: ${driveId.slice(0, 10)}...)`
+                : value.startsWith('data:image/')
+                ? 'Uploaded Picture Ready'
+                : 'Picture Connected'}
+            </p>
+            <p className="text-[11px] text-slate-500 truncate">
+              {helperSaveHint || 'Paste any Google Drive or Google Photos share link to pull the picture.'}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => {
+              onChange('');
+              setStatusInfo(null);
+            }}
+            className="px-2.5 py-1 text-xs font-medium text-rose-600 hover:bg-rose-50 rounded-md cursor-pointer shrink-0"
+          >
+            Remove
+          </button>
+        </div>
+      )}
+    </div>
+  );
+};
+
+const GoogleShareGalleryField: React.FC<{
+  label: string;
+  value: string;
+  onChange: (newValue: string) => void;
+  placeholder?: string;
+}> = ({ label, value, onChange, placeholder }) => {
+  const [resolving, setResolving] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const normalizeLines = async (rawText: string) => {
+    const lines = rawText
+      .split('\n')
+      .map((l) => l.trim())
+      .filter(Boolean);
+    if (lines.length === 0) return;
+
+    setResolving(true);
+    setNotice(null);
+    try {
+      const resultUrls: string[] = [];
+      for (const line of lines) {
+        const { normalizedUrl, wasConverted, needsServerResolve } =
+          normalizeInstantGoogleShareUrl(line);
+        if (needsServerResolve) {
+          try {
+            const res = await api.resolveGoogleShareLink(line);
+            if (Array.isArray(res.gallery_urls) && res.gallery_urls.length > 0) {
+              resultUrls.push(...res.gallery_urls);
+            } else if (res.resolved_url) {
+              resultUrls.push(res.resolved_url);
+            } else {
+              resultUrls.push(normalizedUrl);
+            }
+          } catch {
+            resultUrls.push(normalizedUrl);
+          }
+        } else {
+          resultUrls.push(wasConverted ? normalizedUrl : line);
+        }
+      }
+      const unique = Array.from(new Set(resultUrls.filter(Boolean)));
+      onChange(unique.join('\n'));
+      setNotice(`Pulled ${unique.length} picture${unique.length === 1 ? '' : 's'} from links.`);
+    } finally {
+      setResolving(false);
+    }
+  };
+
+  const previewUrls = Array.from(
+    new Set(
+      value
+        .split('\n')
+        .map((s) => s.trim())
+        .filter(Boolean)
+    )
+  );
+
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <label className="block text-xs font-semibold text-slate-700">{label}</label>
+        <button
+          type="button"
+          onClick={() => normalizeLines(value)}
+          disabled={resolving || !value.trim()}
+          className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-sky-50 hover:bg-sky-100 border border-sky-200 text-sky-800 text-[11px] font-semibold cursor-pointer disabled:opacity-40 transition"
+        >
+          <RefreshCw className={`w-3 h-3 ${resolving ? 'animate-spin' : ''}`} />
+          <span>{resolving ? 'Pulling Pictures...' : 'Pull Pictures from Google Links'}</span>
+        </button>
+      </div>
+
+      <textarea
+        rows={3}
+        value={value}
+        onChange={(e) => {
+          const raw = e.target.value;
+          const convertedLines = raw
+            .split('\n')
+            .map((line) => {
+              const { normalizedUrl, wasConverted } = normalizeInstantGoogleShareUrl(line);
+              return wasConverted ? normalizedUrl : line;
+            })
+            .join('\n');
+          onChange(convertedLines);
+        }}
+        placeholder={
+          placeholder ||
+          'Paste one Google Drive share link, Google Photos link, or Google Drive Folder link per line...'
+        }
+        className="w-full px-3.5 py-2 text-xs font-mono bg-white border border-slate-300 rounded-lg"
+      />
+
+      {notice && (
+        <p className="text-[11px] text-emerald-700 font-medium">{notice}</p>
+      )}
+
+      {previewUrls.length > 0 && (
+        <div className="pt-1">
+          <span className="text-[11px] font-semibold text-slate-500 block mb-1.5">
+            Pulled Gallery Previews ({previewUrls.length}):
+          </span>
+          <div className="flex items-center gap-2 overflow-x-auto pb-1">
+            {previewUrls.map((u, i) => (
+              <div
+                key={i}
+                className="w-20 h-14 rounded-lg border border-slate-300 overflow-hidden shrink-0 bg-slate-900 relative group"
+              >
+                <SmartCmsPreviewImage url={u} alt={`Photo ${i + 1}`} />
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 export const PublicWebsiteManagementView: React.FC<PublicWebsiteManagementViewProps> = ({
   currentUser,
 }) => {
@@ -485,7 +963,7 @@ export const PublicWebsiteManagementView: React.FC<PublicWebsiteManagementViewPr
 
         {previewDeviceMode === 'mobile' ? (
           <div className="py-6 px-2 flex justify-center bg-slate-900 min-h-[calc(100vh-45px)]">
-            <div className="w-full max-w-[395px] bg-[#FAF8F5] rounded-[32px] border-[8px] border-slate-800 shadow-2xl overflow-hidden relative">
+            <div className="w-full max-w-[395px] bg-white rounded-[32px] border-[8px] border-slate-800 shadow-2xl overflow-hidden relative">
               <PublicHotelWebsiteRenderer
                 snapshot={previewSnapshot}
                 isPreview={false}
@@ -949,11 +1427,10 @@ export const PublicWebsiteManagementView: React.FC<PublicWebsiteManagementViewPr
                         <div className="flex items-start gap-4">
                           <div className="w-24 h-18 rounded-lg bg-slate-200 border border-slate-300 overflow-hidden shrink-0 flex items-center justify-center">
                             {hotel.featured_image_url || (hotel.gallery_images && hotel.gallery_images[0]) ? (
-                              <img
-                                src={hotel.featured_image_url || hotel.gallery_images[0]}
+                              <SmartCmsPreviewImage
+                                url={hotel.featured_image_url || hotel.gallery_images[0]}
                                 alt={hotel.name}
-                                referrerPolicy="no-referrer"
-                                className="w-full h-full object-cover"
+                                fallbackIcon={<Building2 className="w-6 h-6 text-slate-400" />}
                               />
                             ) : (
                               <Building2 className="w-6 h-6 text-slate-400" />
@@ -1133,11 +1610,10 @@ export const PublicWebsiteManagementView: React.FC<PublicWebsiteManagementViewPr
                                     <div className="flex items-start gap-3.5">
                                       <div className="w-24 h-20 rounded-lg bg-slate-200 border border-slate-300 overflow-hidden shrink-0 flex items-center justify-center relative">
                                         {allPhotos[0] ? (
-                                          <img
-                                            src={allPhotos[0]}
+                                          <SmartCmsPreviewImage
+                                            url={allPhotos[0]}
                                             alt={room.name}
-                                            referrerPolicy="no-referrer"
-                                            className="w-full h-full object-cover"
+                                            fallbackIcon={<BedDouble className="w-5 h-5 text-slate-400" />}
                                           />
                                         ) : (
                                           <BedDouble className="w-5 h-5 text-slate-400" />
@@ -1297,11 +1773,10 @@ export const PublicWebsiteManagementView: React.FC<PublicWebsiteManagementViewPr
                         <div className="flex items-start gap-4">
                           <div className="w-24 h-16 rounded-lg bg-slate-100 border border-slate-200 overflow-hidden shrink-0 flex items-center justify-center relative">
                             {room.featured_image_url || (room.gallery_images && room.gallery_images[0]) ? (
-                              <img
-                                src={room.featured_image_url || room.gallery_images[0]}
+                              <SmartCmsPreviewImage
+                                url={room.featured_image_url || room.gallery_images[0]}
                                 alt={room.name}
-                                referrerPolicy="no-referrer"
-                                className="w-full h-full object-cover"
+                                fallbackIcon={<BedDouble className="w-5 h-5 text-slate-400" />}
                               />
                             ) : (
                               <BedDouble className="w-5 h-5 text-slate-400" />
@@ -1494,24 +1969,34 @@ export const PublicWebsiteManagementView: React.FC<PublicWebsiteManagementViewPr
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">Logo URL</label>
-              <input
-                type="url"
+              <GoogleShareImageField
+                label="Website Logo (Google Share Link, URL, or Upload)"
                 value={settingsForm.logo_url}
-                onChange={(e) => setSettingsForm({ ...settingsForm, logo_url: e.target.value })}
-                placeholder="https://.../logo.png"
-                className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg"
+                onChange={(newUrl) => setSettingsForm({ ...settingsForm, logo_url: newUrl })}
+                placeholder="Paste Google Drive share link or https://.../logo.png"
+                previewAspect="square"
+                helperSaveHint="Click 'Save Brand Info' above to save your logo."
               />
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">Favicon URL</label>
-              <input
-                type="url"
+              <GoogleShareImageField
+                label="Favicon (Google Share Link, URL, or Upload)"
                 value={settingsForm.favicon_url}
-                onChange={(e) => setSettingsForm({ ...settingsForm, favicon_url: e.target.value })}
-                placeholder="https://.../favicon.png"
-                className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg"
+                onChange={(newUrl) => setSettingsForm({ ...settingsForm, favicon_url: newUrl })}
+                placeholder="Paste Google Drive share link or https://.../favicon.png"
+                previewAspect="square"
+                helperSaveHint="Click 'Save Brand Info' above to save your favicon."
+              />
+            </div>
+
+            <div className="md:col-span-2 pt-2 border-t border-slate-100">
+              <GoogleShareImageField
+                label="Hero Section Background Picture (Google Share Link, URL, or Upload)"
+                value={settingsForm.hero_image_url}
+                onChange={(newUrl) => setSettingsForm({ ...settingsForm, hero_image_url: newUrl })}
+                placeholder="Paste Google Drive share link, Google Photos link, or https://.../hero.jpg"
+                helperSaveHint="Click 'Save Brand Info' above to save this Hero Background Picture."
               />
             </div>
           </div>
@@ -1800,13 +2285,12 @@ export const PublicWebsiteManagementView: React.FC<PublicWebsiteManagementViewPr
             </div>
 
             <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">Hero Background Image URL</label>
-              <input
-                type="url"
+              <GoogleShareImageField
+                label="Hero Background Picture (Google Share Link, URL, or Upload)"
                 value={settingsForm.hero_image_url}
-                onChange={(e) => setSettingsForm({ ...settingsForm, hero_image_url: e.target.value })}
-                placeholder="https://.../hero.jpg"
-                className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg"
+                onChange={(newUrl) => setSettingsForm({ ...settingsForm, hero_image_url: newUrl })}
+                placeholder="Paste Google Drive share link, Google Photos link, or https://.../hero.jpg"
+                helperSaveHint="Click 'Save Homepage' above to persist changes."
               />
             </div>
 
@@ -2037,13 +2521,11 @@ export const PublicWebsiteManagementView: React.FC<PublicWebsiteManagementViewPr
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Optional Image URL</label>
-                  <input
-                    type="url"
+                  <GoogleShareImageField
+                    label="Optional Image (Google Share Link or URL)"
                     value={editingFacility.image_url || ''}
-                    onChange={(e) => setEditingFacility({ ...editingFacility, image_url: e.target.value })}
-                    placeholder="https://..."
-                    className="w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg"
+                    onChange={(newUrl) => setEditingFacility({ ...editingFacility, image_url: newUrl })}
+                    placeholder="Paste Google Drive share link or https://..."
                   />
                 </div>
               </div>
@@ -2186,14 +2668,12 @@ export const PublicWebsiteManagementView: React.FC<PublicWebsiteManagementViewPr
             >
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="sm:col-span-2">
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">Image URL *</label>
-                  <input
-                    type="url"
+                  <GoogleShareImageField
+                    label="Photo URL or Google Shareable Link *"
                     required
                     value={editingGallery.image_url || ''}
-                    onChange={(e) => setEditingGallery({ ...editingGallery, image_url: e.target.value })}
-                    placeholder="https://.../photo.jpg"
-                    className="w-full px-3 py-2 text-sm bg-white border border-slate-300 rounded-lg"
+                    onChange={(newUrl) => setEditingGallery({ ...editingGallery, image_url: newUrl })}
+                    placeholder="Paste Google Drive share link, Google Photos link, or https://.../photo.jpg"
                   />
                 </div>
                 <div>
@@ -2267,11 +2747,9 @@ export const PublicWebsiteManagementView: React.FC<PublicWebsiteManagementViewPr
                 <div key={item.id} className="border border-slate-200 rounded-xl overflow-hidden bg-white flex flex-col justify-between">
                   <div>
                     <div className="aspect-[4/3] bg-slate-900 overflow-hidden">
-                      <img
-                        src={item.image_url}
+                      <SmartCmsPreviewImage
+                        url={item.image_url}
                         alt={item.alt_text}
-                        referrerPolicy="no-referrer"
-                        className="w-full h-full object-cover"
                       />
                     </div>
                     <div className="p-3.5">
@@ -2669,13 +3147,11 @@ export const PublicWebsiteManagementView: React.FC<PublicWebsiteManagementViewPr
               />
             </div>
             <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">Social Sharing Image URL</label>
-              <input
-                type="url"
+              <GoogleShareImageField
+                label="Social Sharing (OG) Image (Google Share Link or URL)"
                 value={settingsForm.og_image_url}
-                onChange={(e) => setSettingsForm({ ...settingsForm, og_image_url: e.target.value })}
-                placeholder="https://.../og-share.jpg"
-                className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg"
+                onChange={(newUrl) => setSettingsForm({ ...settingsForm, og_image_url: newUrl })}
+                placeholder="Paste Google Drive share link or https://.../og-share.jpg"
               />
             </div>
 
@@ -2894,15 +3370,13 @@ export const PublicWebsiteManagementView: React.FC<PublicWebsiteManagementViewPr
               </div>
 
               <div className="sm:col-span-2">
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Main Cover Photo URL
-                </label>
-                <input
-                  type="url"
+                <GoogleShareImageField
+                  label="Main Cover Photo (Google Share Link, URL, or Upload)"
                   value={editingHotel.featured_image_url || ''}
-                  onChange={(e) => setEditingHotel({ ...editingHotel, featured_image_url: e.target.value })}
-                  placeholder="https://.../hotel-exterior.jpg"
-                  className="w-full px-3.5 py-2 text-sm border border-slate-300 rounded-lg"
+                  onChange={(newUrl) =>
+                    setEditingHotel({ ...editingHotel, featured_image_url: newUrl })
+                  }
+                  placeholder="Paste Google Drive share link, Google Photos link, or https://..."
                 />
               </div>
 
@@ -2935,15 +3409,13 @@ export const PublicWebsiteManagementView: React.FC<PublicWebsiteManagementViewPr
               </div>
 
               <div className="sm:col-span-3">
-                <label className="block text-xs font-semibold text-slate-700 mb-1">
-                  Additional Hotel Gallery Photo URLs (One image URL per line)
-                </label>
-                <textarea
-                  rows={3}
+                <GoogleShareGalleryField
+                  label="Additional Hotel Gallery Photos (Paste Google Share Links or Image URLs — One per line)"
                   value={hotelGalleryInput}
-                  onChange={(e) => setHotelGalleryInput(e.target.value)}
-                  placeholder={'https://.../lobby.jpg\nhttps://.../restaurant.jpg\nhttps://.../pool.jpg'}
-                  className="w-full px-3.5 py-2 text-xs font-mono border border-slate-300 rounded-lg"
+                  onChange={setHotelGalleryInput}
+                  placeholder={
+                    'https://drive.google.com/file/d/.../view?usp=sharing\nhttps://.../lobby.jpg\nhttps://.../pool.jpg'
+                  }
                 />
               </div>
 
@@ -3225,66 +3697,24 @@ export const PublicWebsiteManagementView: React.FC<PublicWebsiteManagementViewPr
               </div>
 
               {/* Room Pictures Section */}
-              <div className="sm:col-span-2 p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-3">
-                <label className="block text-xs font-bold text-slate-800">
-                  Main Room Picture URL
-                </label>
-                <input
-                  type="url"
+              <div className="sm:col-span-2 p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-4">
+                <GoogleShareImageField
+                  label="Main Room Picture (Google Share Link, URL, or Upload)"
                   value={editingRoom.featured_image_url || ''}
-                  onChange={(e) => setEditingRoom({ ...editingRoom, featured_image_url: e.target.value })}
-                  placeholder="https://.../deluxe-room-main.jpg"
-                  className="w-full px-3.5 py-2 text-sm bg-white border border-slate-300 rounded-lg"
+                  onChange={(newUrl) =>
+                    setEditingRoom({ ...editingRoom, featured_image_url: newUrl })
+                  }
+                  placeholder="Paste Google Drive share link, Google Photos link, or https://..."
                 />
 
-                <label className="block text-xs font-bold text-slate-800 pt-1">
-                  Additional Room Pictures (One Image URL per line — Bedroom, Bathroom, View, etc.)
-                </label>
-                <textarea
-                  rows={3}
+                <GoogleShareGalleryField
+                  label="Additional Room Pictures (Paste Google Share Links or Image URLs — One per line)"
                   value={roomGalleryInput}
-                  onChange={(e) => setRoomGalleryInput(e.target.value)}
-                  placeholder={'https://.../room-angle-2.jpg\nhttps://.../room-bathroom.jpg\nhttps://.../room-balcony.jpg'}
-                  className="w-full px-3.5 py-2 text-xs font-mono bg-white border border-slate-300 rounded-lg"
+                  onChange={setRoomGalleryInput}
+                  placeholder={
+                    'https://drive.google.com/file/d/.../view?usp=sharing\nhttps://.../room-bathroom.jpg\nhttps://.../room-balcony.jpg'
+                  }
                 />
-
-                {/* Live Thumbnail Previews */}
-                {(() => {
-                  const previewUrls = Array.from(
-                    new Set(
-                      [
-                        editingRoom.featured_image_url?.trim(),
-                        ...roomGalleryInput
-                          .split('\n')
-                          .map((s) => s.trim())
-                          .filter(Boolean),
-                      ].filter(Boolean)
-                    )
-                  );
-                  if (previewUrls.length === 0) return null;
-                  return (
-                    <div className="pt-2">
-                      <span className="text-[11px] font-semibold text-slate-500 block mb-1.5">
-                        Room Photo Previews ({previewUrls.length}):
-                      </span>
-                      <div className="flex items-center gap-2 overflow-x-auto pb-1">
-                        {previewUrls.map((url, i) => (
-                          <div
-                            key={i}
-                            className="w-20 h-14 rounded-lg border border-slate-300 overflow-hidden shrink-0 bg-slate-200"
-                          >
-                            <img
-                              src={url}
-                              alt={`Preview ${i + 1}`}
-                              referrerPolicy="no-referrer"
-                              className="w-full h-full object-cover"
-                            />
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  );
-                })()}
               </div>
 
               <div className="sm:col-span-2">

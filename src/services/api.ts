@@ -1042,6 +1042,22 @@ class ApiService {
     });
   }
 
+  async resolveGoogleShareLink(url: string): Promise<{
+    original_url: string;
+    resolved_url: string;
+    proxy_url: string;
+    file_id: string | null;
+    source_type: 'google_drive' | 'google_drive_folder' | 'google_photos' | 'google_images' | 'direct_url';
+    accessible: boolean;
+    gallery_urls: string[];
+    message: string;
+  }> {
+    return this.request('/public-site/admin/resolve-google-link', {
+      method: 'POST',
+      body: JSON.stringify({ url }),
+    });
+  }
+
   async updatePublicSitePage(slug: string, data: Partial<PublicSitePage>): Promise<PublicSitePage> {
     return this.request<PublicSitePage>(`/public-site/admin/pages/${encodeURIComponent(slug)}`, {
       method: 'PUT',

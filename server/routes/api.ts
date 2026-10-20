@@ -1663,21 +1663,52 @@ apiRouter.get('/proxy-image', async (req: Request, res: Response) => {
     return res.status(400).send('Malformed URL');
   }
 
-  // Extract Google Drive File ID if present
+  // Extract Google Drive File ID or resolve Google Shareable Link if present
   let candidateUrls: string[] = [];
-  const driveFileMatch = imageUrl.match(/drive\.google\.com\/file\/d\/([a-zA-Z0-9_-]+)/i);
-  const driveIdMatch = imageUrl.match(/drive\.google\.com\/(?:open|uc|thumbnail)\?(?:[a-zA-Z0-9_=&-]*)*id=([a-zA-Z0-9_-]+)/i);
-  const lh3Match = imageUrl.match(/lh3\.googleusercontent\.com\/d\/([a-zA-Z0-9_-]+)/i);
+  const driveFileMatch = imageUrl.match(/(?:drive|docs)\.google\.com\/file\/d\/([a-zA-Z0-9_-]+)/i);
+  const driveIdMatch = imageUrl.match(/(?:drive|docs|drive\.usercontent)\.google\.com\/(?:open|uc|thumbnail|download)\?(?:[^#]*&)?id=([a-zA-Z0-9_-]+)/i);
+  const lh3Match = imageUrl.match(/lh3\.googleusercontent\.com\/(?:u\/\d+\/)?d\/([a-zA-Z0-9_-]+)/i);
 
   const fileId = (driveFileMatch && driveFileMatch[1]) || (driveIdMatch && driveIdMatch[1]) || (lh3Match && lh3Match[1]);
 
   if (fileId) {
     candidateUrls = [
+      `https://lh3.googleusercontent.com/d/${fileId}=w1600`,
       `https://lh3.googleusercontent.com/d/${fileId}`,
-      `https://drive.google.com/thumbnail?id=${fileId}&sz=w1000`,
+      `https://drive.google.com/thumbnail?id=${fileId}&sz=w1600`,
+      `https://drive.usercontent.google.com/download?id=${fileId}&export=view`,
       `https://drive.google.com/uc?export=download&id=${fileId}`,
-      `https://drive.google.com/thumbnail?id=${fileId}&sz=w800`,
+      `https://drive.google.com/thumbnail?id=${fileId}&sz=w1000`,
     ];
+  } else if (/google\.com\/imgres\?/i.test(imageUrl)) {
+    try {
+      const u = new URL(imageUrl);
+      const imgurl = u.searchParams.get('imgurl');
+      if (imgurl) candidateUrls.push(imgurl);
+    } catch {}
+    candidateUrls.push(imageUrl);
+  } else if (/photos\.app\.goo\.gl|photos\.google\.com\/share|images\.app\.goo\.gl/i.test(imageUrl)) {
+    try {
+      const pageResp = await fetch(imageUrl, {
+        signal: AbortSignal.timeout(7000),
+        redirect: 'follow',
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        },
+      });
+      if (pageResp.ok) {
+        const html = await pageResp.text();
+        const ogMatch =
+          html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i) ||
+          html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i);
+        if (ogMatch && ogMatch[1]) {
+          const rawOg = ogMatch[1].replace(/&amp;/g, '&');
+          const hiResOg = rawOg.replace(/=w\d+-h\d+[^"'\s]*/i, '=w1600');
+          candidateUrls.push(hiResOg, rawOg);
+        }
+      }
+    } catch {}
+    candidateUrls.push(imageUrl);
   } else if (imageUrl.includes('dropbox.com')) {
     candidateUrls = [imageUrl.replace('dl=0', 'raw=1')];
   } else {

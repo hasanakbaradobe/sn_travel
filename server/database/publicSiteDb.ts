@@ -444,6 +444,25 @@ const STORE_PATH = path.join(DATA_DIR, 'public-site-store.json');
 // --------------------------------------------------------------------------
 // URL & Text Sanitization Helpers (Prevent XSS & Unsafe Schemes)
 // --------------------------------------------------------------------------
+export function extractGoogleShareFileId(rawUrl: string): string | null {
+  if (!rawUrl || typeof rawUrl !== 'string') return null;
+  const trimmed = rawUrl.trim();
+  if (!trimmed) return null;
+
+  const driveFileMatch = trimmed.match(/(?:drive|docs)\.google\.com\/file\/d\/([a-zA-Z0-9_-]+)/i);
+  if (driveFileMatch && driveFileMatch[1]) return driveFileMatch[1];
+
+  const driveIdMatch = trimmed.match(
+    /(?:drive|docs|drive\.usercontent)\.google\.com\/(?:open|uc|thumbnail|download)\?(?:[^#]*&)?id=([a-zA-Z0-9_-]+)/i
+  );
+  if (driveIdMatch && driveIdMatch[1]) return driveIdMatch[1];
+
+  const lh3Match = trimmed.match(/lh3\.googleusercontent\.com\/(?:u\/\d+\/)?d\/([a-zA-Z0-9_-]+)/i);
+  if (lh3Match && lh3Match[1]) return lh3Match[1];
+
+  return null;
+}
+
 export function sanitizePublicUrl(rawUrl: unknown): string {
   if (typeof rawUrl !== 'string') return '';
   const trimmed = rawUrl.trim();
@@ -461,8 +480,30 @@ export function sanitizePublicUrl(rawUrl: unknown): string {
   }
 
   // Reject overly large inline Base64 data URLs to prevent DB bloat
-  if (lower.startsWith('data:image/') && trimmed.length > 250000) {
-    throw new Error('Large Base64 image strings are not permitted in MySQL. Please use a hosted image URL (e.g., Cloudinary, S3, or CDN URL).');
+  if (lower.startsWith('data:image/') && trimmed.length > 2500000) {
+    throw new Error('Large Base64 image strings are not permitted in MySQL. Please use a hosted image URL or Google Drive share link.');
+  }
+
+  // Automatically convert Google Drive shareable links to direct embeddable image stream URL
+  const driveFileId = extractGoogleShareFileId(trimmed);
+  if (driveFileId) {
+    return `https://lh3.googleusercontent.com/d/${driveFileId}`;
+  }
+
+  // Automatically extract direct image URL from Google Images share link (google.com/imgres?imgurl=...)
+  if (/google\.com\/imgres\?/i.test(trimmed)) {
+    try {
+      const parsed = new URL(trimmed);
+      const imgurl = parsed.searchParams.get('imgurl');
+      if (imgurl && /^https?:\/\//i.test(imgurl)) {
+        return imgurl.trim();
+      }
+    } catch {}
+  }
+
+  // Convert Dropbox share link dl=0 to raw=1
+  if (/dropbox\.com\/.+/i.test(trimmed) && trimmed.includes('dl=0')) {
+    return trimmed.replace('dl=0', 'raw=1');
   }
 
   return trimmed;

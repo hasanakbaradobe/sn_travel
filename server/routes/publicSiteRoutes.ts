@@ -126,6 +126,191 @@ publicSiteAdminRouter.put('/settings', async (req: Request, res: Response) => {
   }
 });
 
+// Resolve any Google Shareable Link (Google Drive file, Google Photos share link, Google Drive folder, or Google Images link)
+// and pull the direct embeddable picture URL(s)
+publicSiteAdminRouter.post('/resolve-google-link', async (req: Request, res: Response) => {
+  try {
+    const rawUrl = typeof req.body?.url === 'string' ? req.body.url.trim() : '';
+    if (!rawUrl) {
+      return res.status(400).json({ error: 'Please provide a shareable link or image URL.' });
+    }
+
+    // 1. Check if it is a Google Drive File Shareable Link
+    const driveFileMatch = rawUrl.match(/(?:drive|docs)\.google\.com\/file\/d\/([a-zA-Z0-9_-]+)/i);
+    const driveIdMatch = rawUrl.match(
+      /(?:drive|docs|drive\.usercontent)\.google\.com\/(?:open|uc|thumbnail|download)\?(?:[^#]*&)?id=([a-zA-Z0-9_-]+)/i
+    );
+    const lh3Match = rawUrl.match(/lh3\.googleusercontent\.com\/(?:u\/\d+\/)?d\/([a-zA-Z0-9_-]+)/i);
+    const fileId =
+      (driveFileMatch && driveFileMatch[1]) ||
+      (driveIdMatch && driveIdMatch[1]) ||
+      (lh3Match && lh3Match[1]);
+
+    if (fileId) {
+      const resolvedUrl = `https://lh3.googleusercontent.com/d/${fileId}`;
+      const proxyUrl = `/api/proxy-image?url=${encodeURIComponent(resolvedUrl)}&fallback=404`;
+
+      // Verify accessibility of the shared Google Drive picture
+      let accessible = false;
+      const testUrls = [
+        `https://lh3.googleusercontent.com/d/${fileId}=w1200`,
+        `https://drive.google.com/thumbnail?id=${fileId}&sz=w1000`,
+        `https://drive.google.com/uc?export=download&id=${fileId}`,
+      ];
+      for (const testUrl of testUrls) {
+        try {
+          const checkResp = await fetch(testUrl, {
+            method: 'GET',
+            signal: AbortSignal.timeout(6000),
+            headers: {
+              'User-Agent':
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+            },
+          });
+          const ct = checkResp.headers.get('content-type') || '';
+          if (checkResp.ok && (ct.includes('image') || ct.includes('octet-stream'))) {
+            accessible = true;
+            break;
+          }
+        } catch {}
+      }
+
+      return res.json({
+        original_url: rawUrl,
+        resolved_url: resolvedUrl,
+        proxy_url: proxyUrl,
+        file_id: fileId,
+        source_type: 'google_drive',
+        accessible,
+        gallery_urls: [resolvedUrl],
+        message: accessible
+          ? 'Picture pulled from Google Drive share link.'
+          : 'Google Drive link converted, but the file appears private. Set Google Drive sharing to "Anyone with the link" so visitors can view the picture.',
+      });
+    }
+
+    // 2. Check if it is a Google Drive Folder Shareable Link
+    const folderMatch = rawUrl.match(/drive\.google\.com\/drive\/(?:u\/\d+\/)?folders\/([a-zA-Z0-9_-]+)/i);
+    if (folderMatch && folderMatch[1]) {
+      const folderId = folderMatch[1];
+      const extractedIds = new Set<string>();
+      try {
+        const folderResp = await fetch(`https://drive.google.com/embeddedfolderview?id=${folderId}#grid`, {
+          signal: AbortSignal.timeout(7000),
+          headers: {
+            'User-Agent':
+              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          },
+        });
+        if (folderResp.ok) {
+          const html = await folderResp.text();
+          const entryRegex = /id=["']entry-([a-zA-Z0-9_-]+)["']/gi;
+          let m: RegExpExecArray | null;
+          while ((m = entryRegex.exec(html)) !== null) {
+            if (m[1] && m[1] !== folderId) extractedIds.add(m[1]);
+          }
+          const fileUrlRegex = /\/file\/d\/([a-zA-Z0-9_-]+)/gi;
+          while ((m = fileUrlRegex.exec(html)) !== null) {
+            if (m[1] && m[1] !== folderId) extractedIds.add(m[1]);
+          }
+        }
+      } catch {}
+
+      const galleryUrls = Array.from(extractedIds).map(
+        (id) => `https://lh3.googleusercontent.com/d/${id}`
+      );
+      if (galleryUrls.length > 0) {
+        return res.json({
+          original_url: rawUrl,
+          resolved_url: galleryUrls[0],
+          proxy_url: `/api/proxy-image?url=${encodeURIComponent(galleryUrls[0])}&fallback=404`,
+          file_id: folderId,
+          source_type: 'google_drive_folder',
+          accessible: true,
+          gallery_urls: galleryUrls,
+          message: `Pulled ${galleryUrls.length} picture${galleryUrls.length === 1 ? '' : 's'} from Google Drive shared folder.`,
+        });
+      }
+      return res.status(400).json({
+        error:
+          'Could not find public images inside that Google Drive folder. Make sure the folder is shared with "Anyone with the link", or paste the individual image share link.',
+      });
+    }
+
+    // 3. Check if it is a Google Photos or Google Images Shareable Link
+    if (/photos\.app\.goo\.gl|photos\.google\.com\/share|images\.app\.goo\.gl|goo\.gl\/images/i.test(rawUrl)) {
+      try {
+        const pageResp = await fetch(rawUrl, {
+          signal: AbortSignal.timeout(7000),
+          redirect: 'follow',
+          headers: {
+            'User-Agent':
+              'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          },
+        });
+        if (pageResp.ok) {
+          const html = await pageResp.text();
+          const ogMatch =
+            html.match(/<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i) ||
+            html.match(/<meta[^>]+content=["']([^"']+)["'][^>]+property=["']og:image["']/i);
+          if (ogMatch && ogMatch[1]) {
+            const rawOg = ogMatch[1].replace(/&amp;/g, '&');
+            const resolvedUrl = rawOg.replace(/=w\d+-h\d+[^"'\s]*/i, '=w1600');
+            return res.json({
+              original_url: rawUrl,
+              resolved_url: resolvedUrl,
+              proxy_url: `/api/proxy-image?url=${encodeURIComponent(resolvedUrl)}&fallback=404`,
+              file_id: null,
+              source_type: 'google_photos',
+              accessible: true,
+              gallery_urls: [resolvedUrl],
+              message: 'Picture pulled from Google Photos share link.',
+            });
+          }
+        }
+      } catch {}
+    }
+
+    // 4. Check if it is a Google Images result URL (google.com/imgres?imgurl=...)
+    if (/google\.com\/imgres\?/i.test(rawUrl)) {
+      try {
+        const parsed = new URL(rawUrl);
+        const imgurl = parsed.searchParams.get('imgurl');
+        if (imgurl && /^https?:\/\//i.test(imgurl)) {
+          return res.json({
+            original_url: rawUrl,
+            resolved_url: imgurl.trim(),
+            proxy_url: `/api/proxy-image?url=${encodeURIComponent(imgurl.trim())}&fallback=404`,
+            file_id: null,
+            source_type: 'google_images',
+            accessible: true,
+            gallery_urls: [imgurl.trim()],
+            message: 'Picture pulled from Google Images share link.',
+          });
+        }
+      } catch {}
+    }
+
+    // 5. Standard direct image URL or Dropbox link
+    const cleanUrl = rawUrl.includes('dropbox.com') && rawUrl.includes('dl=0')
+      ? rawUrl.replace('dl=0', 'raw=1')
+      : rawUrl;
+
+    return res.json({
+      original_url: rawUrl,
+      resolved_url: cleanUrl,
+      proxy_url: `/api/proxy-image?url=${encodeURIComponent(cleanUrl)}&fallback=404`,
+      file_id: null,
+      source_type: 'direct_url',
+      accessible: true,
+      gallery_urls: [cleanUrl],
+      message: 'Image URL connected.',
+    });
+  } catch (err: any) {
+    return res.status(400).json({ error: err.message || 'Failed to resolve Google shareable link' });
+  }
+});
+
 // Update structured website page
 publicSiteAdminRouter.put('/pages/:slug', async (req: Request, res: Response) => {
   try {
