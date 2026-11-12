@@ -1130,15 +1130,50 @@ function loadStore(): PublicSiteStore {
   return fresh;
 }
 
-function saveStore(data: PublicSiteStore) {
+let saveStoreTimer: ReturnType<typeof setTimeout> | null = null;
+let saveStoreInFlight = false;
+let saveStorePendingData: PublicSiteStore | null = null;
+
+async function flushPublicStoreToDisk(data: PublicSiteStore): Promise<void> {
+  if (saveStoreInFlight) {
+    saveStorePendingData = data;
+    return;
+  }
+  saveStoreInFlight = true;
   try {
     if (!fs.existsSync(DATA_DIR)) {
-      fs.mkdirSync(DATA_DIR, { recursive: true });
+      await fs.promises.mkdir(DATA_DIR, { recursive: true });
     }
-    fs.writeFileSync(STORE_PATH, JSON.stringify(data, null, 2), 'utf-8');
+    const payload = JSON.stringify(data);
+    await fs.promises.writeFile(STORE_PATH, payload, 'utf-8');
   } catch (err) {
     console.warn('[PublicSiteCMS] Failed to write local store:', err);
+  } finally {
+    saveStoreInFlight = false;
+    if (saveStorePendingData) {
+      const next = saveStorePendingData;
+      saveStorePendingData = null;
+      void flushPublicStoreToDisk(next);
+    }
   }
+}
+
+function saveStore(data: PublicSiteStore) {
+  if (saveStoreTimer) {
+    clearTimeout(saveStoreTimer);
+  }
+  saveStoreTimer = setTimeout(() => {
+    saveStoreTimer = null;
+    void flushPublicStoreToDisk(data);
+  }, 40);
+}
+
+function runPublicMySQLWrite(task: (pool: any) => Promise<void>): void {
+  const { pool, isConnected } = getMySQLPool();
+  if (!pool || !isConnected) return;
+  void task(pool).catch((err: any) => {
+    console.warn('[PublicSiteCMS] Background MySQL write warning:', err?.message || err);
+  });
 }
 
 let store: PublicSiteStore = loadStore();
@@ -2124,44 +2159,39 @@ export const publicSiteDb = {
 
     saveStore(store);
 
-    const { pool, isConnected } = getMySQLPool();
-    if (pool && isConnected) {
-      try {
-        await pool.query(
-          `UPDATE public_site_settings SET
-            site_status = ?, has_unpublished_changes = ?, hotel_name = ?, tagline = ?,
-            short_description = ?, about_title = ?, about_content = ?, logo_url = ?, favicon_url = ?,
-            primary_color = ?, accent_color = ?, contact_phone = ?, whatsapp_number = ?, contact_email = ?,
-            address_line = ?, city = ?, country = ?, postal_code = ?, google_maps_url = ?, google_maps_embed_url = ?,
-            social_links_json = ?, reservation_url = ?, reservation_button_text = ?,
-            check_in_time = ?, check_out_time = ?, cancellation_policy = ?, general_policies = ?,
-            footer_text = ?, copyright_text = ?, hero_heading = ?, hero_subtitle = ?, hero_image_url = ?,
-            hero_cta_text = ?, hero_cta_link = ?, hero_secondary_cta_text = ?, hero_secondary_cta_link = ?,
-            welcome_heading = ?, welcome_body = ?, homepage_sections_json = ?, nav_links_json = ?, footer_links_json = ?,
-            seo_title = ?, seo_description = ?, og_title = ?, og_description = ?, og_image_url = ?,
-            canonical_domain = ?, robots_indexing = ?, sitemap_enabled = ?, public_site_url = ?,
-            last_edited_by = ?, last_edited_at = NOW()
-          WHERE id = 1`,
-          [
-            s.site_status, s.has_unpublished_changes, s.hotel_name, s.tagline,
-            s.short_description, s.about_title, s.about_content, s.logo_url, s.favicon_url,
-            s.primary_color, s.accent_color, s.contact_phone, s.whatsapp_number, s.contact_email,
-            s.address_line, s.city, s.country, s.postal_code, s.google_maps_url, s.google_maps_embed_url,
-            JSON.stringify(s.social_links || {}), s.reservation_url, s.reservation_button_text,
-            s.check_in_time, s.check_out_time, s.cancellation_policy, s.general_policies,
-            s.footer_text, s.copyright_text, s.hero_heading, s.hero_subtitle, s.hero_image_url,
-            s.hero_cta_text, s.hero_cta_link, s.hero_secondary_cta_text, s.hero_secondary_cta_link,
-            s.welcome_heading, s.welcome_body, JSON.stringify(s.homepage_sections || []),
-            JSON.stringify(s.nav_links || []), JSON.stringify(s.footer_links || []),
-            s.seo_title, s.seo_description, s.og_title, s.og_description, s.og_image_url,
-            s.canonical_domain, s.robots_indexing, s.sitemap_enabled, s.public_site_url,
-            operatorId,
-          ]
-        );
-      } catch (err: any) {
-        console.warn('[PublicSiteCMS] Failed to update settings in MySQL:', err.message);
-      }
-    }
+    runPublicMySQLWrite(async (pool) => {
+      await pool.query(
+        `UPDATE public_site_settings SET
+          site_status = ?, has_unpublished_changes = ?, hotel_name = ?, tagline = ?,
+          short_description = ?, about_title = ?, about_content = ?, logo_url = ?, favicon_url = ?,
+          primary_color = ?, accent_color = ?, contact_phone = ?, whatsapp_number = ?, contact_email = ?,
+          address_line = ?, city = ?, country = ?, postal_code = ?, google_maps_url = ?, google_maps_embed_url = ?,
+          social_links_json = ?, reservation_url = ?, reservation_button_text = ?,
+          check_in_time = ?, check_out_time = ?, cancellation_policy = ?, general_policies = ?,
+          footer_text = ?, copyright_text = ?, hero_heading = ?, hero_subtitle = ?, hero_image_url = ?,
+          hero_cta_text = ?, hero_cta_link = ?, hero_secondary_cta_text = ?, hero_secondary_cta_link = ?,
+          welcome_heading = ?, welcome_body = ?, homepage_sections_json = ?, nav_links_json = ?, footer_links_json = ?,
+          seo_title = ?, seo_description = ?, og_title = ?, og_description = ?, og_image_url = ?,
+          canonical_domain = ?, robots_indexing = ?, sitemap_enabled = ?, public_site_url = ?,
+          last_edited_by = ?, last_edited_at = NOW()
+        WHERE id = 1`,
+        [
+          s.site_status, s.has_unpublished_changes, s.hotel_name, s.tagline,
+          s.short_description, s.about_title, s.about_content, s.logo_url, s.favicon_url,
+          s.primary_color, s.accent_color, s.contact_phone, s.whatsapp_number, s.contact_email,
+          s.address_line, s.city, s.country, s.postal_code, s.google_maps_url, s.google_maps_embed_url,
+          JSON.stringify(s.social_links || {}), s.reservation_url, s.reservation_button_text,
+          s.check_in_time, s.check_out_time, s.cancellation_policy, s.general_policies,
+          s.footer_text, s.copyright_text, s.hero_heading, s.hero_subtitle, s.hero_image_url,
+          s.hero_cta_text, s.hero_cta_link, s.hero_secondary_cta_text, s.hero_secondary_cta_link,
+          s.welcome_heading, s.welcome_body, JSON.stringify(s.homepage_sections || []),
+          JSON.stringify(s.nav_links || []), JSON.stringify(s.footer_links || []),
+          s.seo_title, s.seo_description, s.og_title, s.og_description, s.og_image_url,
+          s.canonical_domain, s.robots_indexing, s.sitemap_enabled, s.public_site_url,
+          operatorId,
+        ]
+      );
+    });
 
     dbService.logActivity(operatorId, 'UPDATE', 'SETTINGS', 1, 'Updated Public Hotel Website draft settings');
     return s;
@@ -2178,13 +2208,12 @@ export const publicSiteDb = {
     store.settings.updated_at = now;
     saveStore(store);
 
-    const { pool, isConnected } = getMySQLPool();
-    if (pool && isConnected) {
+    runPublicMySQLWrite(async (pool) => {
       await pool.query(
         'UPDATE public_site_settings SET has_unpublished_changes = 1, site_status = ?, last_edited_by = ?, last_edited_at = NOW() WHERE id = 1',
         [store.settings.site_status, operatorId]
-      ).catch(() => {});
-    }
+      );
+    });
   },
 
   // --------------------------------------------------------------------------
@@ -2214,8 +2243,7 @@ export const publicSiteDb = {
 
     await this.markDraftChanged(operatorId);
 
-    const { pool, isConnected } = getMySQLPool();
-    if (pool && isConnected) {
+    runPublicMySQLWrite(async (pool) => {
       await pool.query(
         `UPDATE public_site_pages SET
           title = ?, heading = ?, subheading = ?, hero_image_url = ?, content_body = ?,
@@ -2227,8 +2255,8 @@ export const publicSiteDb = {
           JSON.stringify(page.structured_data || {}), page.seo_title, page.seo_description,
           page.is_visible, page.show_in_nav, page.show_in_footer, page.display_order, page.slug,
         ]
-      ).catch((e: any) => console.warn('[PublicSiteCMS] Failed to update page in MySQL:', e.message));
-    }
+      );
+    });
 
     return page;
   },
@@ -2297,8 +2325,7 @@ export const publicSiteDb = {
     store.hotels.push(hotel);
     await this.markDraftChanged(operatorId);
 
-    const { pool, isConnected } = getMySQLPool();
-    if (pool && isConnected) {
+    runPublicMySQLWrite(async (pool) => {
       await pool.query(
         `INSERT INTO public_site_hotels (
           id, crm_hotel_id, name, slug, city, country, address, star_rating,
@@ -2316,8 +2343,8 @@ export const publicSiteDb = {
           hotel.contact_email, hotel.google_maps_url, hotel.google_maps_embed_url,
           hotel.starting_price, hotel.currency, hotel.is_featured, hotel.is_visible, hotel.display_order,
         ]
-      ).catch((e: any) => console.warn('[PublicSiteCMS] Failed to insert hotel in MySQL:', e.message));
-    }
+      );
+    });
 
     return hotel;
   },
@@ -2370,8 +2397,7 @@ export const publicSiteDb = {
 
     await this.markDraftChanged(operatorId);
 
-    const { pool, isConnected } = getMySQLPool();
-    if (pool && isConnected) {
+    runPublicMySQLWrite(async (pool) => {
       await pool.query(
         `UPDATE public_site_hotels SET
           name = ?, slug = ?, city = ?, country = ?, address = ?, star_rating = ?,
@@ -2391,8 +2417,8 @@ export const publicSiteDb = {
           hotel.starting_price, hotel.currency, hotel.is_featured, hotel.is_visible,
           hotel.display_order, hotel.id,
         ]
-      ).catch((e: any) => console.warn('[PublicSiteCMS] Failed to update hotel in MySQL:', e.message));
-    }
+      );
+    });
 
     return hotel;
   },
@@ -2405,12 +2431,11 @@ export const publicSiteDb = {
     });
     await this.markDraftChanged(operatorId);
 
-    const { pool, isConnected } = getMySQLPool();
-    if (pool && isConnected) {
+    runPublicMySQLWrite(async (pool) => {
       for (const h of store.hotels || []) {
         await pool.query('UPDATE public_site_hotels SET display_order = ? WHERE id = ?', [h.display_order, h.id]).catch(() => {});
       }
-    }
+    });
     return [...(store.hotels || [])].sort((a, b) => a.display_order - b.display_order);
   },
 
@@ -2423,11 +2448,10 @@ export const publicSiteDb = {
     store.rooms = (store.rooms || []).filter(r => Number(r.hotel_id) !== Number(id));
     await this.markDraftChanged(operatorId);
 
-    const { pool, isConnected } = getMySQLPool();
-    if (pool && isConnected) {
+    runPublicMySQLWrite(async (pool) => {
       await pool.query('DELETE FROM public_site_rooms WHERE hotel_id = ?', [id]).catch(() => {});
       await pool.query('DELETE FROM public_site_hotels WHERE id = ?', [id]).catch(() => {});
-    }
+    });
     return true;
   },
 
@@ -2617,8 +2641,7 @@ export const publicSiteDb = {
     store.rooms.push(room);
     await this.markDraftChanged(operatorId);
 
-    const { pool, isConnected } = getMySQLPool();
-    if (pool && isConnected) {
+    runPublicMySQLWrite(async (pool) => {
       await pool.query(
         `INSERT INTO public_site_rooms (
           id, hotel_id, crm_room_id, name, slug, short_description, full_description, featured_image_url,
@@ -2632,8 +2655,8 @@ export const publicSiteDb = {
           room.optional_price, room.currency, room.price_note, room.enquiry_url,
           room.is_featured, room.is_visible, room.display_order,
         ]
-      ).catch((e: any) => console.warn('[PublicSiteCMS] Failed to insert room in MySQL:', e.message));
-    }
+      );
+    });
 
     return room;
   },
@@ -2674,8 +2697,7 @@ export const publicSiteDb = {
 
     await this.markDraftChanged(operatorId);
 
-    const { pool, isConnected } = getMySQLPool();
-    if (pool && isConnected) {
+    runPublicMySQLWrite(async (pool) => {
       await pool.query(
         `UPDATE public_site_rooms SET
           hotel_id = ?, name = ?, slug = ?, short_description = ?, full_description = ?, featured_image_url = ?,
@@ -2689,8 +2711,8 @@ export const publicSiteDb = {
           JSON.stringify(room.amenities), room.optional_price, room.currency, room.price_note,
           room.enquiry_url, room.is_featured, room.is_visible, room.display_order, room.id,
         ]
-      ).catch((e: any) => console.warn('[PublicSiteCMS] Failed to update room in MySQL:', e.message));
-    }
+      );
+    });
 
     return room;
   },
@@ -2703,12 +2725,11 @@ export const publicSiteDb = {
     });
     await this.markDraftChanged(operatorId);
 
-    const { pool, isConnected } = getMySQLPool();
-    if (pool && isConnected) {
+    runPublicMySQLWrite(async (pool) => {
       for (const rm of store.rooms) {
         await pool.query('UPDATE public_site_rooms SET display_order = ? WHERE id = ?', [rm.display_order, rm.id]).catch(() => {});
       }
-    }
+    });
     return [...store.rooms].sort((a, b) => a.display_order - b.display_order);
   },
 
@@ -2719,10 +2740,9 @@ export const publicSiteDb = {
     store.rooms.splice(idx, 1);
     await this.markDraftChanged(operatorId);
 
-    const { pool, isConnected } = getMySQLPool();
-    if (pool && isConnected) {
+    runPublicMySQLWrite(async (pool) => {
       await pool.query('DELETE FROM public_site_rooms WHERE id = ?', [id]).catch(() => {});
-    }
+    });
     return true;
   },
 
@@ -2756,8 +2776,7 @@ export const publicSiteDb = {
     store.facilities.push(facility);
     await this.markDraftChanged(operatorId);
 
-    const { pool, isConnected } = getMySQLPool();
-    if (pool && isConnected) {
+    runPublicMySQLWrite(async (pool) => {
       await pool.query(
         `INSERT INTO public_site_facilities (id, name, category, description, icon_name, image_url, is_featured, is_visible, display_order)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -2765,8 +2784,8 @@ export const publicSiteDb = {
           facility.id, facility.name, facility.category, facility.description,
           facility.icon_name, facility.image_url, facility.is_featured, facility.is_visible, facility.display_order,
         ]
-      ).catch((e: any) => console.warn('[PublicSiteCMS] Failed to insert facility in MySQL:', e.message));
-    }
+      );
+    });
 
     return facility;
   },
@@ -2788,8 +2807,7 @@ export const publicSiteDb = {
 
     await this.markDraftChanged(operatorId);
 
-    const { pool, isConnected } = getMySQLPool();
-    if (pool && isConnected) {
+    runPublicMySQLWrite(async (pool) => {
       await pool.query(
         `UPDATE public_site_facilities SET
           name = ?, category = ?, description = ?, icon_name = ?, image_url = ?,
@@ -2799,8 +2817,8 @@ export const publicSiteDb = {
           fac.name, fac.category, fac.description, fac.icon_name, fac.image_url,
           fac.is_featured, fac.is_visible, fac.display_order, fac.id,
         ]
-      ).catch(() => {});
-    }
+      );
+    });
 
     return fac;
   },
@@ -2813,12 +2831,11 @@ export const publicSiteDb = {
     });
     await this.markDraftChanged(operatorId);
 
-    const { pool, isConnected } = getMySQLPool();
-    if (pool && isConnected) {
+    runPublicMySQLWrite(async (pool) => {
       for (const f of store.facilities) {
         await pool.query('UPDATE public_site_facilities SET display_order = ? WHERE id = ?', [f.display_order, f.id]).catch(() => {});
       }
-    }
+    });
     return [...store.facilities].sort((a, b) => a.display_order - b.display_order);
   },
 
@@ -2829,10 +2846,9 @@ export const publicSiteDb = {
     store.facilities.splice(idx, 1);
     await this.markDraftChanged(operatorId);
 
-    const { pool, isConnected } = getMySQLPool();
-    if (pool && isConnected) {
+    runPublicMySQLWrite(async (pool) => {
       await pool.query('DELETE FROM public_site_facilities WHERE id = ?', [id]).catch(() => {});
-    }
+    });
     return true;
   },
 
@@ -2866,8 +2882,7 @@ export const publicSiteDb = {
     store.gallery.push(item);
     await this.markDraftChanged(operatorId);
 
-    const { pool, isConnected } = getMySQLPool();
-    if (pool && isConnected) {
+    runPublicMySQLWrite(async (pool) => {
       await pool.query(
         `INSERT INTO public_site_gallery (id, title, caption, alt_text, category, image_url, is_featured, is_visible, display_order)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -2875,8 +2890,8 @@ export const publicSiteDb = {
           item.id, item.title, item.caption, item.alt_text, item.category,
           item.image_url, item.is_featured, item.is_visible, item.display_order,
         ]
-      ).catch(() => {});
-    }
+      );
+    });
 
     return item;
   },
@@ -2902,8 +2917,7 @@ export const publicSiteDb = {
 
     await this.markDraftChanged(operatorId);
 
-    const { pool, isConnected } = getMySQLPool();
-    if (pool && isConnected) {
+    runPublicMySQLWrite(async (pool) => {
       await pool.query(
         `UPDATE public_site_gallery SET
           title = ?, caption = ?, alt_text = ?, category = ?, image_url = ?,
@@ -2913,8 +2927,8 @@ export const publicSiteDb = {
           item.title, item.caption, item.alt_text, item.category, item.image_url,
           item.is_featured, item.is_visible, item.display_order, item.id,
         ]
-      ).catch(() => {});
-    }
+      );
+    });
 
     return item;
   },
@@ -2927,12 +2941,11 @@ export const publicSiteDb = {
     });
     await this.markDraftChanged(operatorId);
 
-    const { pool, isConnected } = getMySQLPool();
-    if (pool && isConnected) {
+    runPublicMySQLWrite(async (pool) => {
       for (const g of store.gallery) {
         await pool.query('UPDATE public_site_gallery SET display_order = ? WHERE id = ?', [g.display_order, g.id]).catch(() => {});
       }
-    }
+    });
     return [...store.gallery].sort((a, b) => a.display_order - b.display_order);
   },
 
@@ -2943,10 +2956,9 @@ export const publicSiteDb = {
     store.gallery.splice(idx, 1);
     await this.markDraftChanged(operatorId);
 
-    const { pool, isConnected } = getMySQLPool();
-    if (pool && isConnected) {
+    runPublicMySQLWrite(async (pool) => {
       await pool.query('DELETE FROM public_site_gallery WHERE id = ?', [id]).catch(() => {});
-    }
+    });
     return true;
   },
 
@@ -2978,14 +2990,13 @@ export const publicSiteDb = {
     store.faqs.push(faq);
     await this.markDraftChanged(operatorId);
 
-    const { pool, isConnected } = getMySQLPool();
-    if (pool && isConnected) {
+    runPublicMySQLWrite(async (pool) => {
       await pool.query(
         `INSERT INTO public_site_faqs (id, question, answer, category, is_visible, display_order)
          VALUES (?, ?, ?, ?, ?, ?)`,
         [faq.id, faq.question, faq.answer, faq.category, faq.is_visible, faq.display_order]
-      ).catch(() => {});
-    }
+      );
+    });
 
     return faq;
   },
@@ -3004,13 +3015,12 @@ export const publicSiteDb = {
 
     await this.markDraftChanged(operatorId);
 
-    const { pool, isConnected } = getMySQLPool();
-    if (pool && isConnected) {
+    runPublicMySQLWrite(async (pool) => {
       await pool.query(
         `UPDATE public_site_faqs SET question = ?, answer = ?, category = ?, is_visible = ?, display_order = ? WHERE id = ?`,
         [faq.question, faq.answer, faq.category, faq.is_visible, faq.display_order, faq.id]
-      ).catch(() => {});
-    }
+      );
+    });
 
     return faq;
   },
@@ -3023,12 +3033,11 @@ export const publicSiteDb = {
     });
     await this.markDraftChanged(operatorId);
 
-    const { pool, isConnected } = getMySQLPool();
-    if (pool && isConnected) {
+    runPublicMySQLWrite(async (pool) => {
       for (const q of store.faqs) {
         await pool.query('UPDATE public_site_faqs SET display_order = ? WHERE id = ?', [q.display_order, q.id]).catch(() => {});
       }
-    }
+    });
     return [...store.faqs].sort((a, b) => a.display_order - b.display_order);
   },
 
@@ -3039,10 +3048,9 @@ export const publicSiteDb = {
     store.faqs.splice(idx, 1);
     await this.markDraftChanged(operatorId);
 
-    const { pool, isConnected } = getMySQLPool();
-    if (pool && isConnected) {
+    runPublicMySQLWrite(async (pool) => {
       await pool.query('DELETE FROM public_site_faqs WHERE id = ?', [id]).catch(() => {});
-    }
+    });
     return true;
   },
 
@@ -3173,69 +3181,64 @@ export const publicSiteDb = {
 
     // Also write the generated snapshot to hotel-public-site/src/generated/published-site-data.json
     // so local builds and previews always have the latest published snapshot artifact
-    try {
-      const localPublicArtifactDir = path.resolve(process.cwd(), 'hotel-public-site/src/generated');
-      if (fs.existsSync(localPublicArtifactDir)) {
-        fs.writeFileSync(
+    const localPublicArtifactDir = path.resolve(process.cwd(), 'hotel-public-site/src/generated');
+    if (fs.existsSync(localPublicArtifactDir)) {
+      void fs.promises
+        .writeFile(
           path.join(localPublicArtifactDir, 'published-site-data.json'),
           JSON.stringify(snapshotPayload, null, 2),
           'utf-8'
-        );
-      }
-    } catch {}
-
-    const { pool, isConnected } = getMySQLPool();
-    if (pool && isConnected) {
-      try {
-        await pool.query(
-          `INSERT INTO public_site_snapshots (id, version_number, snapshot_hash, snapshot_json, published_by_user_id, published_by_name, notes)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
-          [
-            snapshotRecord.id,
-            snapshotRecord.version_number,
-            snapshotRecord.snapshot_hash,
-            snapshotRecord.snapshot_json,
-            snapshotRecord.published_by_user_id,
-            snapshotRecord.published_by_name,
-            snapshotRecord.notes,
-          ]
-        );
-
-        await pool.query(
-          `INSERT INTO public_site_publications (
-            id, version_number, snapshot_id, initiated_by_user_id, initiated_by_name,
-            deployment_status, build_hook_configured, build_hook_triggered, build_hook_http_status,
-            netlify_deploy_id, netlify_deploy_state, netlify_deploy_url, verified_at, error_message, notes
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [
-            pubRecord.id,
-            pubRecord.version_number,
-            pubRecord.snapshot_id,
-            pubRecord.initiated_by_user_id,
-            pubRecord.initiated_by_name,
-            pubRecord.deployment_status,
-            pubRecord.build_hook_configured,
-            pubRecord.build_hook_triggered,
-            pubRecord.build_hook_http_status,
-            pubRecord.netlify_deploy_id,
-            pubRecord.netlify_deploy_state,
-            pubRecord.netlify_deploy_url,
-            pubRecord.verified_at,
-            pubRecord.error_message,
-            pubRecord.notes,
-          ]
-        );
-
-        await pool.query(
-          `UPDATE public_site_settings SET
-            site_status = ?, has_unpublished_changes = 0, last_published_version = ?, last_published_at = NOW()
-           WHERE id = 1`,
-          [deploymentStatus, nextVersion]
-        );
-      } catch (err: any) {
-        console.warn('[PublicSiteCMS] Failed to persist publication to MySQL:', err.message);
-      }
+        )
+        .catch(() => {});
     }
+
+    runPublicMySQLWrite(async (pool) => {
+      await pool.query(
+        `INSERT INTO public_site_snapshots (id, version_number, snapshot_hash, snapshot_json, published_by_user_id, published_by_name, notes)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          snapshotRecord.id,
+          snapshotRecord.version_number,
+          snapshotRecord.snapshot_hash,
+          snapshotRecord.snapshot_json,
+          snapshotRecord.published_by_user_id,
+          snapshotRecord.published_by_name,
+          snapshotRecord.notes,
+        ]
+      );
+
+      await pool.query(
+        `INSERT INTO public_site_publications (
+          id, version_number, snapshot_id, initiated_by_user_id, initiated_by_name,
+          deployment_status, build_hook_configured, build_hook_triggered, build_hook_http_status,
+          netlify_deploy_id, netlify_deploy_state, netlify_deploy_url, verified_at, error_message, notes
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          pubRecord.id,
+          pubRecord.version_number,
+          pubRecord.snapshot_id,
+          pubRecord.initiated_by_user_id,
+          pubRecord.initiated_by_name,
+          pubRecord.deployment_status,
+          pubRecord.build_hook_configured,
+          pubRecord.build_hook_triggered,
+          pubRecord.build_hook_http_status,
+          pubRecord.netlify_deploy_id,
+          pubRecord.netlify_deploy_state,
+          pubRecord.netlify_deploy_url,
+          pubRecord.verified_at,
+          pubRecord.error_message,
+          pubRecord.notes,
+        ]
+      );
+
+      await pool.query(
+        `UPDATE public_site_settings SET
+          site_status = ?, has_unpublished_changes = 0, last_published_version = ?, last_published_at = NOW()
+         WHERE id = 1`,
+        [deploymentStatus, nextVersion]
+      );
+    });
 
     dbService.logActivity(
       operator.id,

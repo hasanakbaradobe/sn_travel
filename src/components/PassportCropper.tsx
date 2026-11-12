@@ -46,7 +46,7 @@ export const PassportCropper: React.FC<PassportCropperProps> = ({
     height: 30,
   });
 
-  const [filterMode, setFilterMode] = useState<'normal' | 'contrast' | 'binarized'>('contrast');
+  const [filterMode, setFilterMode] = useState<'normal' | 'contrast' | 'binarized'>('normal');
   const [previewDataUrl, setPreviewDataUrl] = useState<string | null>(null);
 
   // Interaction dragging states

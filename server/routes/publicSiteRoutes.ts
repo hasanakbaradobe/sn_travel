@@ -5,8 +5,9 @@
  */
 
 import { Router, Request, Response, NextFunction } from 'express';
-import crypto from 'crypto';
 import { publicSiteDb } from '../database/publicSiteDb.ts';
+import { timingSafeEqualStrings } from '../services/auth.ts';
+import { isSafeExternalUrl, fetchSafeExternal } from './api.ts';
 
 export const publicSiteExportRouter = Router();
 export const publicSiteAdminRouter = Router();
@@ -21,14 +22,7 @@ function verifyExportToken(providedToken: string, expectedToken: string): boolea
   const cleanExpected = expectedToken.trim();
   if (cleanProvided.length === 0 || cleanExpected.length < 12) return false;
 
-  const bufA = Buffer.from(cleanProvided, 'utf-8');
-  const bufB = Buffer.from(cleanExpected, 'utf-8');
-  if (bufA.length !== bufB.length) {
-    // Perform dummy comparison to keep timing uniform before returning false
-    crypto.timingSafeEqual(bufB, bufB);
-    return false;
-  }
-  return crypto.timingSafeEqual(bufA, bufB);
+  return timingSafeEqualStrings(cleanProvided, cleanExpected);
 }
 
 // --------------------------------------------------------------------------
@@ -131,8 +125,12 @@ publicSiteAdminRouter.put('/settings', async (req: Request, res: Response) => {
 publicSiteAdminRouter.post('/resolve-google-link', async (req: Request, res: Response) => {
   try {
     const rawUrl = typeof req.body?.url === 'string' ? req.body.url.trim() : '';
-    if (!rawUrl) {
-      return res.status(400).json({ error: 'Please provide a shareable link or image URL.' });
+    if (!rawUrl || rawUrl.length > 2048) {
+      return res.status(400).json({ error: 'Please provide a valid shareable link or image URL.' });
+    }
+
+    if (!isSafeExternalUrl(rawUrl)) {
+      return res.status(400).json({ error: 'Please provide a valid public https:// or http:// image link.' });
     }
 
     // 1. Check if it is a Google Drive File Shareable Link
@@ -150,29 +148,40 @@ publicSiteAdminRouter.post('/resolve-google-link', async (req: Request, res: Res
       const resolvedUrl = `https://lh3.googleusercontent.com/d/${fileId}`;
       const proxyUrl = `/api/proxy-image?url=${encodeURIComponent(resolvedUrl)}&fallback=404`;
 
-      // Verify accessibility of the shared Google Drive picture
-      let accessible = false;
+      // Verify accessibility of the shared Google Drive picture concurrently
+      let accessible = true;
+      let explicitlyBlocked = false;
       const testUrls = [
-        `https://lh3.googleusercontent.com/d/${fileId}=w1200`,
         `https://drive.google.com/thumbnail?id=${fileId}&sz=w1000`,
         `https://drive.google.com/uc?export=download&id=${fileId}`,
+        `https://lh3.googleusercontent.com/d/${fileId}`,
       ];
-      for (const testUrl of testUrls) {
-        try {
-          const checkResp = await fetch(testUrl, {
-            method: 'GET',
-            signal: AbortSignal.timeout(6000),
-            headers: {
-              'User-Agent':
-                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            },
-          });
-          const ct = checkResp.headers.get('content-type') || '';
-          if (checkResp.ok && (ct.includes('image') || ct.includes('octet-stream'))) {
-            accessible = true;
-            break;
-          }
-        } catch {}
+      try {
+        await Promise.any(
+          testUrls.map(async (testUrl) => {
+            const checkResp = await fetchSafeExternal(testUrl, {
+              method: 'GET',
+              timeoutMs: 3500,
+              headers: {
+                'User-Agent':
+                  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+              },
+            });
+            const ct = (checkResp.headers.get('content-type') || '').toLowerCase();
+            if (checkResp.ok && (ct.includes('image') || ct.includes('octet-stream'))) {
+              return true;
+            }
+            if (checkResp.status === 401 || checkResp.status === 403 || checkResp.status === 404 || ct.includes('text/html')) {
+              explicitlyBlocked = true;
+            }
+            throw new Error('Not verified');
+          })
+        );
+        accessible = true;
+      } catch {
+        if (explicitlyBlocked) {
+          accessible = false;
+        }
       }
 
       return res.json({
@@ -195,8 +204,8 @@ publicSiteAdminRouter.post('/resolve-google-link', async (req: Request, res: Res
       const folderId = folderMatch[1];
       const extractedIds = new Set<string>();
       try {
-        const folderResp = await fetch(`https://drive.google.com/embeddedfolderview?id=${folderId}#grid`, {
-          signal: AbortSignal.timeout(7000),
+        const folderResp = await fetchSafeExternal(`https://drive.google.com/embeddedfolderview?id=${folderId}#grid`, {
+          timeoutMs: 7000,
           headers: {
             'User-Agent':
               'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -240,9 +249,8 @@ publicSiteAdminRouter.post('/resolve-google-link', async (req: Request, res: Res
     // 3. Check if it is a Google Photos or Google Images Shareable Link
     if (/photos\.app\.goo\.gl|photos\.google\.com\/share|images\.app\.goo\.gl|goo\.gl\/images/i.test(rawUrl)) {
       try {
-        const pageResp = await fetch(rawUrl, {
-          signal: AbortSignal.timeout(7000),
-          redirect: 'follow',
+        const pageResp = await fetchSafeExternal(rawUrl, {
+          timeoutMs: 7000,
           headers: {
             'User-Agent':
               'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
@@ -256,16 +264,18 @@ publicSiteAdminRouter.post('/resolve-google-link', async (req: Request, res: Res
           if (ogMatch && ogMatch[1]) {
             const rawOg = ogMatch[1].replace(/&amp;/g, '&');
             const resolvedUrl = rawOg.replace(/=w\d+-h\d+[^"'\s]*/i, '=w1600');
-            return res.json({
-              original_url: rawUrl,
-              resolved_url: resolvedUrl,
-              proxy_url: `/api/proxy-image?url=${encodeURIComponent(resolvedUrl)}&fallback=404`,
-              file_id: null,
-              source_type: 'google_photos',
-              accessible: true,
-              gallery_urls: [resolvedUrl],
-              message: 'Picture pulled from Google Photos share link.',
-            });
+            if (isSafeExternalUrl(resolvedUrl)) {
+              return res.json({
+                original_url: rawUrl,
+                resolved_url: resolvedUrl,
+                proxy_url: `/api/proxy-image?url=${encodeURIComponent(resolvedUrl)}&fallback=404`,
+                file_id: null,
+                source_type: 'google_photos',
+                accessible: true,
+                gallery_urls: [resolvedUrl],
+                message: 'Picture pulled from Google Photos share link.',
+              });
+            }
           }
         }
       } catch {}
@@ -276,7 +286,7 @@ publicSiteAdminRouter.post('/resolve-google-link', async (req: Request, res: Res
       try {
         const parsed = new URL(rawUrl);
         const imgurl = parsed.searchParams.get('imgurl');
-        if (imgurl && /^https?:\/\//i.test(imgurl)) {
+        if (imgurl && isSafeExternalUrl(imgurl.trim())) {
           return res.json({
             original_url: rawUrl,
             resolved_url: imgurl.trim(),

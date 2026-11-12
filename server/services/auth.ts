@@ -23,6 +23,17 @@ export function hashPassword(password: string): string {
 }
 
 /**
+ * Constant-time string comparison using HMAC-SHA256 digests so string length
+ * is never leaked via timing side-channels.
+ */
+export function timingSafeEqualStrings(a: string, b: string): boolean {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  const hmacA = crypto.createHmac('sha256', JWT_SECRET).update(a).digest();
+  const hmacB = crypto.createHmac('sha256', JWT_SECRET).update(b).digest();
+  return crypto.timingSafeEqual(hmacA, hmacB);
+}
+
+/**
  * Verifies a password against the stored hash in constant time.
  * Seamlessly validates legacy plain-text or SHA-256 for smooth migration.
  */
@@ -35,19 +46,20 @@ export function verifyPassword(password: string, storedHash: string): boolean {
       if (parts.length !== 3) return false;
       const [, salt, expectedHash] = parts;
       const derived = crypto.scryptSync(password, salt, 64).toString('hex');
-      return crypto.timingSafeEqual(Buffer.from(derived, 'hex'), Buffer.from(expectedHash, 'hex'));
+      const derivedBuf = Buffer.from(derived, 'hex');
+      const expectedBuf = Buffer.from(expectedHash, 'hex');
+      if (derivedBuf.length !== expectedBuf.length) return false;
+      return crypto.timingSafeEqual(derivedBuf, expectedBuf);
     } catch {
       return false;
     }
   }
 
-  // Fallback for initial demo seed or sha256
+  // Fallback for initial demo seed or sha256 using constant-time comparison
   const sha256 = crypto.createHash('sha256').update(password).digest('hex');
-  if (storedHash === sha256 || storedHash === password) {
-    return true;
-  }
-
-  return false;
+  const matchesSha256 = timingSafeEqualStrings(storedHash, sha256);
+  const matchesPlain = timingSafeEqualStrings(storedHash, password);
+  return matchesSha256 || matchesPlain;
 }
 
 /**
@@ -133,9 +145,25 @@ interface RateLimitRecord {
 }
 
 const loginRateLimitMap = new Map<string, RateLimitRecord>();
+const MAX_RATE_LIMIT_ENTRIES = 5000;
 const MAX_FAILED_ATTEMPTS = 5;
 const WINDOW_MS = 15 * 60 * 1000; // 15 minutes
 const BLOCK_MS = 15 * 60 * 1000; // Lock for 15 minutes
+
+function pruneRateLimitMap(map: Map<string, RateLimitRecord>, windowMs: number) {
+  if (map.size < MAX_RATE_LIMIT_ENTRIES) return;
+  const now = Date.now();
+  for (const [key, rec] of map.entries()) {
+    const expiredBlock = !rec.blockedUntil || now >= rec.blockedUntil;
+    if (expiredBlock && now - rec.firstAttempt > windowMs) {
+      map.delete(key);
+    }
+  }
+  if (map.size >= MAX_RATE_LIMIT_ENTRIES) {
+    const firstKey = map.keys().next().value;
+    if (firstKey !== undefined) map.delete(firstKey);
+  }
+}
 
 export function checkLoginRateLimit(identifier: string): { allowed: boolean; waitSeconds?: number } {
   const now = Date.now();
@@ -158,6 +186,7 @@ export function checkLoginRateLimit(identifier: string): { allowed: boolean; wai
 
 export function recordFailedLogin(identifier: string): { remainingAttempts: number; isBlocked: boolean } {
   const now = Date.now();
+  pruneRateLimitMap(loginRateLimitMap, WINDOW_MS);
   let record = loginRateLimitMap.get(identifier);
 
   if (!record || now - record.firstAttempt > WINDOW_MS) {
@@ -181,3 +210,33 @@ export function recordFailedLogin(identifier: string): { remainingAttempts: numb
 export function resetLoginAttempts(identifier: string) {
   loginRateLimitMap.delete(identifier);
 }
+
+const slidingRateLimitMap = new Map<string, RateLimitRecord>();
+
+/**
+ * General-purpose fixed-window rate limiter for sensitive endpoints
+ * (e.g., secret key probing, image proxy, external URL resolution).
+ */
+export function checkEndpointRateLimit(
+  bucketKey: string,
+  maxRequests: number = 30,
+  windowMs: number = 60_000
+): { allowed: boolean; waitSeconds?: number } {
+  const now = Date.now();
+  pruneRateLimitMap(slidingRateLimitMap, windowMs);
+  const existing = slidingRateLimitMap.get(bucketKey);
+
+  if (!existing || now - existing.firstAttempt > windowMs) {
+    slidingRateLimitMap.set(bucketKey, { attempts: 1, firstAttempt: now });
+    return { allowed: true };
+  }
+
+  existing.attempts += 1;
+  if (existing.attempts > maxRequests) {
+    const waitSeconds = Math.max(1, Math.ceil((existing.firstAttempt + windowMs - now) / 1000));
+    return { allowed: false, waitSeconds };
+  }
+
+  return { allowed: true };
+}
+

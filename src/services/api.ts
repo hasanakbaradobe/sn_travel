@@ -116,6 +116,10 @@ class ApiService {
     return this.currentUser;
   }
 
+  getToken(): string | null {
+    return this.token;
+  }
+
   setCurrentUser(user: User | null, token?: string) {
     this.currentUser = user;
     this.clearCache();
@@ -254,47 +258,21 @@ class ApiService {
     this.setCurrentUser(null);
   }
 
-  // Passport Scanner (In-Browser Client Scan + Deterministic Backend Fallback - Zero AI)
+  // Passport Scanner (100% Local In-Browser Execution - Zero AI, Zero Server Calls)
   async scanPassport(
     image: string,
-    mimeType?: string,
-    engine?: string,
+    _mimeType?: string,
+    _engine?: string,
     onStatusUpdate?: (status: string) => void
   ): Promise<ScannedPassportData> {
-    // Stage 1: 100% Client-Side In-Browser Execution (0% Server Load)
-    try {
-      const { scanPassportInBrowser } = await import('./clientPassportScanner');
-      const browserResult = await scanPassportInBrowser(image, onStatusUpdate);
-      if (browserResult && browserResult.passportNumber) {
-        return { ...browserResult, confidenceScore: browserResult.confidenceScore || 100 };
-      }
-    } catch (browserErr: any) {
-      console.warn('[PassportScanner] In-browser pass failed, trying deterministic backend CV pass:', browserErr);
+    const { scanPassportInBrowser } = await import('./clientPassportScanner');
+    const browserResult = await scanPassportInBrowser(image, onStatusUpdate);
+    if (browserResult && browserResult.passportNumber) {
+      return { ...browserResult, confidenceScore: browserResult.confidenceScore || 100 };
     }
-
-    // Stage 2: Deterministic Backend CV Pass (OpenCV Rectification + Sharp Binarization + Local Tesseract, Zero AI)
-    try {
-      if (onStatusUpdate) onStatusUpdate('Applying OpenCV perspective rectification & high-contrast binarization...');
-      const serverResult = await this.request<ScannedPassportData>('/scan-passport', {
-        method: 'POST',
-        body: JSON.stringify({
-          image,
-          mimeType: mimeType || 'image/jpeg',
-          engine: 'deterministic',
-        }),
-      });
-      if (serverResult && serverResult.passportNumber) {
-        return {
-          ...serverResult,
-          confidenceScore: serverResult.confidenceScore || 100,
-          ocrMethod: serverResult.ocrMethod || 'Deterministic CV + ICAO Doc 9303 Checksum Engine (Zero AI)',
-        };
-      }
-    } catch (serverErr: any) {
-      console.warn('[PassportScanner] Deterministic backend CV error:', serverErr);
-    }
-
-    throw new Error('MRZ lines could not be isolated. Use the interactive Crop Tool to frame the bottom two lines of the passport.');
+    throw new Error(
+      'MRZ lines could not be isolated. Use the interactive Crop Tool to frame the bottom two lines of the passport.'
+    );
   }
 
   // Clients
@@ -631,6 +609,7 @@ class ApiService {
 
   // Unified Bootstrap & Dashboard
   async getBootstrapData(): Promise<{
+    dataVersion?: number;
     metrics: DashboardMetrics;
     clients: Client[];
     applications: VisaApplication[];
@@ -641,6 +620,8 @@ class ApiService {
     visaTypes: VisaType[];
     countries: Country[];
     customFields: CustomField[];
+    dbStatus?: DatabaseStatus;
+    users?: User[];
   }> {
     return this.request('/bootstrap');
   }

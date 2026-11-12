@@ -160,17 +160,26 @@ function getPreviewCandidates(url?: string | null): string[] {
   const driveId = extractDriveIdFromShareUrl(raw);
   if (driveId) {
     return [
-      `/api/proxy-image?url=${encodeURIComponent(`https://lh3.googleusercontent.com/d/${driveId}`)}&fallback=404`,
       `https://lh3.googleusercontent.com/d/${driveId}`,
       `https://drive.google.com/thumbnail?id=${driveId}&sz=w1600`,
       `https://drive.google.com/uc?export=view&id=${driveId}`,
+      `https://drive.usercontent.google.com/download?id=${driveId}&export=view`,
+      `/api/proxy-image?url=${encodeURIComponent(`https://lh3.googleusercontent.com/d/${driveId}`)}&fallback=404`,
     ];
+  }
+
+  if (
+    /photos\.app\.goo\.gl|photos\.google\.com\/share|images\.app\.goo\.gl|goo\.gl\/images|drive\.google\.com\/drive\/(?:u\/\d+\/)?folders\//i.test(
+      raw
+    )
+  ) {
+    return [`/api/proxy-image?url=${encodeURIComponent(raw)}&fallback=404`, raw];
   }
 
   if (/^https?:\/\//i.test(raw)) {
     return [
-      `/api/proxy-image?url=${encodeURIComponent(raw)}&fallback=404`,
       raw,
+      `/api/proxy-image?url=${encodeURIComponent(raw)}&fallback=404`,
     ];
   }
 

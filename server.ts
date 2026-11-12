@@ -12,6 +12,9 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+app.disable('x-powered-by');
+app.set('trust proxy', 1);
+
 // HTTP Response Compression (Gzip / Deflate — skip Server-Sent Events stream)
 app.use(compression({
   threshold: 1024,

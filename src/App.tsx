@@ -149,6 +149,7 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [profileRefreshKey, setProfileRefreshKey] = useState(0);
   const inFlightRefreshRef = useRef<Promise<void> | null>(null);
+  const lastDataVersionRef = useRef<number>(-1);
 
   // Load all primary data in a single unified bootstrap call (with in-flight deduplication)
   const refreshAllData = async (silent: boolean = false) => {
@@ -166,14 +167,8 @@ export default function App() {
           setLoading(true);
         }
 
-        const [bootRes, dbsRes, usrsRes] = await Promise.allSettled([
-          api.getBootstrapData(),
-          api.getDbStatus(),
-          api.getUsers(),
-        ]);
-
-        if (bootRes.status === 'fulfilled') {
-          const data = bootRes.value;
+        try {
+          const data = await api.getBootstrapData();
           if (data.metrics) setMetrics(data.metrics);
           if (Array.isArray(data.clients)) setClients(data.clients);
           if (Array.isArray(data.applications)) setApplications(data.applications);
@@ -182,18 +177,32 @@ export default function App() {
           if (Array.isArray(data.hotels)) setHotels(data.hotels);
           if (Array.isArray(data.hotelBookings)) setHotelBookings(data.hotelBookings);
           if (Array.isArray(data.followUps)) setFollowUps(data.followUps);
-        } else {
+          if (data.dbStatus) setDbStatus(data.dbStatus);
+          if (Array.isArray(data.users)) setUsers(data.users);
+
+          if (typeof data.dataVersion === 'number') {
+            if (data.dataVersion !== lastDataVersionRef.current) {
+              lastDataVersionRef.current = data.dataVersion;
+              setProfileRefreshKey((prev) => prev + 1);
+            }
+          } else {
+            setProfileRefreshKey((prev) => prev + 1);
+          }
+        } catch {
           // Fallback if bootstrap fails
-          const [mtrRes, clsRes, appsRes, tsksRes, vtsRes, htlsRes, hbkgsRes, fusRes] = await Promise.allSettled([
-            api.getDashboardMetrics(),
-            api.getClients(),
-            api.getApplications(),
-            api.getTasks(),
-            api.getVisaTypes(true),
-            api.getHotels(false),
-            api.getHotelBookings(),
-            api.getFollowUps(),
-          ]);
+          const [mtrRes, clsRes, appsRes, tsksRes, vtsRes, htlsRes, hbkgsRes, fusRes, dbsRes, usrsRes] =
+            await Promise.allSettled([
+              api.getDashboardMetrics(),
+              api.getClients(),
+              api.getApplications(),
+              api.getTasks(),
+              api.getVisaTypes(true),
+              api.getHotels(false),
+              api.getHotelBookings(),
+              api.getFollowUps(),
+              api.getDbStatus(),
+              api.getUsers(),
+            ]);
           if (mtrRes.status === 'fulfilled') setMetrics(mtrRes.value);
           if (clsRes.status === 'fulfilled') setClients(clsRes.value);
           if (appsRes.status === 'fulfilled') setApplications(appsRes.value);
@@ -202,12 +211,10 @@ export default function App() {
           if (htlsRes.status === 'fulfilled') setHotels(htlsRes.value);
           if (hbkgsRes.status === 'fulfilled') setHotelBookings(hbkgsRes.value);
           if (fusRes.status === 'fulfilled') setFollowUps(fusRes.value);
+          if (dbsRes.status === 'fulfilled') setDbStatus(dbsRes.value);
+          if (usrsRes.status === 'fulfilled') setUsers(usrsRes.value);
+          setProfileRefreshKey((prev) => prev + 1);
         }
-
-        if (dbsRes.status === 'fulfilled') setDbStatus(dbsRes.value);
-        if (usrsRes.status === 'fulfilled') setUsers(usrsRes.value);
-
-        setProfileRefreshKey((prev) => prev + 1);
       } catch (err: any) {
         console.warn('[SN Travels] Non-fatal issue during refreshAllData:', err);
       } finally {
@@ -325,7 +332,9 @@ export default function App() {
 
     let eventSource: EventSource | null = null;
     try {
-      eventSource = new EventSource('/api/events');
+      const token = api.getToken();
+      const sseUrl = token ? `/api/events?token=${encodeURIComponent(token)}` : '/api/events';
+      eventSource = new EventSource(sseUrl);
       eventSource.onmessage = (event) => {
         try {
           const parsed = JSON.parse(event.data);

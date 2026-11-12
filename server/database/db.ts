@@ -1169,8 +1169,38 @@ function loadStore(): StoreData {
 
 let saveStoreTimer: ReturnType<typeof setTimeout> | null = null;
 let saveStoreInFlight = false;
+let saveStorePendingData: StoreData | null = null;
+let dataVersion = 1;
+
+async function flushStoreToDisk(dataToSave: StoreData) {
+  if (saveStoreInFlight) {
+    saveStorePendingData = dataToSave;
+    return;
+  }
+  saveStoreInFlight = true;
+  let currentData: StoreData | null = dataToSave;
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      await fs.promises.mkdir(DATA_DIR, { recursive: true });
+    }
+    while (currentData) {
+      const payload = JSON.stringify(currentData);
+      currentData = null;
+      await fs.promises.writeFile(DATA_FILE, payload, 'utf-8');
+      if (saveStorePendingData) {
+        currentData = saveStorePendingData;
+        saveStorePendingData = null;
+      }
+    }
+  } catch (err) {
+    console.error('[Database] Failed to async write store file:', err);
+  } finally {
+    saveStoreInFlight = false;
+  }
+}
 
 function saveStore(dataToSave: StoreData, immediate = false) {
+  dataVersion += 1;
   if (immediate) {
     try {
       if (!fs.existsSync(DATA_DIR)) {
@@ -1183,28 +1213,27 @@ function saveStore(dataToSave: StoreData, immediate = false) {
     return;
   }
 
-  // Coalesce frequent writes into a single non-blocking async disk flush
+  // Coalesce frequent writes into a single non-blocking async disk flush without ever dropping a write
   if (saveStoreTimer) {
     clearTimeout(saveStoreTimer);
   }
-  saveStoreTimer = setTimeout(async () => {
+  saveStoreTimer = setTimeout(() => {
     saveStoreTimer = null;
-    if (saveStoreInFlight) return;
-    saveStoreInFlight = true;
-    try {
-      if (!fs.existsSync(DATA_DIR)) {
-        await fs.promises.mkdir(DATA_DIR, { recursive: true });
-      }
-      await fs.promises.writeFile(DATA_FILE, JSON.stringify(dataToSave), 'utf-8');
-    } catch (err) {
-      console.error('[Database] Failed to async write store file:', err);
-    } finally {
-      saveStoreInFlight = false;
-    }
-  }, 200);
+    void flushStoreToDisk(dataToSave);
+  }, 150);
 }
 
 store = loadStore();
+
+function nextEntityId(tableKey: keyof StoreData['nextIds'], rows?: Array<{ id?: number }>): number {
+  const maxExisting = Array.isArray(rows)
+    ? rows.reduce((m, r) => Math.max(m, Number(r?.id) || 0), 0)
+    : 0;
+  const currentNext = Number(store.nextIds[tableKey]) || 1;
+  const id = Math.max(currentNext, maxExisting + 1);
+  store.nextIds[tableKey] = id + 1;
+  return id;
+}
 
 async function deleteClientFromMySQL(id: number, clientIdString?: string): Promise<boolean> {
   if (!pool || !isConnectedToMySQL) return false;
@@ -1541,6 +1570,10 @@ async function syncFromMySQL(force = false): Promise<void> {
 // Database Interface Service
 // --------------------------------------------------------------------------
 export const dbService = {
+  getDataVersion(): number {
+    return dataVersion;
+  },
+
   /**
    * Triggers a non-blocking stale-while-revalidate MySQL sync in the background
    * so HTTP API requests return in <1ms from memory without waiting on network I/O.
@@ -1605,20 +1638,7 @@ export const dbService = {
   },
 
   async createUser(data: { name: string; email: string; password_hash: string; role: 'super_admin' | 'admin' | 'staff'; is_active?: number }, creatorId: number = 1) {
-    let id = store.nextIds.users++;
-    if (isConnectedToMySQL && pool) {
-      try {
-        const [res]: any = await pool.query(
-          `INSERT INTO users (name, email, password_hash, role, is_active, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, NOW(), NOW())`,
-          [data.name, data.email, data.password_hash, data.role, data.is_active !== undefined ? data.is_active : 1]
-        );
-        if (res && res.insertId) id = res.insertId;
-      } catch (err: any) {
-        console.error('[MySQL] Error creating user in MySQL:', err.message);
-      }
-    }
-
+    const id = nextEntityId('users', store.users);
     const user: User = {
       id,
       name: data.name,
@@ -1631,6 +1651,20 @@ export const dbService = {
     };
     store.users.push(user);
     saveStore(store);
+
+    runMySQLWrite(async (activePool) => {
+      const [res]: any = await activePool.query(
+        `INSERT INTO users (id, name, email, password_hash, role, is_active, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, NOW(), NOW())
+         ON DUPLICATE KEY UPDATE name = VALUES(name), email = VALUES(email), password_hash = VALUES(password_hash), role = VALUES(role), is_active = VALUES(is_active), updated_at = NOW()`,
+        [user.id, user.name, user.email, user.password_hash, user.role, user.is_active]
+      );
+      if (res && res.insertId && res.insertId !== user.id) {
+        user.id = res.insertId;
+        store.nextIds.users = Math.max(store.nextIds.users, user.id + 1);
+      }
+    });
+
     this.logActivity(creatorId, 'CREATE_USER', 'USER', id, `Created user account: ${user.name} (${user.email}) [Role: ${user.role}]`);
     return user;
   },
@@ -1644,26 +1678,23 @@ export const dbService = {
     if (data.is_active !== undefined) user.is_active = data.is_active;
     if (data.password_hash) user.password_hash = data.password_hash;
 
-    if (isConnectedToMySQL && pool) {
-      try {
-        const sets: string[] = [];
-        const vals: any[] = [];
-        if (data.name !== undefined) { sets.push('name = ?'); vals.push(data.name); }
-        if (data.email !== undefined) { sets.push('email = ?'); vals.push(data.email); }
-        if (data.role !== undefined) { sets.push('role = ?'); vals.push(data.role); }
-        if (data.is_active !== undefined) { sets.push('is_active = ?'); vals.push(data.is_active); }
-        if (data.password_hash) { sets.push('password_hash = ?'); vals.push(data.password_hash); }
-        if (sets.length > 0) {
-          sets.push('updated_at = NOW()');
-          vals.push(id);
-          await pool.query(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`, vals);
-        }
-      } catch (err: any) {
-        console.error('[MySQL] Error updating user in MySQL:', err.message);
-      }
-    }
-
     saveStore(store);
+
+    runMySQLWrite(async (activePool) => {
+      const sets: string[] = [];
+      const vals: any[] = [];
+      if (data.name !== undefined) { sets.push('name = ?'); vals.push(data.name); }
+      if (data.email !== undefined) { sets.push('email = ?'); vals.push(data.email); }
+      if (data.role !== undefined) { sets.push('role = ?'); vals.push(data.role); }
+      if (data.is_active !== undefined) { sets.push('is_active = ?'); vals.push(data.is_active); }
+      if (data.password_hash) { sets.push('password_hash = ?'); vals.push(data.password_hash); }
+      if (sets.length > 0) {
+        sets.push('updated_at = NOW()');
+        vals.push(id);
+        await activePool.query(`UPDATE users SET ${sets.join(', ')} WHERE id = ?`, vals);
+      }
+    });
+
     this.logActivity(updaterId, 'UPDATE_USER', 'USER', id, `Updated user account: ${user.name}`);
     return user;
   },
@@ -1674,9 +1705,9 @@ export const dbService = {
       user.last_login_at = new Date().toISOString();
       saveStore(store);
     }
-    if (isConnectedToMySQL && pool) {
-      pool.query('UPDATE users SET last_login_at = NOW() WHERE id = ?', [id]).catch(e => console.warn('[MySQL] Failed to update last login:', e.message));
-    }
+    runMySQLWrite(async (activePool) => {
+      await activePool.query('UPDATE users SET last_login_at = NOW() WHERE id = ?', [id]);
+    });
   },
 
   async deleteUser(id: number, operatorId: number = 1) {
@@ -1696,13 +1727,9 @@ export const dbService = {
     const [deleted] = store.users.splice(idx, 1);
     saveStore(store);
 
-    if (isConnectedToMySQL && pool) {
-      try {
-        await pool.query('DELETE FROM users WHERE id = ?', [id]);
-      } catch (err: any) {
-        console.error('[MySQL] Error deleting user in MySQL:', err.message);
-      }
-    }
+    runMySQLWrite(async (activePool) => {
+      await activePool.query('DELETE FROM users WHERE id = ?', [id]);
+    });
 
     this.logActivity(operatorId, 'DELETE_USER', 'USER', id, `Deleted user account: ${deleted.name} (${deleted.email})`);
     return true;
@@ -1824,11 +1851,20 @@ export const dbService = {
     const client = store.clients.find(c => c.id === id || c.client_id === String(id));
     if (!client) return null;
 
+    const userById = new Map<number, User>();
+    for (const u of store.users) userById.set(u.id, u);
+
+    const vtById = new Map<number, VisaType>();
+    for (const vt of store.visa_types) vtById.set(vt.id, vt);
+
+    const cfById = new Map<number, CustomField>();
+    for (const cf of store.client_custom_fields) cfById.set(cf.id, cf);
+
     // Custom field values
     const customValues = store.client_custom_field_values
       .filter(v => v.client_id === client.id)
       .map(v => {
-        const field = store.client_custom_fields.find(f => f.id === v.field_id);
+        const field = cfById.get(v.field_id);
         return {
           field_id: v.field_id,
           field_name: field?.field_name || '',
@@ -1839,11 +1875,13 @@ export const dbService = {
       });
 
     // Applications with visa type details
+    const appIdsSet = new Set<number>();
     const applications = store.visa_applications
       .filter(a => a.client_id === client.id)
       .map(a => {
-        const vt = store.visa_types.find(v => v.id === a.visa_type_id);
-        const assigned = a.assigned_user_id ? store.users.find(u => u.id === a.assigned_user_id) : null;
+        appIdsSet.add(a.id);
+        const vt = vtById.get(a.visa_type_id);
+        const assigned = a.assigned_user_id ? userById.get(a.assigned_user_id) : null;
         return {
           ...a,
           visa_type_name: vt?.name || 'Unknown',
@@ -1855,7 +1893,7 @@ export const dbService = {
     const tasks = store.tasks
       .filter(t => t.client_id === client.id)
       .map(t => {
-        const assigned = t.assigned_user_id ? store.users.find(u => u.id === t.assigned_user_id) : null;
+        const assigned = t.assigned_user_id ? userById.get(t.assigned_user_id) : null;
         return {
           ...t,
           assigned_user_name: assigned?.name || null,
@@ -1866,7 +1904,7 @@ export const dbService = {
     const comments = store.comments
       .filter(c => c.client_id === client.id)
       .map(c => {
-        const author = store.users.find(u => u.id === c.user_id);
+        const author = userById.get(c.user_id);
         return {
           ...c,
           user_name: author?.name || 'Staff',
@@ -1878,9 +1916,9 @@ export const dbService = {
     // Activity
     const activity = store.activity_logs
       .filter(l => (l.entity_type === 'CLIENT' && l.entity_id === client.id) ||
-                   (l.entity_type === 'APPLICATION' && applications.some(app => app.id === l.entity_id)))
+                   (l.entity_type === 'APPLICATION' && l.entity_id !== null && appIdsSet.has(l.entity_id)))
       .map(l => {
-        const author = l.user_id ? store.users.find(u => u.id === l.user_id) : null;
+        const author = l.user_id ? userById.get(l.user_id) : null;
         return {
           ...l,
           user_name: author?.name || 'System',
@@ -1993,37 +2031,7 @@ export const dbService = {
     const nextInfo = this.getNextClientSerial();
     const clientId = data.client_id?.trim() ? data.client_id.trim() : nextInfo.next_client_id;
     const now = new Date().toISOString();
-    let id = store.nextIds.clients++;
-
-    if (isConnectedToMySQL && pool) {
-      try {
-        const [res]: any = await pool.query(
-          `INSERT INTO clients (client_id, full_name, passport_number, country, phone, whatsapp, email, date_of_birth, address, occupation, notes, google_drive_url, photo_url, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
-          [
-            clientId,
-            data.full_name.trim(),
-            data.passport_number.trim().toUpperCase(),
-            data.country.trim(),
-            data.phone?.trim() || null,
-            data.whatsapp?.trim() || null,
-            data.email?.trim() || null,
-            data.date_of_birth || null,
-            data.address?.trim() || null,
-            data.occupation?.trim() || null,
-            data.notes?.trim() || null,
-            data.google_drive_url?.trim() || null,
-            data.photo_url?.trim() || null,
-          ]
-        );
-        if (res && res.insertId) {
-          id = res.insertId;
-          store.nextIds.clients = Math.max(store.nextIds.clients, id + 1);
-        }
-      } catch (err: any) {
-        console.error('[MySQL] Error creating client in MySQL:', err.message);
-      }
-    }
+    const id = nextEntityId('clients', store.clients);
 
     const client: Client = {
       id,
@@ -2046,14 +2054,14 @@ export const dbService = {
 
     store.clients.unshift(client);
 
-    // Save custom fields in a single bulk query
+    // Save custom fields
+    const bulkCustomValues: Array<[number, number, string]> = [];
     if (data.custom_fields) {
-      const bulkCustomValues: Array<[number, number, string]> = [];
       for (const [fieldIdStr, val] of Object.entries(data.custom_fields)) {
         const fieldId = parseInt(fieldIdStr, 10);
         if (val !== undefined && val !== null && String(val).trim() !== '') {
           store.client_custom_field_values.push({
-            id: store.nextIds.client_custom_field_values++,
+            id: nextEntityId('client_custom_field_values', store.client_custom_field_values),
             client_id: id,
             field_id: fieldId,
             field_value: String(val),
@@ -2062,19 +2070,49 @@ export const dbService = {
           bulkCustomValues.push([id, fieldId, String(val)]);
         }
       }
-      if (isConnectedToMySQL && pool && bulkCustomValues.length > 0) {
+    }
+
+    saveStore(store);
+
+    runMySQLWrite(async (activePool) => {
+      await activePool.query(
+        `INSERT INTO clients (id, client_id, full_name, passport_number, country, phone, whatsapp, email, date_of_birth, address, occupation, notes, google_drive_url, photo_url, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
+         ON DUPLICATE KEY UPDATE
+           client_id = VALUES(client_id), full_name = VALUES(full_name), passport_number = VALUES(passport_number),
+           country = VALUES(country), phone = VALUES(phone), whatsapp = VALUES(whatsapp), email = VALUES(email),
+           date_of_birth = VALUES(date_of_birth), address = VALUES(address), occupation = VALUES(occupation),
+           notes = VALUES(notes), google_drive_url = VALUES(google_drive_url), photo_url = VALUES(photo_url), updated_at = NOW()`,
+        [
+          client.id,
+          client.client_id,
+          client.full_name,
+          client.passport_number,
+          client.country,
+          client.phone,
+          client.whatsapp,
+          client.email,
+          client.date_of_birth,
+          client.address,
+          client.occupation,
+          client.notes,
+          client.google_drive_url,
+          client.photo_url,
+        ]
+      );
+
+      if (bulkCustomValues.length > 0) {
         const placeholders = bulkCustomValues.map(() => '(?, ?, ?, NOW(), NOW())').join(', ');
         const flatParams = bulkCustomValues.flat();
-        await pool.query(
+        await activePool.query(
           `INSERT INTO client_custom_field_values (client_id, field_id, field_value, created_at, updated_at)
            VALUES ${placeholders}
            ON DUPLICATE KEY UPDATE field_value = VALUES(field_value), updated_at = NOW()`,
           flatParams
-        ).catch(err => console.error('[MySQL] Error saving custom fields in MySQL:', err.message));
+        );
       }
-    }
+    });
 
-    saveStore(store);
     this.logActivity(userId, 'CREATE_CLIENT', 'CLIENT', id, `Registered new client ${client.full_name} (${client.client_id})`);
     return client;
   },
@@ -2098,41 +2136,9 @@ export const dbService = {
     if (data.photo_url !== undefined) client.photo_url = data.photo_url ? data.photo_url.trim() : null;
     client.updated_at = new Date().toISOString();
 
-    if (isConnectedToMySQL && pool) {
-      try {
-        await pool.query(
-          `UPDATE clients SET
-            client_id = ?, full_name = ?, passport_number = ?, country = ?,
-            phone = ?, whatsapp = ?, email = ?, date_of_birth = ?,
-            address = ?, occupation = ?, notes = ?, google_drive_url = ?,
-            photo_url = ?, updated_at = NOW()
-           WHERE id = ?`,
-          [
-            client.client_id,
-            client.full_name,
-            client.passport_number,
-            client.country,
-            client.phone,
-            client.whatsapp,
-            client.email,
-            client.date_of_birth,
-            client.address,
-            client.occupation,
-            client.notes,
-            client.google_drive_url,
-            client.photo_url,
-            id,
-          ]
-        );
-      } catch (err: any) {
-        console.error('[MySQL] Error updating client in MySQL:', err.message);
-      }
-    }
-
-    // Update custom fields in batch
+    const upsertRows: Array<[number, number, string]> = [];
+    const deleteFieldIds: number[] = [];
     if (data.custom_fields) {
-      const upsertRows: Array<[number, number, string]> = [];
-      const deleteFieldIds: number[] = [];
       for (const [fieldIdStr, val] of Object.entries(data.custom_fields)) {
         const fieldId = parseInt(fieldIdStr, 10);
         const existing = store.client_custom_field_values.find(v => v.client_id === id && v.field_id === fieldId);
@@ -2140,7 +2146,7 @@ export const dbService = {
           existing.field_value = String(val);
         } else if (val !== undefined && val !== null && String(val).trim() !== '') {
           store.client_custom_field_values.push({
-            id: store.nextIds.client_custom_field_values++,
+            id: nextEntityId('client_custom_field_values', store.client_custom_field_values),
             client_id: id,
             field_id: fieldId,
             field_value: String(val),
@@ -2154,28 +2160,54 @@ export const dbService = {
           deleteFieldIds.push(fieldId);
         }
       }
-
-      if (isConnectedToMySQL && pool) {
-        if (upsertRows.length > 0) {
-          const placeholders = upsertRows.map(() => '(?, ?, ?, NOW(), NOW())').join(', ');
-          const flatParams = upsertRows.flat();
-          await pool.query(
-            `INSERT INTO client_custom_field_values (client_id, field_id, field_value, created_at, updated_at)
-             VALUES ${placeholders}
-             ON DUPLICATE KEY UPDATE field_value = VALUES(field_value), updated_at = NOW()`,
-            flatParams
-          ).catch(err => console.error('[MySQL] Error updating custom fields in MySQL:', err.message));
-        }
-        if (deleteFieldIds.length > 0) {
-          await pool.query(
-            `DELETE FROM client_custom_field_values WHERE client_id = ? AND field_id IN (${deleteFieldIds.map(() => '?').join(',')})`,
-            [id, ...deleteFieldIds]
-          ).catch(err => console.error('[MySQL] Error removing custom fields in MySQL:', err.message));
-        }
-      }
     }
 
     saveStore(store);
+
+    runMySQLWrite(async (activePool) => {
+      await activePool.query(
+        `UPDATE clients SET
+          client_id = ?, full_name = ?, passport_number = ?, country = ?,
+          phone = ?, whatsapp = ?, email = ?, date_of_birth = ?,
+          address = ?, occupation = ?, notes = ?, google_drive_url = ?,
+          photo_url = ?, updated_at = NOW()
+         WHERE id = ?`,
+        [
+          client.client_id,
+          client.full_name,
+          client.passport_number,
+          client.country,
+          client.phone,
+          client.whatsapp,
+          client.email,
+          client.date_of_birth,
+          client.address,
+          client.occupation,
+          client.notes,
+          client.google_drive_url,
+          client.photo_url,
+          id,
+        ]
+      );
+
+      if (upsertRows.length > 0) {
+        const placeholders = upsertRows.map(() => '(?, ?, ?, NOW(), NOW())').join(', ');
+        const flatParams = upsertRows.flat();
+        await activePool.query(
+          `INSERT INTO client_custom_field_values (client_id, field_id, field_value, created_at, updated_at)
+           VALUES ${placeholders}
+           ON DUPLICATE KEY UPDATE field_value = VALUES(field_value), updated_at = NOW()`,
+          flatParams
+        );
+      }
+      if (deleteFieldIds.length > 0) {
+        await activePool.query(
+          `DELETE FROM client_custom_field_values WHERE client_id = ? AND field_id IN (${deleteFieldIds.map(() => '?').join(',')})`,
+          [id, ...deleteFieldIds]
+        );
+      }
+    });
+
     this.logActivity(userId, 'UPDATE_CLIENT', 'CLIENT', id, `Updated profile details for ${client.full_name}`);
     return client;
   },
@@ -2183,26 +2215,11 @@ export const dbService = {
   async deleteClient(id: number, userId = 1): Promise<boolean> {
     const idx = store.clients.findIndex(c => c.id === id);
     const client = idx !== -1 ? store.clients[idx] : null;
-
-    let clientExistsInDb = false;
-    let dbClientId = '';
-    if (isConnectedToMySQL && pool) {
-      try {
-        const [rows]: any = await pool.query('SELECT id, client_id, full_name FROM clients WHERE id = ?', [id]);
-        if (Array.isArray(rows) && rows.length > 0) {
-          clientExistsInDb = true;
-          dbClientId = rows[0].client_id;
-        }
-      } catch (e: any) {
-        console.warn('[MySQL] Could not check client in DB:', e.message);
-      }
-    }
-
-    if (idx === -1 && !clientExistsInDb) {
+    if (idx === -1 && (!isConnectedToMySQL || !pool)) {
       return false;
     }
 
-    // 1. Remove from in-memory / local JSON store
+    // 1. Remove from in-memory / local JSON store immediately
     if (idx !== -1) {
       store.clients.splice(idx, 1);
     }
@@ -2220,13 +2237,13 @@ export const dbService = {
 
     saveStore(store);
 
-    // 2. CRITICAL: Execute real deletion in MySQL database!
-    if (isConnectedToMySQL && pool) {
-      await deleteClientFromMySQL(id, client?.client_id || dbClientId);
-    }
+    // 2. Execute MySQL deletion in write-through pipeline
+    runMySQLWrite(async () => {
+      await deleteClientFromMySQL(id, client?.client_id);
+    });
 
     const clientName = client?.full_name || 'Client';
-    const clientCode = client?.client_id || dbClientId || `#${id}`;
+    const clientCode = client?.client_id || `#${id}`;
     this.logActivity(userId, 'DELETE_CLIENT', 'CLIENT', id, `Deleted client profile ${clientName} (${clientCode})`);
 
     return true;
@@ -2321,14 +2338,18 @@ export const dbService = {
   getApplicationById(id: number) {
     const app = store.visa_applications.find(a => a.id === id || a.application_id === String(id));
     if (!app) return null;
+
+    const userById = new Map<number, User>();
+    for (const u of store.users) userById.set(u.id, u);
+
     const client = store.clients.find(c => c.id === app.client_id);
     const vt = store.visa_types.find(v => v.id === app.visa_type_id);
-    const staff = app.assigned_user_id ? store.users.find(u => u.id === app.assigned_user_id) : null;
+    const staff = app.assigned_user_id ? userById.get(app.assigned_user_id) : null;
 
     const history = store.application_status_history
       .filter(h => h.application_id === app.id)
       .map(h => {
-        const u = h.changed_by_user_id ? store.users.find(usr => usr.id === h.changed_by_user_id) : null;
+        const u = h.changed_by_user_id ? userById.get(h.changed_by_user_id) : null;
         return {
           ...h,
           user_name: u?.name || 'Staff',
@@ -2339,7 +2360,7 @@ export const dbService = {
     const tasks = store.tasks
       .filter(t => t.application_id === app.id)
       .map(t => {
-        const assigned = t.assigned_user_id ? store.users.find(u => u.id === t.assigned_user_id) : null;
+        const assigned = t.assigned_user_id ? userById.get(t.assigned_user_id) : null;
         return {
           ...t,
           assigned_user_name: assigned?.name || null,
@@ -2370,36 +2391,14 @@ export const dbService = {
     notes?: string;
     assigned_user_id?: number;
   }, userId = 1) {
-    let id = store.nextIds.visa_applications++;
-    let appId = `APP-${String(id).padStart(6, '0')}`;
+    const id = nextEntityId('visa_applications', store.visa_applications);
+    const appId = `APP-${String(id).padStart(6, '0')}`;
     const now = new Date().toISOString();
     const status = data.status || 'Upcoming';
     const deliveryDate = (status === 'Online Review Completed' || status === 'Pending Collection') && data.delivery_date ? data.delivery_date : null;
 
     const validAssignedUserId = data.assigned_user_id && store.users.some(u => u.id === data.assigned_user_id) ? data.assigned_user_id : null;
     const validUserId = userId && store.users.some(u => u.id === userId) ? userId : 1;
-
-    if (isConnectedToMySQL && pool) {
-      try {
-        const [res]: any = await pool.query(
-          `INSERT INTO visa_applications (application_id, client_id, visa_type_id, status, delivery_date, notes, assigned_user_id, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
-          [appId, data.client_id, data.visa_type_id, status, deliveryDate, data.notes?.trim() || null, validAssignedUserId]
-        );
-        if (res && res.insertId) {
-          id = res.insertId;
-          appId = `APP-${String(id).padStart(6, '0')}`;
-          await pool.query('UPDATE visa_applications SET application_id = ? WHERE id = ?', [appId, id]);
-        }
-        await pool.query(
-          `INSERT INTO application_status_history (application_id, old_status, new_status, delivery_date, changed_by_user_id, notes, created_at)
-           VALUES (?, NULL, ?, ?, ?, 'Visa application created', NOW())`,
-          [id, status, deliveryDate, validUserId]
-        );
-      } catch (err: any) {
-        console.error('[MySQL] Error creating application in MySQL:', err.message);
-      }
-    }
 
     const app: VisaApplication = {
       id,
@@ -2417,8 +2416,9 @@ export const dbService = {
     store.visa_applications.unshift(app);
 
     // Initial status history
+    const histId = nextEntityId('application_status_history', store.application_status_history);
     store.application_status_history.push({
-      id: store.nextIds.application_status_history++,
+      id: histId,
       application_id: id,
       old_status: null,
       new_status: status,
@@ -2430,6 +2430,23 @@ export const dbService = {
 
     const client = store.clients.find(c => c.id === data.client_id);
     const clientName = client?.full_name || 'Client';
+
+    runMySQLWrite(async (activePool) => {
+      await activePool.query(
+        `INSERT INTO visa_applications (id, application_id, client_id, visa_type_id, status, delivery_date, notes, assigned_user_id, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
+         ON DUPLICATE KEY UPDATE
+           application_id = VALUES(application_id), status = VALUES(status), delivery_date = VALUES(delivery_date),
+           notes = VALUES(notes), assigned_user_id = VALUES(assigned_user_id), updated_at = NOW()`,
+        [app.id, app.application_id, app.client_id, app.visa_type_id, app.status, app.delivery_date, app.notes, app.assigned_user_id]
+      );
+      await activePool.query(
+        `INSERT INTO application_status_history (id, application_id, old_status, new_status, delivery_date, changed_by_user_id, notes, created_at)
+         VALUES (?, ?, NULL, ?, ?, ?, 'Visa application created', NOW())
+         ON DUPLICATE KEY UPDATE new_status = VALUES(new_status)`,
+        [histId, app.id, status, deliveryDate, validUserId]
+      );
+    });
 
     // If initial status requires a delivery date, create delivery task
     if ((status === 'Online Review Completed' || status === 'Pending Collection') && app.delivery_date) {
@@ -2446,7 +2463,8 @@ export const dbService = {
     newStatus: string,
     deliveryDate?: string | null,
     notes?: string,
-    userId = 1
+    userId = 1,
+    skipSaveAndLog = false
   ) {
     const app = store.visa_applications.find(a => a.id === id);
     if (!app) return null;
@@ -2465,49 +2483,49 @@ export const dbService = {
       }
     }
 
-    if (isConnectedToMySQL && pool) {
-      try {
-        await pool.query(
-          'UPDATE visa_applications SET status = ?, delivery_date = ?, notes = COALESCE(?, notes), updated_at = NOW() WHERE id = ?',
-          [newStatus, app.delivery_date || null, notes ? notes.trim() : null, id]
-        );
-        await pool.query(
-          `INSERT INTO application_status_history (application_id, old_status, new_status, delivery_date, changed_by_user_id, notes, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, NOW())`,
-          [id, oldStatus, newStatus, app.delivery_date || null, userId, notes ? notes.trim() : `Status changed from ${oldStatus} to ${newStatus}`]
-        );
-        if (newStatus === 'Returned') {
-          await pool.query(
-            `UPDATE tasks 
-             SET status = 'Completed', completed_at = NOW(), updated_at = NOW() 
-             WHERE (application_id = ? OR (client_id = ? AND (is_delivery_task = 1 OR title LIKE '%Delivery%' OR title LIKE '%Collection%' OR title LIKE '%Passport%'))) 
-               AND status != 'Completed'`,
-            [id, app.client_id]
-          );
-        } else if (oldStatus === 'Returned') {
-          await pool.query(
-            `UPDATE tasks 
-             SET status = 'Pending', completed_at = NULL, updated_at = NOW() 
-             WHERE (application_id = ? OR (client_id = ? AND (is_delivery_task = 1 OR title LIKE '%Delivery%' OR title LIKE '%Collection%' OR title LIKE '%Passport%'))) 
-               AND status = 'Completed'`,
-            [id, app.client_id]
-          );
-        }
-      } catch (err: any) {
-        console.error('[MySQL] Error updating application status in MySQL:', err.message);
-      }
-    }
+    const histId = nextEntityId('application_status_history', store.application_status_history);
+    const historyNote = notes ? notes.trim() : `Status changed from ${oldStatus} to ${newStatus}`;
 
     // Record history
     store.application_status_history.push({
-      id: store.nextIds.application_status_history++,
+      id: histId,
       application_id: id,
       old_status: oldStatus,
       new_status: newStatus,
       delivery_date: app.delivery_date,
       changed_by_user_id: userId,
-      notes: notes || `Status changed from ${oldStatus} to ${newStatus}`,
+      notes: historyNote,
       created_at: new Date().toISOString(),
+    });
+
+    runMySQLWrite(async (activePool) => {
+      await activePool.query(
+        'UPDATE visa_applications SET status = ?, delivery_date = ?, notes = COALESCE(?, notes), updated_at = NOW() WHERE id = ?',
+        [newStatus, app.delivery_date || null, notes ? notes.trim() : null, id]
+      );
+      await activePool.query(
+        `INSERT INTO application_status_history (id, application_id, old_status, new_status, delivery_date, changed_by_user_id, notes, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
+         ON DUPLICATE KEY UPDATE new_status = VALUES(new_status)`,
+        [histId, id, oldStatus, newStatus, app.delivery_date || null, userId, historyNote]
+      );
+      if (newStatus === 'Returned') {
+        await activePool.query(
+          `UPDATE tasks 
+           SET status = 'Completed', completed_at = NOW(), updated_at = NOW() 
+           WHERE (application_id = ? OR (client_id = ? AND (is_delivery_task = 1 OR title LIKE '%Delivery%' OR title LIKE '%Collection%' OR title LIKE '%Passport%'))) 
+             AND status != 'Completed'`,
+          [id, app.client_id]
+        );
+      } else if (oldStatus === 'Returned') {
+        await activePool.query(
+          `UPDATE tasks 
+           SET status = 'Pending', completed_at = NULL, updated_at = NOW() 
+           WHERE (application_id = ? OR (client_id = ? AND (is_delivery_task = 1 OR title LIKE '%Delivery%' OR title LIKE '%Collection%' OR title LIKE '%Passport%'))) 
+             AND status = 'Completed'`,
+          [id, app.client_id]
+        );
+      }
     });
 
     // If status has a collection/delivery date, create/update delivery task
@@ -2544,14 +2562,16 @@ export const dbService = {
       });
     }
 
-    saveStore(store);
-    this.logActivity(
-      userId,
-      'STATUS_CHANGE',
-      'APPLICATION',
-      id,
-      `Changed status of ${app.application_id} (${clientName}) to ${newStatus}`
-    );
+    if (!skipSaveAndLog) {
+      saveStore(store);
+      this.logActivity(
+        userId,
+        'STATUS_CHANGE',
+        'APPLICATION',
+        id,
+        `Changed status of ${app.application_id} (${clientName}) to ${newStatus}`
+      );
+    }
     return app;
   },
 
@@ -2573,13 +2593,15 @@ export const dbService = {
         newStatus,
         deliveryDate,
         notes ? `[Batch Update] ${notes}` : `Batch status update to ${newStatus}`,
-        userId
+        userId,
+        true
       );
       if (updated) {
         updatedCount++;
       }
     }
 
+    saveStore(store);
     this.logActivity(
       userId,
       'BATCH_UPDATE_STATUS',
@@ -2602,20 +2624,16 @@ export const dbService = {
     if (data.status !== undefined && data.status !== oldStatus) {
       app.status = data.status;
       if (data.status === 'Returned') {
-        if (isConnectedToMySQL && pool) {
-          try {
-            await pool.query(
-              `UPDATE tasks 
-               SET status = 'Completed', completed_at = NOW(), updated_at = NOW() 
-               WHERE (application_id = ? OR (client_id = ? AND (is_delivery_task = 1 OR title LIKE '%Delivery%' OR title LIKE '%Collection%'))) 
-                 AND title NOT LIKE '[Follow-up]%'
-                 AND status != 'Completed'`,
-              [id, app.client_id]
-            );
-          } catch (err: any) {
-            console.error('[MySQL] Error completing tasks on status Returned:', err.message);
-          }
-        }
+        runMySQLWrite(async (activePool) => {
+          await activePool.query(
+            `UPDATE tasks 
+             SET status = 'Completed', completed_at = NOW(), updated_at = NOW() 
+             WHERE (application_id = ? OR (client_id = ? AND (is_delivery_task = 1 OR title LIKE '%Delivery%' OR title LIKE '%Collection%'))) 
+               AND title NOT LIKE '[Follow-up]%'
+               AND status != 'Completed'`,
+            [id, app.client_id]
+          );
+        });
 
         store.tasks.forEach(t => {
           const isFollowUp = (t.title && t.title.startsWith('[Follow-up]')) || (store.follow_ups && store.follow_ups.some(f => Number(f.task_id) === Number(t.id)));
@@ -2630,20 +2648,16 @@ export const dbService = {
           }
         });
       } else if (oldStatus === 'Returned' && data.status !== 'Returned') {
-        if (isConnectedToMySQL && pool) {
-          try {
-            await pool.query(
-              `UPDATE tasks 
-               SET status = 'Pending', completed_at = NULL, updated_at = NOW() 
-               WHERE (application_id = ? OR (client_id = ? AND (is_delivery_task = 1 OR title LIKE '%Delivery%' OR title LIKE '%Collection%'))) 
-                 AND title NOT LIKE '[Follow-up]%'
-                 AND status = 'Completed'`,
-              [id, app.client_id]
-            );
-          } catch (err: any) {
-            console.error('[MySQL] Error uncompleting tasks on status change from Returned:', err.message);
-          }
-        }
+        runMySQLWrite(async (activePool) => {
+          await activePool.query(
+            `UPDATE tasks 
+             SET status = 'Pending', completed_at = NULL, updated_at = NOW() 
+             WHERE (application_id = ? OR (client_id = ? AND (is_delivery_task = 1 OR title LIKE '%Delivery%' OR title LIKE '%Collection%'))) 
+               AND title NOT LIKE '[Follow-up]%'
+               AND status = 'Completed'`,
+            [id, app.client_id]
+          );
+        });
 
         store.tasks.forEach(t => {
           const isFollowUp = (t.title && t.title.startsWith('[Follow-up]')) || (store.follow_ups && store.follow_ups.some(f => Number(f.task_id) === Number(t.id)));
@@ -2674,18 +2688,15 @@ export const dbService = {
 
     app.updated_at = new Date().toISOString();
 
-    if (isConnectedToMySQL && pool) {
-      try {
-        await pool.query(
-          `UPDATE visa_applications SET status = ?, visa_type_id = ?, assigned_user_id = ?, notes = ?, delivery_date = ?, updated_at = NOW() WHERE id = ?`,
-          [app.status, app.visa_type_id, app.assigned_user_id || null, app.notes || null, app.delivery_date || null, id]
-        );
-      } catch (err: any) {
-        console.error('[MySQL] Error updating application in MySQL:', err.message);
-      }
-    }
-
     saveStore(store);
+
+    runMySQLWrite(async (activePool) => {
+      await activePool.query(
+        `UPDATE visa_applications SET status = ?, visa_type_id = ?, assigned_user_id = ?, notes = ?, delivery_date = ?, updated_at = NOW() WHERE id = ?`,
+        [app.status, app.visa_type_id, app.assigned_user_id || null, app.notes || null, app.delivery_date || null, id]
+      );
+    });
+
     this.logActivity(userId, 'UPDATE_APPLICATION', 'APPLICATION', id, `Updated application ${app.application_id}`);
     return app;
   },
@@ -2711,45 +2722,20 @@ export const dbService = {
       if (validAssignedUserId) {
         existingTask.assigned_user_id = validAssignedUserId;
       }
-      if (isConnectedToMySQL && pool) {
-        try {
-          await pool.query(
-            'UPDATE tasks SET due_date = ?, status = ?, completed_at = ?, assigned_user_id = COALESCE(?, assigned_user_id), updated_at = NOW() WHERE id = ?',
-            [app.delivery_date, existingTask.status, existingTask.completed_at ? new Date(existingTask.completed_at) : null, validAssignedUserId, existingTask.id]
-          );
-        } catch (err: any) {
-          console.error('[MySQL] Error updating delivery task:', err.message);
-        }
-      }
+      runMySQLWrite(async (activePool) => {
+        await activePool.query(
+          'UPDATE tasks SET due_date = ?, status = ?, completed_at = ?, assigned_user_id = COALESCE(?, assigned_user_id), updated_at = NOW() WHERE id = ?',
+          [app.delivery_date, existingTask.status, existingTask.completed_at ? new Date(existingTask.completed_at) : null, validAssignedUserId, existingTask.id]
+        );
+      });
       this.logActivity(userId, 'UPDATE_TASK', 'TASK', existingTask.id, `Updated delivery date to ${app.delivery_date} for task "${existingTask.title}"`);
     } else {
-      let taskId = store.nextIds.tasks++;
-      if (isConnectedToMySQL && pool) {
-        try {
-          const [res]: any = await pool.query(
-            `INSERT INTO tasks (title, description, client_id, application_id, assigned_user_id, due_date, priority, status, is_delivery_task, created_at, updated_at)
-             VALUES (?, ?, ?, ?, ?, ?, 'High', 'Pending', 1, NOW(), NOW())`,
-            [
-              taskTitle,
-              `Scheduled passport/visa collection/delivery for ${clientName} (${app.application_id}). Status: ${app.status}.`,
-              app.client_id,
-              app.id,
-              validAssignedUserId,
-              app.delivery_date,
-            ]
-          );
-          if (res && res.insertId) {
-            taskId = res.insertId;
-            store.nextIds.tasks = Math.max(store.nextIds.tasks, taskId + 1);
-          }
-        } catch (err: any) {
-          console.error('[MySQL] Error creating delivery task:', err.message);
-        }
-      }
+      const taskId = nextEntityId('tasks', store.tasks);
+      const taskDesc = `Scheduled passport/visa collection/delivery for ${clientName} (${app.application_id}). Status: ${app.status}.`;
       const newTask: Task = {
         id: taskId,
         title: taskTitle,
-        description: `Scheduled passport/visa collection/delivery for ${clientName} (${app.application_id}). Status: ${app.status}.`,
+        description: taskDesc,
         client_id: app.client_id,
         application_id: app.id,
         assigned_user_id: validAssignedUserId,
@@ -2762,6 +2748,24 @@ export const dbService = {
         updated_at: new Date().toISOString(),
       };
       store.tasks.push(newTask);
+
+      runMySQLWrite(async (activePool) => {
+        await activePool.query(
+          `INSERT INTO tasks (id, title, description, client_id, application_id, assigned_user_id, due_date, priority, status, is_delivery_task, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'High', 'Pending', 1, NOW(), NOW())
+           ON DUPLICATE KEY UPDATE due_date = VALUES(due_date), status = VALUES(status), updated_at = NOW()`,
+          [
+            taskId,
+            taskTitle,
+            taskDesc,
+            app.client_id,
+            app.id,
+            validAssignedUserId,
+            app.delivery_date,
+          ]
+        );
+      });
+
       this.logActivity(userId, 'CREATE_TASK', 'TASK', taskId, `Auto-created delivery task "${taskTitle}" on ${app.delivery_date}`);
     }
   },
@@ -2780,16 +2784,12 @@ export const dbService = {
 
     saveStore(store);
 
-    if (isConnectedToMySQL && pool) {
-      try {
-        await pool.query('DELETE FROM application_status_history WHERE application_id = ?', [id]).catch(() => {});
-        await pool.query('DELETE FROM comments WHERE application_id = ?', [id]).catch(() => {});
-        await pool.query('DELETE FROM tasks WHERE application_id = ?', [id]).catch(() => {});
-        await pool.query('DELETE FROM visa_applications WHERE id = ?', [id]);
-      } catch (err: any) {
-        console.error('[MySQL] Error deleting application in MySQL:', err.message);
-      }
-    }
+    runMySQLWrite(async (activePool) => {
+      await activePool.query('DELETE FROM application_status_history WHERE application_id = ?', [id]).catch(() => {});
+      await activePool.query('DELETE FROM comments WHERE application_id = ?', [id]).catch(() => {});
+      await activePool.query('DELETE FROM tasks WHERE application_id = ?', [id]).catch(() => {});
+      await activePool.query('DELETE FROM visa_applications WHERE id = ?', [id]);
+    });
 
     this.logActivity(userId, 'DELETE_APPLICATION', 'APPLICATION', id, `Deleted visa application ${app.application_id}`);
     return true;
@@ -2853,33 +2853,9 @@ export const dbService = {
     due_date: string;
     priority?: 'Low' | 'Normal' | 'High' | 'Urgent';
   }, userId = 1) {
-    let id = store.nextIds.tasks++;
+    const id = nextEntityId('tasks', store.tasks);
     const now = new Date().toISOString();
     const validAssignedUserId = data.assigned_user_id && store.users.some(u => u.id === data.assigned_user_id) ? data.assigned_user_id : null;
-
-    if (isConnectedToMySQL && pool) {
-      try {
-        const [res]: any = await pool.query(
-          `INSERT INTO tasks (title, description, client_id, application_id, assigned_user_id, due_date, priority, status, is_delivery_task, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 'Pending', 0, NOW(), NOW())`,
-          [
-            data.title.trim(),
-            data.description?.trim() || null,
-            data.client_id || null,
-            data.application_id || null,
-            validAssignedUserId,
-            data.due_date,
-            data.priority || 'Normal',
-          ]
-        );
-        if (res && res.insertId) {
-          id = res.insertId;
-          store.nextIds.tasks = Math.max(store.nextIds.tasks, id + 1);
-        }
-      } catch (err: any) {
-        console.error('[MySQL] Error creating task in MySQL:', err.message);
-      }
-    }
 
     const task: Task = {
       id,
@@ -2898,6 +2874,27 @@ export const dbService = {
     };
     store.tasks.push(task);
     saveStore(store);
+
+    runMySQLWrite(async (activePool) => {
+      await activePool.query(
+        `INSERT INTO tasks (id, title, description, client_id, application_id, assigned_user_id, due_date, priority, status, is_delivery_task, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Pending', 0, NOW(), NOW())
+         ON DUPLICATE KEY UPDATE
+           title = VALUES(title), description = VALUES(description), due_date = VALUES(due_date),
+           priority = VALUES(priority), status = VALUES(status), updated_at = NOW()`,
+        [
+          task.id,
+          task.title,
+          task.description,
+          task.client_id,
+          task.application_id,
+          task.assigned_user_id,
+          task.due_date,
+          task.priority,
+        ]
+      );
+    });
+
     this.logActivity(userId, 'CREATE_TASK', 'TASK', id, `Created task: ${task.title}`);
     return task;
   },
@@ -2932,7 +2929,6 @@ export const dbService = {
     );
 
     if (isDeliveryOrCollection && data.status === 'Completed' && !wasCompleted) {
-      // Only completing a genuine collection/delivery task marks application status as Returned
       let appId = task.application_id;
       if (!appId && task.client_id) {
         const activeApp = store.visa_applications.find(a => Number(a.client_id) === Number(task.client_id) && (a.status === 'Pending Collection' || a.delivery_date));
@@ -2940,13 +2936,12 @@ export const dbService = {
       }
       if (appId) {
         try {
-          await this.updateApplicationStatus(appId, 'Returned', undefined, 'Collection task completed.', userId);
+          await this.updateApplicationStatus(appId, 'Returned', undefined, 'Collection task completed.', userId, true);
         } catch (err: any) {
           console.error('[MySQL] Error auto-updating application to Returned on task complete:', err.message);
         }
       }
     } else if (isDeliveryOrCollection && data.status === 'Pending' && wasCompleted) {
-      // Only uncompleting a genuine collection/delivery task reverts application status if currently Returned
       let appId = task.application_id;
       if (!appId && task.client_id) {
         const returnedApp = store.visa_applications.find(a => Number(a.client_id) === Number(task.client_id) && a.status === 'Returned');
@@ -2964,37 +2959,11 @@ export const dbService = {
             : 'Pending Collection';
 
           try {
-            await this.updateApplicationStatus(appId, previousStatus, undefined, 'Reverted status from Returned because collection task was marked uncompleted.', userId);
+            await this.updateApplicationStatus(appId, previousStatus, undefined, 'Reverted status from Returned because collection task was marked uncompleted.', userId, true);
           } catch (err: any) {
             console.error('[MySQL] Error reverting application status on task uncomplete:', err.message);
           }
         }
-      }
-    }
-
-    if (isConnectedToMySQL && pool) {
-      try {
-        await pool.query(
-          `UPDATE tasks SET
-            title = ?, description = ?, client_id = ?, application_id = ?,
-            assigned_user_id = ?, due_date = ?, priority = ?, status = ?,
-            completed_at = ?, updated_at = NOW()
-           WHERE id = ?`,
-          [
-            task.title,
-            task.description,
-            task.client_id,
-            task.application_id,
-            task.assigned_user_id,
-            task.due_date,
-            task.priority,
-            task.status,
-            task.completed_at ? new Date(task.completed_at) : null,
-            id,
-          ]
-        );
-      } catch (err: any) {
-        console.error('[MySQL] Error updating task in MySQL:', err.message);
       }
     }
 
@@ -3012,23 +2981,45 @@ export const dbService = {
         linkedFollowUp.priority = data.priority;
       }
       linkedFollowUp.updated_at = new Date().toISOString();
-      if (isConnectedToMySQL && pool) {
-        try {
-          await pool.query(
-            `UPDATE follow_ups SET status = ?, due_date = ?, priority = ?, completed_at = ?, updated_at = NOW() WHERE id = ?`,
-            [
-              linkedFollowUp.status,
-              linkedFollowUp.due_date,
-              linkedFollowUp.priority,
-              linkedFollowUp.completed_at ? new Date(linkedFollowUp.completed_at) : null,
-              linkedFollowUp.id,
-            ]
-          ).catch(() => {});
-        } catch {}
-      }
     }
 
     saveStore(store);
+
+    runMySQLWrite(async (activePool) => {
+      await activePool.query(
+        `UPDATE tasks SET
+          title = ?, description = ?, client_id = ?, application_id = ?,
+          assigned_user_id = ?, due_date = ?, priority = ?, status = ?,
+          completed_at = ?, updated_at = NOW()
+         WHERE id = ?`,
+        [
+          task.title,
+          task.description,
+          task.client_id,
+          task.application_id,
+          task.assigned_user_id,
+          task.due_date,
+          task.priority,
+          task.status,
+          task.completed_at ? new Date(task.completed_at) : null,
+          id,
+        ]
+      );
+
+      if (linkedFollowUp) {
+        await activePool.query(
+          `UPDATE follow_ups SET status = ?, due_date = ?, priority = ?, completed_at = ?, updated_at = NOW() WHERE id = ?`,
+          [
+            linkedFollowUp.status,
+            linkedFollowUp.due_date,
+            linkedFollowUp.priority,
+            linkedFollowUp.completed_at ? new Date(linkedFollowUp.completed_at) : null,
+            linkedFollowUp.id,
+          ]
+        ).catch(() => {});
+      }
+    });
+
     this.logActivity(userId, 'UPDATE_TASK', 'TASK', id, `Updated task: ${task.title} (${task.status})`);
     return task;
   },
@@ -3042,24 +3033,17 @@ export const dbService = {
     }
 
     if (task) {
-      // Clear delivery_date on linked application so it doesn't reappear on calendar
       if (task.is_delivery_task === 1 || task.application_id) {
         if (task.application_id) {
           const app = store.visa_applications.find(a => a.id === task.application_id);
           if (app) {
             app.delivery_date = null;
           }
-          if (isConnectedToMySQL && pool) {
-            await pool.query('UPDATE visa_applications SET delivery_date = NULL WHERE id = ?', [task.application_id]).catch(() => {});
-          }
         } else if (task.client_id) {
           const apps = store.visa_applications.filter(a => a.client_id === task.client_id && a.delivery_date);
           apps.forEach(app => {
             app.delivery_date = null;
           });
-          if (isConnectedToMySQL && pool) {
-            await pool.query('UPDATE visa_applications SET delivery_date = NULL WHERE client_id = ?', [task.client_id]).catch(() => {});
-          }
         }
       }
 
@@ -3082,16 +3066,18 @@ export const dbService = {
 
     saveStore(store);
 
-    if (isConnectedToMySQL && pool) {
-      try {
-        await pool.query('UPDATE hotel_bookings SET checkout_task_id = NULL WHERE checkout_task_id = ?', [id]).catch(() => {});
-        await pool.query('UPDATE follow_ups SET task_id = NULL WHERE task_id = ?', [id]).catch(() => {});
-        await pool.query('DELETE FROM tasks WHERE id = ?', [id]);
-        console.log(`[MySQL] Deleted task ${id} from MySQL`);
-      } catch (err: any) {
-        console.error(`[MySQL] Error deleting task ${id} from MySQL:`, err.message);
+    runMySQLWrite(async (activePool) => {
+      if (task && (task.is_delivery_task === 1 || task.application_id)) {
+        if (task.application_id) {
+          await activePool.query('UPDATE visa_applications SET delivery_date = NULL WHERE id = ?', [task.application_id]).catch(() => {});
+        } else if (task.client_id) {
+          await activePool.query('UPDATE visa_applications SET delivery_date = NULL WHERE client_id = ?', [task.client_id]).catch(() => {});
+        }
       }
-    }
+      await activePool.query('UPDATE hotel_bookings SET checkout_task_id = NULL WHERE checkout_task_id = ?', [id]).catch(() => {});
+      await activePool.query('UPDATE follow_ups SET task_id = NULL WHERE task_id = ?', [id]).catch(() => {});
+      await activePool.query('DELETE FROM tasks WHERE id = ?', [id]);
+    });
 
     if (task) {
       this.logActivity(userId, 'DELETE_TASK', 'TASK', id, `Deleted task: ${task.title}`);
@@ -3105,8 +3091,11 @@ export const dbService = {
     if (applicationId) {
       list = list.filter(c => c.application_id === applicationId);
     }
+    const userById = new Map<number, User>();
+    for (const u of store.users) userById.set(u.id, u);
+
     return list.map(c => {
-      const u = store.users.find(usr => usr.id === c.user_id);
+      const u = userById.get(c.user_id);
       return {
         ...c,
         user_name: u?.name || 'Staff',
@@ -3116,24 +3105,8 @@ export const dbService = {
   },
 
   async createComment(data: { client_id: number; application_id?: number | null; user_id: number; message: string }) {
-    let id = store.nextIds.comments++;
+    const id = nextEntityId('comments', store.comments);
     const now = new Date().toISOString();
-
-    if (isConnectedToMySQL && pool) {
-      try {
-        const [res]: any = await pool.query(
-          `INSERT INTO comments (client_id, application_id, user_id, message, created_at)
-           VALUES (?, ?, ?, ?, NOW())`,
-          [data.client_id, data.application_id || null, data.user_id, data.message.trim()]
-        );
-        if (res && res.insertId) {
-          id = res.insertId;
-          store.nextIds.comments = Math.max(store.nextIds.comments, id + 1);
-        }
-      } catch (err: any) {
-        console.error('[MySQL] Error creating comment in MySQL:', err.message);
-      }
-    }
 
     const comment: Comment = {
       id,
@@ -3145,6 +3118,16 @@ export const dbService = {
     };
     store.comments.push(comment);
     saveStore(store);
+
+    runMySQLWrite(async (activePool) => {
+      await activePool.query(
+        `INSERT INTO comments (id, client_id, application_id, user_id, message, created_at)
+         VALUES (?, ?, ?, ?, ?, NOW())
+         ON DUPLICATE KEY UPDATE message = VALUES(message)`,
+        [comment.id, comment.client_id, comment.application_id, comment.user_id, comment.message]
+      );
+    });
+
     const author = store.users.find(u => u.id === data.user_id);
     this.logActivity(data.user_id, 'ADD_COMMENT', 'CLIENT', data.client_id, `Internal note added by ${author?.name || 'Staff'}`);
     return {
@@ -3171,7 +3154,7 @@ export const dbService = {
     is_required?: number;
     display_order?: number;
   }, userId = 1) {
-    let id = store.nextIds.client_custom_fields++;
+    const id = nextEntityId('client_custom_fields', store.client_custom_fields);
     const cleanName = data.field_name.toLowerCase().replace(/[^a-z0-9_]/g, '_');
     const field: CustomField = {
       id,
@@ -3185,21 +3168,21 @@ export const dbService = {
       created_at: new Date().toISOString(),
     };
 
-    if (isConnectedToMySQL && pool) {
-      try {
-        const [res]: any = await pool.query(
-          `INSERT INTO client_custom_fields (field_name, field_label, field_type, field_options, is_required, is_active, display_order, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, 1, ?, NOW(), NOW())`,
-          [field.field_name, field.field_label, field.field_type, field.field_options, field.is_required, field.display_order]
-        );
-        if (res && res.insertId) field.id = res.insertId;
-      } catch (err: any) {
-        console.error('[MySQL] Error creating custom field in MySQL:', err.message);
-      }
-    }
-
     store.client_custom_fields.push(field);
     saveStore(store);
+
+    runMySQLWrite(async (activePool) => {
+      await activePool.query(
+        `INSERT INTO client_custom_fields (id, field_name, field_label, field_type, field_options, is_required, is_active, display_order, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, 1, ?, NOW(), NOW())
+         ON DUPLICATE KEY UPDATE
+           field_label = VALUES(field_label), field_type = VALUES(field_type),
+           field_options = VALUES(field_options), is_required = VALUES(is_required),
+           display_order = VALUES(display_order), updated_at = NOW()`,
+        [field.id, field.field_name, field.field_label, field.field_type, field.field_options, field.is_required, field.display_order]
+      );
+    });
+
     this.logActivity(userId, 'CREATE_CUSTOM_FIELD', 'SETTINGS', field.id, `Added custom client field "${field.field_label}"`);
     return field;
   },
@@ -3214,18 +3197,15 @@ export const dbService = {
     if (data.is_active !== undefined) field.is_active = data.is_active;
     if (data.display_order !== undefined) field.display_order = data.display_order;
 
-    if (isConnectedToMySQL && pool) {
-      try {
-        await pool.query(
-          `UPDATE client_custom_fields SET field_label = ?, field_type = ?, field_options = ?, is_required = ?, is_active = ?, display_order = ?, updated_at = NOW() WHERE id = ?`,
-          [field.field_label, field.field_type, field.field_options, field.is_required, field.is_active, field.display_order, id]
-        );
-      } catch (err: any) {
-        console.error('[MySQL] Error updating custom field in MySQL:', err.message);
-      }
-    }
-
     saveStore(store);
+
+    runMySQLWrite(async (activePool) => {
+      await activePool.query(
+        `UPDATE client_custom_fields SET field_label = ?, field_type = ?, field_options = ?, is_required = ?, is_active = ?, display_order = ?, updated_at = NOW() WHERE id = ?`,
+        [field.field_label, field.field_type, field.field_options, field.is_required, field.is_active, field.display_order, id]
+      );
+    });
+
     this.logActivity(userId, 'UPDATE_CUSTOM_FIELD', 'SETTINGS', id, `Updated custom field "${field.field_label}"`);
     return field;
   },
@@ -3237,14 +3217,10 @@ export const dbService = {
     store.client_custom_field_values = store.client_custom_field_values.filter(v => v.field_id !== id);
     saveStore(store);
 
-    if (isConnectedToMySQL && pool) {
-      try {
-        await pool.query('DELETE FROM client_custom_field_values WHERE field_id = ?', [id]);
-        await pool.query('DELETE FROM client_custom_fields WHERE id = ?', [id]);
-      } catch (err: any) {
-        console.error('[MySQL] Error deleting custom field in MySQL:', err.message);
-      }
-    }
+    runMySQLWrite(async (activePool) => {
+      await activePool.query('DELETE FROM client_custom_field_values WHERE field_id = ?', [id]);
+      await activePool.query('DELETE FROM client_custom_fields WHERE id = ?', [id]);
+    });
 
     this.logActivity(userId, 'DELETE_CUSTOM_FIELD', 'SETTINGS', id, `Deleted custom field "${field.field_label}"`);
     return true;
@@ -3260,7 +3236,7 @@ export const dbService = {
   },
 
   async createVisaType(data: { name: string; description?: string }, userId = 1) {
-    let id = store.nextIds.visa_types++;
+    const id = nextEntityId('visa_types', store.visa_types);
     const vt: VisaType = {
       id,
       name: data.name.trim(),
@@ -3269,20 +3245,18 @@ export const dbService = {
       created_at: new Date().toISOString(),
     };
 
-    if (isConnectedToMySQL && pool) {
-      try {
-        const [res]: any = await pool.query(
-          'INSERT INTO visa_types (name, description, is_active, created_at, updated_at) VALUES (?, ?, 1, NOW(), NOW())',
-          [vt.name, vt.description]
-        );
-        if (res && res.insertId) vt.id = res.insertId;
-      } catch (err: any) {
-        console.error('[MySQL] Error creating visa type in MySQL:', err.message);
-      }
-    }
-
     store.visa_types.push(vt);
     saveStore(store);
+
+    runMySQLWrite(async (activePool) => {
+      await activePool.query(
+        `INSERT INTO visa_types (id, name, description, is_active, created_at, updated_at)
+         VALUES (?, ?, ?, 1, NOW(), NOW())
+         ON DUPLICATE KEY UPDATE name = VALUES(name), description = VALUES(description), updated_at = NOW()`,
+        [vt.id, vt.name, vt.description]
+      );
+    });
+
     this.logActivity(userId, 'CREATE_VISA_TYPE', 'SETTINGS', vt.id, `Added visa type "${vt.name}"`);
     return vt;
   },
@@ -3294,18 +3268,15 @@ export const dbService = {
     if (data.description !== undefined) vt.description = data.description?.trim() || null;
     if (data.is_active !== undefined) vt.is_active = data.is_active;
 
-    if (isConnectedToMySQL && pool) {
-      try {
-        await pool.query(
-          'UPDATE visa_types SET name = ?, description = ?, is_active = ?, updated_at = NOW() WHERE id = ?',
-          [vt.name, vt.description, vt.is_active, id]
-        );
-      } catch (err: any) {
-        console.error('[MySQL] Error updating visa type in MySQL:', err.message);
-      }
-    }
-
     saveStore(store);
+
+    runMySQLWrite(async (activePool) => {
+      await activePool.query(
+        'UPDATE visa_types SET name = ?, description = ?, is_active = ?, updated_at = NOW() WHERE id = ?',
+        [vt.name, vt.description, vt.is_active, id]
+      );
+    });
+
     this.logActivity(userId, 'UPDATE_VISA_TYPE', 'SETTINGS', id, `Updated visa type "${vt.name}"`);
     return vt;
   },
@@ -3323,13 +3294,9 @@ export const dbService = {
     const [vt] = store.visa_types.splice(idx, 1);
     saveStore(store);
 
-    if (isConnectedToMySQL && pool) {
-      try {
-        await pool.query('DELETE FROM visa_types WHERE id = ?', [id]);
-      } catch (err: any) {
-        console.error('[MySQL] Error deleting visa type in MySQL:', err.message);
-      }
-    }
+    runMySQLWrite(async (activePool) => {
+      await activePool.query('DELETE FROM visa_types WHERE id = ?', [id]);
+    });
 
     this.logActivity(userId, 'DELETE_VISA_TYPE', 'SETTINGS', id, `Deleted visa type "${vt.name}"`);
     return true;
@@ -3346,8 +3313,7 @@ export const dbService = {
 
   async createCountry(data: { name: string; code?: string }, userId = 1) {
     if (!store.countries) store.countries = [];
-    if (!store.nextIds.countries) store.nextIds.countries = 21;
-    let id = store.nextIds.countries++;
+    const id = nextEntityId('countries', store.countries);
     const country: Country = {
       id,
       name: data.name.trim(),
@@ -3357,20 +3323,18 @@ export const dbService = {
       created_at: new Date().toISOString(),
     };
 
-    if (isConnectedToMySQL && pool) {
-      try {
-        const [res]: any = await pool.query(
-          'INSERT INTO countries (name, code, is_active, display_order, created_at, updated_at) VALUES (?, ?, 1, ?, NOW(), NOW())',
-          [country.name, country.code, country.display_order]
-        );
-        if (res && res.insertId) country.id = res.insertId;
-      } catch (err: any) {
-        console.error('[MySQL] Error creating country in MySQL:', err.message);
-      }
-    }
-
     store.countries.push(country);
     saveStore(store);
+
+    runMySQLWrite(async (activePool) => {
+      await activePool.query(
+        `INSERT INTO countries (id, name, code, is_active, display_order, created_at, updated_at)
+         VALUES (?, ?, ?, 1, ?, NOW(), NOW())
+         ON DUPLICATE KEY UPDATE name = VALUES(name), code = VALUES(code), display_order = VALUES(display_order), updated_at = NOW()`,
+        [country.id, country.name, country.code, country.display_order]
+      );
+    });
+
     this.logActivity(userId, 'CREATE_COUNTRY', 'SETTINGS', country.id, `Added country "${country.name}"`);
     return country;
   },
@@ -3384,18 +3348,15 @@ export const dbService = {
     if (data.is_active !== undefined) country.is_active = data.is_active;
     if (data.display_order !== undefined) country.display_order = data.display_order;
 
-    if (isConnectedToMySQL && pool) {
-      try {
-        await pool.query(
-          'UPDATE countries SET name = ?, code = ?, is_active = ?, display_order = ?, updated_at = NOW() WHERE id = ?',
-          [country.name, country.code, country.is_active, country.display_order, id]
-        );
-      } catch (err: any) {
-        console.error('[MySQL] Error updating country in MySQL:', err.message);
-      }
-    }
-
     saveStore(store);
+
+    runMySQLWrite(async (activePool) => {
+      await activePool.query(
+        'UPDATE countries SET name = ?, code = ?, is_active = ?, display_order = ?, updated_at = NOW() WHERE id = ?',
+        [country.name, country.code, country.is_active, country.display_order, id]
+      );
+    });
+
     this.logActivity(userId, 'UPDATE_COUNTRY', 'SETTINGS', id, `Updated country "${country.name}"`);
     return country;
   },
@@ -3407,13 +3368,9 @@ export const dbService = {
     const [c] = store.countries.splice(idx, 1);
     saveStore(store);
 
-    if (isConnectedToMySQL && pool) {
-      try {
-        await pool.query('DELETE FROM countries WHERE id = ?', [id]);
-      } catch (err: any) {
-        console.error('[MySQL] Error deleting country in MySQL:', err.message);
-      }
-    }
+    runMySQLWrite(async (activePool) => {
+      await activePool.query('DELETE FROM countries WHERE id = ?', [id]);
+    });
 
     this.logActivity(userId, 'DELETE_COUNTRY', 'SETTINGS', id, `Deleted country "${c.name}"`);
     return true;
@@ -3421,9 +3378,13 @@ export const dbService = {
 
   // Activity
   getActivityLogs(limit = 20) {
+    const userById = new Map<number, User>();
+    for (const u of store.users) userById.set(u.id, u);
+
     return store.activity_logs
+      .slice(0, Math.max(limit * 2, 50))
       .map(l => {
-        const u = l.user_id ? store.users.find(usr => usr.id === l.user_id) : null;
+        const u = l.user_id ? userById.get(l.user_id) : null;
         return {
           ...l,
           user_name: u?.name || 'System',
@@ -3436,7 +3397,7 @@ export const dbService = {
 
   logActivity(userId: number | null, action: string, entityType: string, entityId: number | null, details: string) {
     const log: ActivityLog = {
-      id: store.nextIds.activity_logs++,
+      id: nextEntityId('activity_logs', store.activity_logs),
       user_id: userId,
       action,
       entity_type: entityType,
@@ -3449,12 +3410,12 @@ export const dbService = {
     if (store.activity_logs.length > 500) {
       store.activity_logs.pop();
     }
-    if (isConnectedToMySQL && pool) {
-      pool.query(
+    runMySQLWrite(async (activePool) => {
+      await activePool.query(
         'INSERT INTO activity_logs (user_id, action, entity_type, entity_id, details, created_at) VALUES (?, ?, ?, ?, ?, NOW())',
         [userId || null, action, entityType, entityId || null, details]
-      ).catch(e => console.warn('[MySQL] Failed to write activity log:', e.message));
-    }
+      );
+    });
   },
 
   // --------------------------------------------------------------------------
@@ -3466,8 +3427,20 @@ export const dbService = {
     if (activeOnly) {
       list = list.filter(h => h.is_active === 1);
     }
+
+    const roomsByHotelId = new Map<number, HotelRoom[]>();
+    for (const r of store.hotel_rooms || []) {
+      if (activeOnly && r.is_active !== 1) continue;
+      let arr = roomsByHotelId.get(r.hotel_id);
+      if (!arr) {
+        arr = [];
+        roomsByHotelId.set(r.hotel_id, arr);
+      }
+      arr.push(r);
+    }
+
     return list.map(hotel => {
-      const rooms = (store.hotel_rooms || []).filter(r => r.hotel_id === hotel.id && (!activeOnly || r.is_active === 1));
+      const rooms = roomsByHotelId.get(hotel.id) || [];
       return {
         ...hotel,
         rooms_count: rooms.length,
@@ -3490,9 +3463,8 @@ export const dbService = {
 
   async createHotel(data: { name: string; city?: string; address?: string; star_rating?: number; phone?: string; email?: string; notes?: string }, userId = 1) {
     if (!store.hotels) store.hotels = [];
-    if (!store.nextIds.hotels) store.nextIds.hotels = 6;
     const now = new Date().toISOString();
-    let id = store.nextIds.hotels++;
+    const id = nextEntityId('hotels', store.hotels);
     const hotel: Hotel = {
       id,
       name: data.name.trim(),
@@ -3507,21 +3479,21 @@ export const dbService = {
       updated_at: now,
     };
 
-    if (isConnectedToMySQL && pool) {
-      try {
-        const [res]: any = await pool.query(
-          `INSERT INTO hotels (name, city, address, star_rating, phone, email, notes, is_active, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, 1, NOW(), NOW())`,
-          [hotel.name, hotel.city, hotel.address, hotel.star_rating, hotel.phone, hotel.email, hotel.notes]
-        );
-        if (res && res.insertId) hotel.id = res.insertId;
-      } catch (err: any) {
-        console.error('[MySQL] Error creating hotel in MySQL:', err.message);
-      }
-    }
-
     store.hotels.push(hotel);
     saveStore(store);
+
+    runMySQLWrite(async (activePool) => {
+      await activePool.query(
+        `INSERT INTO hotels (id, name, city, address, star_rating, phone, email, notes, is_active, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, NOW(), NOW())
+         ON DUPLICATE KEY UPDATE
+           name = VALUES(name), city = VALUES(city), address = VALUES(address),
+           star_rating = VALUES(star_rating), phone = VALUES(phone), email = VALUES(email),
+           notes = VALUES(notes), updated_at = NOW()`,
+        [hotel.id, hotel.name, hotel.city, hotel.address, hotel.star_rating, hotel.phone, hotel.email, hotel.notes]
+      );
+    });
+
     this.logActivity(userId, 'CREATE_HOTEL', 'HOTEL', hotel.id, `Added hotel partner "${hotel.name}" in ${hotel.city || 'unspecified city'}`);
     return this.getHotelById(hotel.id);
   },
@@ -3540,18 +3512,15 @@ export const dbService = {
     if (data.is_active !== undefined) hotel.is_active = data.is_active;
     hotel.updated_at = new Date().toISOString();
 
-    if (isConnectedToMySQL && pool) {
-      try {
-        await pool.query(
-          `UPDATE hotels SET name = ?, city = ?, address = ?, star_rating = ?, phone = ?, email = ?, notes = ?, is_active = ?, updated_at = NOW() WHERE id = ?`,
-          [hotel.name, hotel.city, hotel.address, hotel.star_rating, hotel.phone, hotel.email, hotel.notes, hotel.is_active, id]
-        );
-      } catch (err: any) {
-        console.error('[MySQL] Error updating hotel in MySQL:', err.message);
-      }
-    }
-
     saveStore(store);
+
+    runMySQLWrite(async (activePool) => {
+      await activePool.query(
+        `UPDATE hotels SET name = ?, city = ?, address = ?, star_rating = ?, phone = ?, email = ?, notes = ?, is_active = ?, updated_at = NOW() WHERE id = ?`,
+        [hotel.name, hotel.city, hotel.address, hotel.star_rating, hotel.phone, hotel.email, hotel.notes, hotel.is_active, id]
+      );
+    });
+
     this.logActivity(userId, 'UPDATE_HOTEL', 'HOTEL', id, `Updated hotel "${hotel.name}"`);
     return this.getHotelById(id);
   },
@@ -3561,21 +3530,16 @@ export const dbService = {
     const idx = store.hotels.findIndex(h => h.id === id);
     if (idx === -1) return false;
     const [deleted] = store.hotels.splice(idx, 1);
-    // Remove its rooms
     if (store.hotel_rooms) {
       store.hotel_rooms = store.hotel_rooms.filter(r => r.hotel_id !== id);
     }
     saveStore(store);
 
-    if (isConnectedToMySQL && pool) {
-      try {
-        await pool.query('DELETE FROM hotel_rooms WHERE hotel_id = ?', [id]).catch(() => {});
-        await pool.query('DELETE FROM hotel_bookings WHERE hotel_id = ?', [id]).catch(() => {});
-        await pool.query('DELETE FROM hotels WHERE id = ?', [id]).catch(() => {});
-      } catch (err: any) {
-        console.error('[MySQL] Error deleting hotel in MySQL:', err.message);
-      }
-    }
+    runMySQLWrite(async (activePool) => {
+      await activePool.query('DELETE FROM hotel_rooms WHERE hotel_id = ?', [id]).catch(() => {});
+      await activePool.query('DELETE FROM hotel_bookings WHERE hotel_id = ?', [id]).catch(() => {});
+      await activePool.query('DELETE FROM hotels WHERE id = ?', [id]).catch(() => {});
+    });
 
     this.logActivity(userId, 'DELETE_HOTEL', 'HOTEL', id, `Deleted hotel "${deleted.name}"`);
     return true;
@@ -3595,9 +3559,8 @@ export const dbService = {
 
   async createHotelRoom(hotelId: number, data: { name: string; price_per_night?: number; currency?: string; capacity?: number; description?: string }, userId = 1) {
     if (!store.hotel_rooms) store.hotel_rooms = [];
-    if (!store.nextIds.hotel_rooms) store.nextIds.hotel_rooms = 10;
     const now = new Date().toISOString();
-    let id = store.nextIds.hotel_rooms++;
+    const id = nextEntityId('hotel_rooms', store.hotel_rooms);
     const room: HotelRoom = {
       id,
       hotel_id: hotelId,
@@ -3611,21 +3574,20 @@ export const dbService = {
       updated_at: now,
     };
 
-    if (isConnectedToMySQL && pool) {
-      try {
-        const [res]: any = await pool.query(
-          `INSERT INTO hotel_rooms (hotel_id, name, price_per_night, currency, capacity, description, is_active, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, 1, NOW(), NOW())`,
-          [room.hotel_id, room.name, room.price_per_night, room.currency, room.capacity, room.description]
-        );
-        if (res && res.insertId) room.id = res.insertId;
-      } catch (err: any) {
-        console.error('[MySQL] Error creating hotel room in MySQL:', err.message);
-      }
-    }
-
     store.hotel_rooms.push(room);
     saveStore(store);
+
+    runMySQLWrite(async (activePool) => {
+      await activePool.query(
+        `INSERT INTO hotel_rooms (id, hotel_id, name, price_per_night, currency, capacity, description, is_active, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 1, NOW(), NOW())
+         ON DUPLICATE KEY UPDATE
+           name = VALUES(name), price_per_night = VALUES(price_per_night), currency = VALUES(currency),
+           capacity = VALUES(capacity), description = VALUES(description), updated_at = NOW()`,
+        [room.id, room.hotel_id, room.name, room.price_per_night, room.currency, room.capacity, room.description]
+      );
+    });
+
     const hotel = store.hotels.find(h => h.id === hotelId);
     this.logActivity(userId, 'CREATE_HOTEL_ROOM', 'HOTEL', hotelId, `Added room type "${room.name}" to hotel "${hotel?.name || 'Hotel'}"`);
     return room;
@@ -3643,18 +3605,15 @@ export const dbService = {
     if (data.is_active !== undefined) room.is_active = data.is_active;
     room.updated_at = new Date().toISOString();
 
-    if (isConnectedToMySQL && pool) {
-      try {
-        await pool.query(
-          `UPDATE hotel_rooms SET name = ?, price_per_night = ?, currency = ?, capacity = ?, description = ?, is_active = ?, updated_at = NOW() WHERE id = ?`,
-          [room.name, room.price_per_night, room.currency, room.capacity, room.description, room.is_active, id]
-        );
-      } catch (err: any) {
-        console.error('[MySQL] Error updating hotel room in MySQL:', err.message);
-      }
-    }
-
     saveStore(store);
+
+    runMySQLWrite(async (activePool) => {
+      await activePool.query(
+        `UPDATE hotel_rooms SET name = ?, price_per_night = ?, currency = ?, capacity = ?, description = ?, is_active = ?, updated_at = NOW() WHERE id = ?`,
+        [room.name, room.price_per_night, room.currency, room.capacity, room.description, room.is_active, id]
+      );
+    });
+
     this.logActivity(userId, 'UPDATE_HOTEL_ROOM', 'HOTEL', room.hotel_id, `Updated room type "${room.name}"`);
     return room;
   },
@@ -3666,14 +3625,10 @@ export const dbService = {
     const [deleted] = store.hotel_rooms.splice(idx, 1);
     saveStore(store);
 
-    if (isConnectedToMySQL && pool) {
-      try {
-        await pool.query('UPDATE hotel_bookings SET room_type_id = NULL WHERE room_type_id = ?', [id]).catch(() => {});
-        await pool.query('DELETE FROM hotel_rooms WHERE id = ?', [id]);
-      } catch (err: any) {
-        console.error('[MySQL] Error deleting hotel room in MySQL:', err.message);
-      }
-    }
+    runMySQLWrite(async (activePool) => {
+      await activePool.query('UPDATE hotel_bookings SET room_type_id = NULL WHERE room_type_id = ?', [id]).catch(() => {});
+      await activePool.query('DELETE FROM hotel_rooms WHERE id = ?', [id]);
+    });
 
     this.logActivity(userId, 'DELETE_HOTEL_ROOM', 'HOTEL', deleted.hotel_id, `Deleted room type "${deleted.name}"`);
     return true;
@@ -3685,6 +3640,15 @@ export const dbService = {
   getHotelBookings(filters?: { clientId?: number; hotelId?: number; status?: string; search?: string }) {
     if (!store.hotel_bookings) store.hotel_bookings = [];
     let list = [...store.hotel_bookings];
+
+    const clientById = new Map<number, Client>();
+    for (const c of store.clients) clientById.set(c.id, c);
+
+    const hotelById = new Map<number, Hotel>();
+    for (const h of store.hotels || []) hotelById.set(h.id, h);
+
+    const userById = new Map<number, User>();
+    for (const u of store.users) userById.set(u.id, u);
 
     if (filters?.clientId) {
       list = list.filter(b => b.client_id === filters.clientId);
@@ -3698,8 +3662,8 @@ export const dbService = {
     if (filters?.search) {
       const q = filters.search.toLowerCase().trim();
       list = list.filter(b => {
-        const client = store.clients.find(c => c.id === b.client_id);
-        const hotel = (store.hotels || []).find(h => h.id === b.hotel_id);
+        const client = clientById.get(b.client_id);
+        const hotel = hotelById.get(b.hotel_id);
         return (
           b.booking_reference.toLowerCase().includes(q) ||
           (b.room_type_name && b.room_type_name.toLowerCase().includes(q)) ||
@@ -3711,9 +3675,9 @@ export const dbService = {
     }
 
     return list.map(b => {
-      const client = store.clients.find(c => c.id === b.client_id);
-      const hotel = (store.hotels || []).find(h => h.id === b.hotel_id);
-      const user = b.created_by_user_id ? store.users.find(u => u.id === b.created_by_user_id) : null;
+      const client = clientById.get(b.client_id);
+      const hotel = hotelById.get(b.hotel_id);
+      const user = b.created_by_user_id ? userById.get(b.created_by_user_id) : null;
 
       return {
         ...b,
@@ -3767,7 +3731,6 @@ export const dbService = {
     currency?: string;
   }, userId = 1) {
     if (!store.hotel_bookings) store.hotel_bookings = [];
-    if (!store.nextIds.hotel_bookings) store.nextIds.hotel_bookings = 2;
 
     const client = store.clients.find(c => c.id === data.client_id);
     if (!client) throw new Error('Client not found');
@@ -3784,55 +3747,14 @@ export const dbService = {
       }
     }
 
-    let id = store.nextIds.hotel_bookings++;
-    let refNum = `HB-${String(id).padStart(6, '0')}`;
+    const id = nextEntityId('hotel_bookings', store.hotel_bookings);
+    const refNum = `HB-${String(id).padStart(6, '0')}`;
     const now = new Date().toISOString();
 
     // AUTOMATIC TASK CREATION: Create a task for staff on the check-out date!
-    let checkoutTaskId = store.nextIds.tasks++;
+    const checkoutTaskId = nextEntityId('tasks', store.tasks);
     const taskTitle = `Hotel Check-Out: ${client.full_name} (${hotel.name})`;
     const taskDesc = `Scheduled checkout at ${hotel.name}${roomName ? ` [${roomName}]` : ''}.\nCheck-in: ${data.check_in_date} → Check-out: ${data.check_out_date}.\nClient: ${client.full_name} (${client.passport_number}).${data.comment ? `\nComment/Notes: ${data.comment}` : ''}`;
-
-    if (isConnectedToMySQL && pool) {
-      try {
-        const [taskRes]: any = await pool.query(
-          `INSERT INTO tasks (title, description, client_id, application_id, assigned_user_id, due_date, priority, status, is_delivery_task, created_at, updated_at)
-           VALUES (?, ?, ?, NULL, ?, ?, 'High', 'Pending', 0, NOW(), NOW())`,
-          [taskTitle, taskDesc, client.id, userId || 1, data.check_out_date]
-        );
-        if (taskRes && taskRes.insertId) checkoutTaskId = taskRes.insertId;
-
-        const [bookRes]: any = await pool.query(
-          `INSERT INTO hotel_bookings (booking_reference, client_id, hotel_id, room_type_id, room_type_name, check_in_date, check_out_date, guest_count, room_count, status, comment, special_requests, total_price, currency, checkout_task_id, created_by_user_id, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
-          [
-            refNum,
-            data.client_id,
-            data.hotel_id,
-            data.room_type_id || null,
-            roomName,
-            data.check_in_date,
-            data.check_out_date,
-            data.guest_count || 1,
-            data.room_count || 1,
-            data.status || 'Confirmed',
-            data.comment ? data.comment.trim() : null,
-            data.special_requests ? data.special_requests.trim() : null,
-            data.total_price !== undefined && data.total_price !== null ? Number(data.total_price) : null,
-            data.currency ? data.currency.trim().toUpperCase() : 'USD',
-            checkoutTaskId,
-            userId,
-          ]
-        );
-        if (bookRes && bookRes.insertId) {
-          id = bookRes.insertId;
-          refNum = `HB-${String(id).padStart(6, '0')}`;
-          await pool.query('UPDATE hotel_bookings SET booking_reference = ? WHERE id = ?', [refNum, id]);
-        }
-      } catch (err: any) {
-        console.error('[MySQL] Error creating hotel booking in MySQL:', err.message);
-      }
-    }
 
     const checkoutTask: Task = {
       id: checkoutTaskId,
@@ -3876,6 +3798,42 @@ export const dbService = {
     store.hotel_bookings.push(booking);
     saveStore(store);
 
+    runMySQLWrite(async (activePool) => {
+      await activePool.query(
+        `INSERT INTO tasks (id, title, description, client_id, application_id, assigned_user_id, due_date, priority, status, is_delivery_task, created_at, updated_at)
+         VALUES (?, ?, ?, ?, NULL, ?, ?, 'High', 'Pending', 0, NOW(), NOW())
+         ON DUPLICATE KEY UPDATE title = VALUES(title), due_date = VALUES(due_date), updated_at = NOW()`,
+        [checkoutTaskId, taskTitle, taskDesc, client.id, userId || 1, data.check_out_date]
+      );
+
+      await activePool.query(
+        `INSERT INTO hotel_bookings (id, booking_reference, client_id, hotel_id, room_type_id, room_type_name, check_in_date, check_out_date, guest_count, room_count, status, comment, special_requests, total_price, currency, checkout_task_id, created_by_user_id, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
+         ON DUPLICATE KEY UPDATE
+           booking_reference = VALUES(booking_reference), status = VALUES(status),
+           check_in_date = VALUES(check_in_date), check_out_date = VALUES(check_out_date), updated_at = NOW()`,
+        [
+          booking.id,
+          booking.booking_reference,
+          booking.client_id,
+          booking.hotel_id,
+          booking.room_type_id,
+          booking.room_type_name,
+          booking.check_in_date,
+          booking.check_out_date,
+          booking.guest_count,
+          booking.room_count,
+          booking.status,
+          booking.comment,
+          booking.special_requests,
+          booking.total_price,
+          booking.currency,
+          booking.checkout_task_id,
+          booking.created_by_user_id,
+        ]
+      );
+    });
+
     this.logActivity(
       userId,
       'CREATE_HOTEL_BOOKING',
@@ -3918,21 +3876,18 @@ export const dbService = {
       }
     }
 
-    if (isConnectedToMySQL && pool) {
-      try {
-        await pool.query(
-          `UPDATE hotel_bookings SET hotel_id = ?, room_type_id = ?, room_type_name = ?, check_in_date = ?, check_out_date = ?, guest_count = ?, room_count = ?, status = ?, comment = ?, special_requests = ?, total_price = ?, currency = ?, updated_at = NOW() WHERE id = ?`,
-          [booking.hotel_id, booking.room_type_id, booking.room_type_name, booking.check_in_date, booking.check_out_date, booking.guest_count, booking.room_count, booking.status, booking.comment, booking.special_requests, booking.total_price, booking.currency, id]
-        );
-        if (booking.checkout_task_id && data.check_out_date && data.check_out_date !== oldCheckoutDate) {
-          await pool.query('UPDATE tasks SET due_date = ?, updated_at = NOW() WHERE id = ?', [data.check_out_date, booking.checkout_task_id]);
-        }
-      } catch (err: any) {
-        console.error('[MySQL] Error updating hotel booking in MySQL:', err.message);
-      }
-    }
-
     saveStore(store);
+
+    runMySQLWrite(async (activePool) => {
+      await activePool.query(
+        `UPDATE hotel_bookings SET hotel_id = ?, room_type_id = ?, room_type_name = ?, check_in_date = ?, check_out_date = ?, guest_count = ?, room_count = ?, status = ?, comment = ?, special_requests = ?, total_price = ?, currency = ?, updated_at = NOW() WHERE id = ?`,
+        [booking.hotel_id, booking.room_type_id, booking.room_type_name, booking.check_in_date, booking.check_out_date, booking.guest_count, booking.room_count, booking.status, booking.comment, booking.special_requests, booking.total_price, booking.currency, id]
+      );
+      if (booking.checkout_task_id && data.check_out_date && data.check_out_date !== oldCheckoutDate) {
+        await activePool.query('UPDATE tasks SET due_date = ?, updated_at = NOW() WHERE id = ?', [data.check_out_date, booking.checkout_task_id]);
+      }
+    });
+
     this.logActivity(userId, 'UPDATE_HOTEL_BOOKING', 'HOTEL', id, `Updated hotel booking ${booking.booking_reference}`);
     return this.getHotelBookingById(id);
   },
@@ -3953,16 +3908,12 @@ export const dbService = {
 
     saveStore(store);
 
-    if (isConnectedToMySQL && pool) {
-      try {
-        if (booking.checkout_task_id) {
-          await pool.query('DELETE FROM tasks WHERE id = ? AND status = "Pending"', [booking.checkout_task_id]).catch(() => {});
-        }
-        await pool.query('DELETE FROM hotel_bookings WHERE id = ?', [id]);
-      } catch (err: any) {
-        console.error('[MySQL] Error deleting hotel booking in MySQL:', err.message);
+    runMySQLWrite(async (activePool) => {
+      if (booking.checkout_task_id) {
+        await activePool.query('DELETE FROM tasks WHERE id = ? AND status = "Pending"', [booking.checkout_task_id]).catch(() => {});
       }
-    }
+      await activePool.query('DELETE FROM hotel_bookings WHERE id = ?', [id]);
+    });
 
     this.logActivity(userId, 'DELETE_HOTEL_BOOKING', 'HOTEL', id, `Deleted hotel booking ${booking.booking_reference}`);
     return true;
@@ -3974,6 +3925,12 @@ export const dbService = {
   getFollowUps(filters?: { clientId?: number; status?: string; cadence?: string; search?: string }) {
     if (!store.follow_ups) store.follow_ups = [];
     let list = [...store.follow_ups];
+
+    const clientById = new Map<number, Client>();
+    for (const c of store.clients) clientById.set(c.id, c);
+
+    const userById = new Map<number, User>();
+    for (const u of store.users) userById.set(u.id, u);
 
     if (filters?.clientId) {
       list = list.filter(f => f.client_id === filters.clientId);
@@ -3987,7 +3944,7 @@ export const dbService = {
     if (filters?.search) {
       const q = filters.search.toLowerCase().trim();
       list = list.filter(f => {
-        const client = store.clients.find(c => c.id === f.client_id);
+        const client = clientById.get(f.client_id);
         return (
           f.title.toLowerCase().includes(q) ||
           f.reason.toLowerCase().includes(q) ||
@@ -4004,9 +3961,9 @@ export const dbService = {
     }
 
     return list.map(f => {
-      const client = store.clients.find(c => c.id === f.client_id);
-      const assignedUser = f.assigned_user_id ? store.users.find(u => u.id === f.assigned_user_id) : null;
-      const createdUser = f.created_by_user_id ? store.users.find(u => u.id === f.created_by_user_id) : null;
+      const client = clientById.get(f.client_id);
+      const assignedUser = f.assigned_user_id ? userById.get(f.assigned_user_id) : null;
+      const createdUser = f.created_by_user_id ? userById.get(f.created_by_user_id) : null;
 
       return {
         ...f,
@@ -4061,7 +4018,6 @@ export const dbService = {
     assigned_user_id?: number | null;
   }, userId = 1) {
     if (!store.follow_ups) store.follow_ups = [];
-    if (!store.nextIds.follow_ups) store.nextIds.follow_ups = 1;
 
     const client = store.clients.find(c => c.id === data.client_id);
     if (!client) throw new Error('Client not found');
@@ -4073,45 +4029,12 @@ export const dbService = {
     const title = data.title && data.title.trim() ? data.title.trim() : `${channel}: ${reason}`;
     const now = new Date().toISOString();
 
-    let id = store.nextIds.follow_ups++;
+    const id = nextEntityId('follow_ups', store.follow_ups);
 
     // AUTOMATIC TASK CREATION: Follow-ups are automatically added as tasks on the calendar!
-    let taskId = store.nextIds.tasks++;
+    const taskId = nextEntityId('tasks', store.tasks);
     const taskTitle = `[Follow-up] ${client.full_name}: ${title}`;
     const taskDesc = `Channel: ${channel} | Cadence: ${cadence}\nReason: ${reason}\nClient: ${client.full_name} (${client.passport_number})\nContact: ${client.whatsapp || client.phone || 'N/A'}${data.notes ? `\nNotes: ${data.notes}` : ''}${data.message_template ? `\nSuggested Message:\n${data.message_template}` : ''}`;
-
-    if (isConnectedToMySQL && pool) {
-      try {
-        const [taskRes]: any = await pool.query(
-          `INSERT INTO tasks (title, description, client_id, application_id, assigned_user_id, due_date, priority, status, is_delivery_task, created_at, updated_at)
-           VALUES (?, ?, ?, NULL, ?, ?, ?, 'Pending', 0, NOW(), NOW())`,
-          [taskTitle, taskDesc, client.id, data.assigned_user_id || userId || 1, data.due_date, priority]
-        );
-        if (taskRes && taskRes.insertId) taskId = taskRes.insertId;
-
-        const [fuRes]: any = await pool.query(
-          `INSERT INTO follow_ups (client_id, title, reason, channel, cadence, due_date, notes, message_template, status, priority, task_id, assigned_user_id, created_by_user_id, created_at, updated_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Pending', ?, ?, ?, ?, NOW(), NOW())`,
-          [
-            data.client_id,
-            title,
-            reason,
-            channel,
-            cadence,
-            data.due_date,
-            data.notes ? data.notes.trim() : null,
-            data.message_template ? data.message_template.trim() : null,
-            priority,
-            taskId,
-            data.assigned_user_id || userId || 1,
-            userId,
-          ]
-        );
-        if (fuRes && fuRes.insertId) id = fuRes.insertId;
-      } catch (err: any) {
-        console.error('[MySQL] Error creating follow-up in MySQL:', err.message);
-      }
-    }
 
     const linkedTask: Task = {
       id: taskId,
@@ -4153,6 +4076,37 @@ export const dbService = {
 
     store.follow_ups.push(followUp);
     saveStore(store);
+
+    runMySQLWrite(async (activePool) => {
+      await activePool.query(
+        `INSERT INTO tasks (id, title, description, client_id, application_id, assigned_user_id, due_date, priority, status, is_delivery_task, created_at, updated_at)
+         VALUES (?, ?, ?, ?, NULL, ?, ?, ?, 'Pending', 0, NOW(), NOW())
+         ON DUPLICATE KEY UPDATE title = VALUES(title), due_date = VALUES(due_date), updated_at = NOW()`,
+        [taskId, taskTitle, taskDesc, client.id, data.assigned_user_id || userId || 1, data.due_date, priority]
+      );
+
+      await activePool.query(
+        `INSERT INTO follow_ups (id, client_id, title, reason, channel, cadence, due_date, notes, message_template, status, priority, task_id, assigned_user_id, created_by_user_id, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'Pending', ?, ?, ?, ?, NOW(), NOW())
+         ON DUPLICATE KEY UPDATE
+           title = VALUES(title), due_date = VALUES(due_date), status = VALUES(status), updated_at = NOW()`,
+        [
+          followUp.id,
+          followUp.client_id,
+          followUp.title,
+          followUp.reason,
+          followUp.channel,
+          followUp.cadence,
+          followUp.due_date,
+          followUp.notes,
+          followUp.message_template,
+          followUp.priority,
+          followUp.task_id,
+          followUp.assigned_user_id,
+          followUp.created_by_user_id,
+        ]
+      );
+    });
 
     this.logActivity(
       userId,
@@ -4202,49 +4156,46 @@ export const dbService = {
       }
     }
 
-    if (isConnectedToMySQL && pool) {
-      try {
-        await pool.query(
-          `UPDATE follow_ups SET
-            title = ?, reason = ?, channel = ?, cadence = ?, due_date = ?,
-            notes = ?, message_template = ?, status = ?, priority = ?,
-            assigned_user_id = ?, completed_at = ?, completed_notes = ?, updated_at = NOW()
-           WHERE id = ?`,
-          [
-            fu.title,
-            fu.reason,
-            fu.channel,
-            fu.cadence,
-            fu.due_date,
-            fu.notes,
-            fu.message_template,
-            fu.status,
-            fu.priority,
-            fu.assigned_user_id,
-            fu.completed_at ? new Date(fu.completed_at) : null,
-            fu.completed_notes,
-            id,
-          ]
-        );
-
-        if (fu.task_id) {
-          await pool.query(
-            `UPDATE tasks SET due_date = ?, priority = ?, status = ?, completed_at = ?, updated_at = NOW() WHERE id = ?`,
-            [
-              fu.due_date,
-              fu.priority,
-              fu.status === 'Completed' ? 'Completed' : 'Pending',
-              fu.completed_at ? new Date(fu.completed_at) : null,
-              fu.task_id,
-            ]
-          ).catch(() => {});
-        }
-      } catch (err: any) {
-        console.error('[MySQL] Error updating follow-up in MySQL:', err.message);
-      }
-    }
-
     saveStore(store);
+
+    runMySQLWrite(async (activePool) => {
+      await activePool.query(
+        `UPDATE follow_ups SET
+          title = ?, reason = ?, channel = ?, cadence = ?, due_date = ?,
+          notes = ?, message_template = ?, status = ?, priority = ?,
+          assigned_user_id = ?, completed_at = ?, completed_notes = ?, updated_at = NOW()
+         WHERE id = ?`,
+        [
+          fu.title,
+          fu.reason,
+          fu.channel,
+          fu.cadence,
+          fu.due_date,
+          fu.notes,
+          fu.message_template,
+          fu.status,
+          fu.priority,
+          fu.assigned_user_id,
+          fu.completed_at ? new Date(fu.completed_at) : null,
+          fu.completed_notes,
+          id,
+        ]
+      );
+
+      if (fu.task_id) {
+        await activePool.query(
+          `UPDATE tasks SET due_date = ?, priority = ?, status = ?, completed_at = ?, updated_at = NOW() WHERE id = ?`,
+          [
+            fu.due_date,
+            fu.priority,
+            fu.status === 'Completed' ? 'Completed' : 'Pending',
+            fu.completed_at ? new Date(fu.completed_at) : null,
+            fu.task_id,
+          ]
+        ).catch(() => {});
+      }
+    });
+
     this.logActivity(userId, 'UPDATE_FOLLOW_UP', 'FOLLOW_UP', id, `Updated follow-up: ${fu.title} (${fu.status})`);
     return this.getFollowUpById(id);
   },
@@ -4311,30 +4262,12 @@ export const dbService = {
     if (isNaN(numId)) return false;
 
     const idx = store.follow_ups.findIndex(f => Number(f.id) === numId);
-    let fu = idx !== -1 ? store.follow_ups[idx] : null;
-    let taskId = fu ? fu.task_id : null;
-    let title = fu ? fu.title : `Follow-up #${numId}`;
+    const fu = idx !== -1 ? store.follow_ups[idx] : null;
+    const taskId = fu ? fu.task_id : null;
+    const title = fu ? fu.title : `Follow-up #${numId}`;
 
     if (idx !== -1) {
       store.follow_ups.splice(idx, 1);
-    }
-
-    if (isConnectedToMySQL && pool) {
-      try {
-        if (!taskId) {
-          const [rows]: any = await pool.query('SELECT task_id, title FROM follow_ups WHERE id = ?', [numId]).catch(() => [[]]);
-          if (rows && rows[0]) {
-            if (rows[0].task_id) taskId = rows[0].task_id;
-            if (rows[0].title) title = rows[0].title;
-          }
-        }
-        if (taskId) {
-          await pool.query('DELETE FROM tasks WHERE id = ?', [taskId]).catch(() => {});
-        }
-        await pool.query('DELETE FROM follow_ups WHERE id = ?', [numId]);
-      } catch (err: any) {
-        console.error('[MySQL] Error deleting follow-up in MySQL:', err.message);
-      }
     }
 
     if (taskId) {
@@ -4345,6 +4278,14 @@ export const dbService = {
     }
 
     saveStore(store);
+
+    runMySQLWrite(async (activePool) => {
+      if (taskId) {
+        await activePool.query('DELETE FROM tasks WHERE id = ?', [taskId]).catch(() => {});
+      }
+      await activePool.query('DELETE FROM follow_ups WHERE id = ?', [numId]);
+    });
+
     this.logActivity(userId, 'DELETE_FOLLOW_UP', 'FOLLOW_UP', numId, `Deleted follow-up: ${title}`);
     return true;
   },
@@ -4354,39 +4295,55 @@ export const dbService = {
     const today = new Date().toISOString().split('T')[0];
 
     const totalClients = store.clients.length;
-    const activeApplications = store.visa_applications.filter(
-      a => a.status !== 'Rejected' && a.status !== 'Returned'
-    ).length;
+    let activeApplications = 0;
 
-    const cleanDue = (d?: string | null) => (d ? String(d).slice(0, 10) : '');
-    const todayTasks = store.tasks.filter(t => cleanDue(t.due_date) === today && t.status === 'Pending').length;
-    const overdueTasks = store.tasks.filter(t => cleanDue(t.due_date) < today && t.status === 'Pending').length;
-    const upcomingTasks = store.tasks.filter(t => cleanDue(t.due_date) > today && t.status === 'Pending').length;
+    const clientById = new Map<number, Client>();
+    for (const c of store.clients) clientById.set(c.id, c);
 
-    const attentionStatuses = ['File Missing', 'Need to Prepare', 'Modify', 'Rejected'];
-    const appsRequiringAttention = store.visa_applications
-      .filter(a => attentionStatuses.includes(a.status))
-      .map(a => {
-        const client = store.clients.find(c => c.id === a.client_id);
-        const vt = store.visa_types.find(v => v.id === a.visa_type_id);
-        return {
+    const vtById = new Map<number, VisaType>();
+    for (const vt of store.visa_types) vtById.set(vt.id, vt);
+
+    const attentionSet = new Set(['File Missing', 'Need to Prepare', 'Modify', 'Rejected']);
+    const appsRequiringAttention: any[] = [];
+    const latestAppStatusByClient = new Map<number, string>();
+
+    for (const a of store.visa_applications) {
+      if (a.status !== 'Rejected' && a.status !== 'Returned') {
+        activeApplications++;
+      }
+      if (!latestAppStatusByClient.has(a.client_id)) {
+        latestAppStatusByClient.set(a.client_id, a.status);
+      }
+      if (attentionSet.has(a.status)) {
+        const client = clientById.get(a.client_id);
+        const vt = vtById.get(a.visa_type_id);
+        appsRequiringAttention.push({
           ...a,
           client_name: client?.full_name || 'Client',
           passport_number: client?.passport_number || '',
           visa_type_name: vt?.name || '',
-        };
-      });
+        });
+      }
+    }
+
+    let todayTasks = 0;
+    let overdueTasks = 0;
+    let upcomingTasks = 0;
+    for (const t of store.tasks) {
+      if (t.status !== 'Pending') continue;
+      const due = t.due_date ? String(t.due_date).slice(0, 10) : '';
+      if (!due) continue;
+      if (due === today) todayTasks++;
+      else if (due < today) overdueTasks++;
+      else upcomingTasks++;
+    }
 
     const recentClients = store.clients
       .slice(0, 5)
-      .map(c => {
-        const apps = store.visa_applications.filter(a => a.client_id === c.id);
-        const latest = apps[apps.length - 1];
-        return {
-          ...c,
-          active_status: latest ? latest.status : 'New',
-        };
-      });
+      .map(c => ({
+        ...c,
+        active_status: latestAppStatusByClient.get(c.id) || 'New',
+      }));
 
     const recentActivity = this.getActivityLogs(8);
 
@@ -4582,10 +4539,8 @@ export const dbService = {
       store.visa_applications = appsToKeep;
 
       if (deletedAppIds.size > 0) {
-        // Cascade clean comments and status history for deleted applications
         store.comments = (store.comments || []).filter(c => !c.application_id || !deletedAppIds.has(c.application_id));
         store.application_status_history = (store.application_status_history || []).filter(h => !deletedAppIds.has(h.application_id));
-        // Remove tasks tied to deleted applications
         store.tasks = (store.tasks || []).filter(t => !t.application_id || !deletedAppIds.has(t.application_id));
       }
     }
@@ -4627,7 +4582,6 @@ export const dbService = {
       }
       store.tasks = tasksToKeep;
 
-      // Dissociate task_id from follow-ups whose task was purged
       if (store.follow_ups && deletedTaskIds.size > 0) {
         store.follow_ups.forEach(f => {
           if (f.task_id && deletedTaskIds.has(Number(f.task_id))) {
@@ -4659,7 +4613,6 @@ export const dbService = {
 
       store.follow_ups = followUpsToKeep;
 
-      // Also clean up tasks created specifically for these follow ups
       if (deletedFollowUpTaskIds.size > 0) {
         store.tasks = (store.tasks || []).filter(t => !deletedFollowUpTaskIds.has(Number(t.id)));
       }
@@ -4693,9 +4646,9 @@ export const dbService = {
 
     saveStore(store);
 
-    if (isConnectedToMySQL && pool) {
+    runMySQLWrite(async (activePool) => {
       try {
-        await pool.query('SET FOREIGN_KEY_CHECKS = 0').catch(() => {});
+        await activePool.query('SET FOREIGN_KEY_CHECKS = 0').catch(() => {});
         let dateCondition = '';
         const params: any[] = [];
         if (normStartDate && normEndDate) {
@@ -4711,72 +4664,69 @@ export const dbService = {
 
         if (targets.applications) {
           if (dateCondition) {
-            await pool.query(`DELETE FROM application_status_history WHERE application_id IN (SELECT id FROM visa_applications WHERE created_at ${dateCondition})`, params).catch(() => {});
-            await pool.query(`DELETE FROM tasks WHERE application_id IN (SELECT id FROM visa_applications WHERE created_at ${dateCondition})`, params).catch(() => {});
-            await pool.query(`DELETE FROM comments WHERE application_id IN (SELECT id FROM visa_applications WHERE created_at ${dateCondition})`, params).catch(() => {});
-            await pool.query(`DELETE FROM visa_applications WHERE created_at ${dateCondition}`, params).catch(() => {});
+            await activePool.query(`DELETE FROM application_status_history WHERE application_id IN (SELECT id FROM visa_applications WHERE created_at ${dateCondition})`, params).catch(() => {});
+            await activePool.query(`DELETE FROM tasks WHERE application_id IN (SELECT id FROM visa_applications WHERE created_at ${dateCondition})`, params).catch(() => {});
+            await activePool.query(`DELETE FROM comments WHERE application_id IN (SELECT id FROM visa_applications WHERE created_at ${dateCondition})`, params).catch(() => {});
+            await activePool.query(`DELETE FROM visa_applications WHERE created_at ${dateCondition}`, params).catch(() => {});
           } else {
-            await pool.query('DELETE FROM application_status_history').catch(() => {});
-            await pool.query('DELETE FROM comments WHERE application_id IS NOT NULL').catch(() => {});
-            await pool.query('DELETE FROM visa_applications').catch(() => {});
+            await activePool.query('DELETE FROM application_status_history').catch(() => {});
+            await activePool.query('DELETE FROM comments WHERE application_id IS NOT NULL').catch(() => {});
+            await activePool.query('DELETE FROM visa_applications').catch(() => {});
           }
         }
         if (targets.hotel_bookings) {
           if (dateCondition) {
-            await pool.query(`DELETE FROM hotel_bookings WHERE created_at ${dateCondition}`, params).catch(() => {});
+            await activePool.query(`DELETE FROM hotel_bookings WHERE created_at ${dateCondition}`, params).catch(() => {});
           } else {
-            await pool.query('DELETE FROM hotel_bookings').catch(() => {});
+            await activePool.query('DELETE FROM hotel_bookings').catch(() => {});
           }
         }
         if (targets.tasks) {
           if (dateCondition) {
-            await pool.query(`DELETE FROM tasks WHERE due_date ${dateCondition}`, params).catch(() => {});
+            await activePool.query(`DELETE FROM tasks WHERE due_date ${dateCondition}`, params).catch(() => {});
           } else {
-            await pool.query('DELETE FROM tasks').catch(() => {});
+            await activePool.query('DELETE FROM tasks').catch(() => {});
           }
         }
         if (targets.follow_ups) {
           if (normStartDate && normEndDate) {
-            await pool.query(
+            await activePool.query(
               'DELETE FROM follow_ups WHERE (created_at BETWEEN ? AND ?) OR (due_date BETWEEN ? AND ?)',
               [normStartDate, normEndDate + ' 23:59:59', normStartDate, normEndDate + ' 23:59:59']
             ).catch(() => {});
           } else if (normStartDate) {
-            await pool.query(
+            await activePool.query(
               'DELETE FROM follow_ups WHERE created_at >= ? OR due_date >= ?',
               [normStartDate, normStartDate]
             ).catch(() => {});
           } else if (normEndDate) {
-            await pool.query(
+            await activePool.query(
               'DELETE FROM follow_ups WHERE created_at <= ? OR due_date <= ?',
               [normEndDate + ' 23:59:59', normEndDate + ' 23:59:59']
             ).catch(() => {});
           } else {
-            await pool.query('DELETE FROM follow_ups').catch(() => {});
+            await activePool.query('DELETE FROM follow_ups').catch(() => {});
           }
         }
         if (targets.status_history) {
           if (dateCondition) {
-            await pool.query(`DELETE FROM application_status_history WHERE created_at ${dateCondition}`, params).catch(() => {});
+            await activePool.query(`DELETE FROM application_status_history WHERE created_at ${dateCondition}`, params).catch(() => {});
           } else {
-            await pool.query('DELETE FROM application_status_history').catch(() => {});
+            await activePool.query('DELETE FROM application_status_history').catch(() => {});
           }
         }
         if (targets.activity_logs) {
           if (dateCondition) {
-            await pool.query(`DELETE FROM activity_logs WHERE created_at ${dateCondition}`, params).catch(() => {});
+            await activePool.query(`DELETE FROM activity_logs WHERE created_at ${dateCondition}`, params).catch(() => {});
           } else {
-            await pool.query('DELETE FROM activity_logs').catch(() => {});
+            await activePool.query('DELETE FROM activity_logs').catch(() => {});
           }
         }
-        await pool.query('SET FOREIGN_KEY_CHECKS = 1').catch(() => {});
-      } catch (err: any) {
-        console.error('[MySQL] Error during purgeData in MySQL:', err.message);
-        await pool.query('SET FOREIGN_KEY_CHECKS = 1').catch(() => {});
+      } finally {
+        await activePool.query('SET FOREIGN_KEY_CHECKS = 1').catch(() => {});
       }
-    }
+    });
 
-    // Record audit activity of the purge
     const rangeDescription = startDate && endDate
       ? `from ${startDate} to ${endDate}`
       : startDate
@@ -4847,7 +4797,7 @@ export const dbService = {
       existing.setting_value = value;
       existing.updated_at = now;
     } else {
-      const id = (store.nextIds && store.nextIds.settings) ? store.nextIds.settings++ : (store.settings.length + 1);
+      const id = nextEntityId('settings', store.settings);
       store.settings.push({
         id,
         setting_key: key,
@@ -4857,14 +4807,12 @@ export const dbService = {
     }
     saveStore(store);
 
-    if (isConnectedToMySQL && pool) {
-      pool.query(
+    runMySQLWrite(async (activePool) => {
+      await activePool.query(
         'INSERT INTO `settings` (`setting_key`, `setting_value`, `updated_at`) VALUES (?, ?, NOW()) ON DUPLICATE KEY UPDATE `setting_value` = VALUES(`setting_value`), `updated_at` = NOW()',
         [key, value]
-      ).catch(err => {
-        console.warn('[MySQL] Failed to update setting in database:', err.message);
-      });
-    }
+      );
+    });
   },
 
   getSecretLoginSettings(): { enabled: boolean; secretKey: string; loginPath: string } {
@@ -5003,105 +4951,102 @@ export const dbService = {
       throw new Error('Invalid SQL backup content provided');
     }
 
+    const applyValidatedSnapshot = (parsed: any) => {
+      if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.clients)) {
+        return null;
+      }
+
+      if (Array.isArray(parsed.users) && parsed.users.length > 0) store.users = parsed.users;
+      if (Array.isArray(parsed.countries)) store.countries = parsed.countries;
+      if (Array.isArray(parsed.client_custom_fields)) store.client_custom_fields = parsed.client_custom_fields;
+      store.clients = parsed.clients;
+      if (Array.isArray(parsed.client_custom_field_values)) store.client_custom_field_values = parsed.client_custom_field_values;
+      if (Array.isArray(parsed.visa_types)) store.visa_types = parsed.visa_types;
+      if (Array.isArray(parsed.visa_applications)) store.visa_applications = parsed.visa_applications;
+      if (Array.isArray(parsed.application_status_history)) store.application_status_history = parsed.application_status_history;
+      if (Array.isArray(parsed.tasks)) store.tasks = parsed.tasks;
+      if (Array.isArray(parsed.follow_ups)) store.follow_ups = parsed.follow_ups;
+      if (Array.isArray(parsed.comments)) store.comments = parsed.comments;
+      if (Array.isArray(parsed.activity_logs)) store.activity_logs = parsed.activity_logs;
+      if (Array.isArray(parsed.hotels)) store.hotels = parsed.hotels;
+      if (Array.isArray(parsed.hotel_rooms)) store.hotel_rooms = parsed.hotel_rooms;
+      if (Array.isArray(parsed.hotel_bookings)) store.hotel_bookings = parsed.hotel_bookings;
+      if (parsed.invoice_settings && typeof parsed.invoice_settings === 'object' && !Array.isArray(parsed.invoice_settings)) {
+        store.invoice_settings = { ...store.invoice_settings, ...parsed.invoice_settings };
+      }
+      if (Array.isArray(parsed.invoice_catalog_items)) store.invoice_catalog_items = parsed.invoice_catalog_items;
+      if (Array.isArray(parsed.invoices)) store.invoices = parsed.invoices;
+      if (Array.isArray(parsed.invoice_items)) store.invoice_items = parsed.invoice_items;
+      if (Array.isArray(parsed.settings)) store.settings = parsed.settings;
+
+      const maxIdOf = (arr?: any[]) =>
+        Array.isArray(arr) ? arr.reduce((m, r) => Math.max(m, Number(r?.id) || 0), 0) + 1 : 1;
+
+      store.nextIds = {
+        users: maxIdOf(store.users),
+        countries: maxIdOf(store.countries),
+        clients: maxIdOf(store.clients),
+        client_custom_fields: maxIdOf(store.client_custom_fields),
+        client_custom_field_values: maxIdOf(store.client_custom_field_values),
+        visa_types: maxIdOf(store.visa_types),
+        visa_applications: maxIdOf(store.visa_applications),
+        application_status_history: maxIdOf(store.application_status_history),
+        tasks: maxIdOf(store.tasks),
+        comments: maxIdOf(store.comments),
+        activity_logs: maxIdOf(store.activity_logs),
+        hotels: maxIdOf(store.hotels),
+        hotel_rooms: maxIdOf(store.hotel_rooms),
+        hotel_bookings: maxIdOf(store.hotel_bookings),
+        follow_ups: maxIdOf(store.follow_ups),
+        settings: maxIdOf(store.settings),
+        invoice_catalog_items: maxIdOf(store.invoice_catalog_items),
+        invoices: maxIdOf(store.invoices),
+        invoice_items: maxIdOf(store.invoice_items),
+      };
+
+      saveStore(store);
+
+      this.logActivity(
+        operatorId,
+        'RESTORE_DATABASE',
+        'SYSTEM',
+        operatorId,
+        `Restored full database from backup file. Clients: ${store.clients.length}, Applications: ${store.visa_applications.length}`
+      );
+
+      return {
+        success: true,
+        restored: {
+          clients: store.clients.length,
+          applications: store.visa_applications.length,
+          hotel_bookings: store.hotel_bookings.length,
+          tasks: store.tasks.length,
+          follow_ups: (store.follow_ups || []).length,
+          users: store.users.length,
+        },
+      };
+    };
+
     // 1. Check for embedded JSON snapshot for perfect recovery
     const match = dumpContent.match(/-- JSON_SNAPSHOT_START\n-- ([A-Za-z0-9+/=]+)\n-- JSON_SNAPSHOT_END/);
     if (match && match[1]) {
       try {
         const jsonStr = Buffer.from(match[1], 'base64').toString('utf-8');
         const parsed = JSON.parse(jsonStr);
-        if (parsed.clients && Array.isArray(parsed.clients) && parsed.users && Array.isArray(parsed.users)) {
-          // Restore all tables
-          store.users = parsed.users || [];
-          store.countries = parsed.countries || [];
-          store.client_custom_fields = parsed.client_custom_fields || [];
-          store.clients = parsed.clients || [];
-          store.client_custom_field_values = parsed.client_custom_field_values || [];
-          store.visa_types = parsed.visa_types || [];
-          store.visa_applications = parsed.visa_applications || [];
-          store.application_status_history = parsed.application_status_history || [];
-          store.tasks = parsed.tasks || [];
-          store.follow_ups = parsed.follow_ups || [];
-          store.comments = parsed.comments || [];
-          store.activity_logs = parsed.activity_logs || [];
-          store.hotels = parsed.hotels || [];
-          store.hotel_rooms = parsed.hotel_rooms || [];
-          store.hotel_bookings = parsed.hotel_bookings || [];
-          if (parsed.invoice_settings) store.invoice_settings = parsed.invoice_settings;
-          if (Array.isArray(parsed.invoice_catalog_items)) store.invoice_catalog_items = parsed.invoice_catalog_items;
-          if (Array.isArray(parsed.invoices)) store.invoices = parsed.invoices;
-          if (Array.isArray(parsed.invoice_items)) store.invoice_items = parsed.invoice_items;
-          store.settings = parsed.settings || store.settings;
-          store.nextIds = parsed.nextIds || store.nextIds;
-
-          // Ensure nextIds are strictly greater than any restored row IDs
-          const maxIdOf = (arr?: any[]) =>
-            Array.isArray(arr) ? arr.reduce((m, r) => Math.max(m, Number(r?.id) || 0), 0) + 1 : 1;
-          store.nextIds.users = Math.max(store.nextIds.users || 1, maxIdOf(store.users));
-          store.nextIds.clients = Math.max(store.nextIds.clients || 1, maxIdOf(store.clients));
-          store.nextIds.custom_fields = Math.max(store.nextIds.custom_fields || 1, maxIdOf(store.client_custom_fields));
-          store.nextIds.custom_values = Math.max(store.nextIds.custom_values || 1, maxIdOf(store.client_custom_field_values));
-          store.nextIds.visa_types = Math.max(store.nextIds.visa_types || 1, maxIdOf(store.visa_types));
-          store.nextIds.countries = Math.max(store.nextIds.countries || 1, maxIdOf(store.countries));
-          store.nextIds.applications = Math.max(store.nextIds.applications || 1, maxIdOf(store.visa_applications));
-          store.nextIds.status_history = Math.max(store.nextIds.status_history || 1, maxIdOf(store.application_status_history));
-          store.nextIds.tasks = Math.max(store.nextIds.tasks || 1, maxIdOf(store.tasks));
-          store.nextIds.follow_ups = Math.max(store.nextIds.follow_ups || 1, maxIdOf(store.follow_ups));
-          store.nextIds.comments = Math.max(store.nextIds.comments || 1, maxIdOf(store.comments));
-          store.nextIds.activity_logs = Math.max(store.nextIds.activity_logs || 1, maxIdOf(store.activity_logs));
-          store.nextIds.hotels = Math.max(store.nextIds.hotels || 1, maxIdOf(store.hotels));
-          store.nextIds.hotel_rooms = Math.max(store.nextIds.hotel_rooms || 1, maxIdOf(store.hotel_rooms));
-          store.nextIds.hotel_bookings = Math.max(store.nextIds.hotel_bookings || 1, maxIdOf(store.hotel_bookings));
-          store.nextIds.invoice_catalog_items = Math.max(store.nextIds.invoice_catalog_items || 1, maxIdOf(store.invoice_catalog_items));
-          store.nextIds.invoices = Math.max(store.nextIds.invoices || 1, maxIdOf(store.invoices));
-          store.nextIds.invoice_items = Math.max(store.nextIds.invoice_items || 1, maxIdOf(store.invoice_items));
-
-          saveStore(store);
-
-          this.logActivity(
-            operatorId,
-            'RESTORE_DATABASE',
-            'SYSTEM',
-            operatorId,
-            `Restored full database from backup file. Clients: ${store.clients.length}, Applications: ${store.visa_applications.length}`
-          );
-
-          return {
-            success: true,
-            restored: {
-              clients: store.clients.length,
-              applications: store.visa_applications.length,
-              hotel_bookings: store.hotel_bookings.length,
-              tasks: store.tasks.length,
-              follow_ups: (store.follow_ups || []).length,
-              users: store.users.length,
-            },
-          };
-        }
+        const res = applyValidatedSnapshot(parsed);
+        if (res) return res;
       } catch (err: any) {
-        console.warn('[Restore] Failed to restore from JSON snapshot, attempting SQL parser fallback...', err);
+        console.warn('[Restore] Failed to restore from JSON snapshot, attempting JSON fallback...', err);
       }
     }
 
-    // 2. Direct JSON format restore if the user provided raw JSON export
+    // 2. Direct JSON format restore if the user provided raw JSON export (strictly validated, no Object.assign)
     if (dumpContent.trim().startsWith('{')) {
       try {
         const parsed = JSON.parse(dumpContent);
-        if (parsed.clients && Array.isArray(parsed.clients)) {
-          Object.assign(store, parsed);
-          saveStore(store);
-          return {
-            success: true,
-            restored: {
-              clients: store.clients.length,
-              applications: store.visa_applications.length,
-              hotel_bookings: store.hotel_bookings.length,
-              tasks: store.tasks.length,
-              follow_ups: (store.follow_ups || []).length,
-              users: store.users.length,
-            },
-          };
-        }
-      } catch (e) {
+        const res = applyValidatedSnapshot(parsed);
+        if (res) return res;
+      } catch {
         // Continue to error
       }
     }
@@ -5141,64 +5086,60 @@ export const dbService = {
     store.invoice_settings = updated;
     saveStore(store);
 
-    if (pool && isConnectedToMySQL) {
-      try {
-        await pool.query(
-          `INSERT INTO invoice_settings (
-             id, company_name, company_tagline, logo_url, phone, whatsapp, email, website,
-             address, tax_number, bank_details, payment_notes, terms_and_conditions,
-             signature_enabled, signature_name, signature_designation, signature_image_url, signature_style,
-             default_currency, invoice_prefix, next_number
-           )
-           VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-           ON DUPLICATE KEY UPDATE
-             company_name = VALUES(company_name),
-             company_tagline = VALUES(company_tagline),
-             logo_url = VALUES(logo_url),
-             phone = VALUES(phone),
-             whatsapp = VALUES(whatsapp),
-             email = VALUES(email),
-             website = VALUES(website),
-             address = VALUES(address),
-             tax_number = VALUES(tax_number),
-             bank_details = VALUES(bank_details),
-             payment_notes = VALUES(payment_notes),
-             terms_and_conditions = VALUES(terms_and_conditions),
-             signature_enabled = VALUES(signature_enabled),
-             signature_name = VALUES(signature_name),
-             signature_designation = VALUES(signature_designation),
-             signature_image_url = VALUES(signature_image_url),
-             signature_style = VALUES(signature_style),
-             default_currency = VALUES(default_currency),
-             invoice_prefix = VALUES(invoice_prefix),
-             next_number = VALUES(next_number)`,
-          [
-            updated.company_name || 'SN Travels Agency',
-            updated.company_tagline || '',
-            updated.logo_url || null,
-            updated.phone || '',
-            updated.whatsapp || '',
-            updated.email || '',
-            updated.website || '',
-            updated.address || '',
-            updated.tax_number || null,
-            updated.bank_details || '',
-            updated.payment_notes || '',
-            updated.terms_and_conditions || '',
-            updated.signature_enabled !== undefined ? Number(updated.signature_enabled) : 1,
-            updated.signature_name ?? 'Sarah Nadeem',
-            updated.signature_designation ?? 'Managing Director',
-            updated.signature_image_url || null,
-            updated.signature_style || 'script',
-            updated.default_currency || 'MYR',
-            updated.invoice_prefix || 'INV-2026-',
-            updated.next_number || 1001,
-          ]
-        );
-      } catch (err: any) {
-        console.warn('[MySQL] Failed to update invoice_settings:', err.message);
-      }
-    }
+    runMySQLWrite(async (activePool) => {
+      await activePool.query(
+        `INSERT INTO invoice_settings (
+           id, company_name, company_tagline, logo_url, phone, whatsapp, email, website,
+           address, tax_number, bank_details, payment_notes, terms_and_conditions,
+           signature_enabled, signature_name, signature_designation, signature_image_url, signature_style,
+           default_currency, invoice_prefix, next_number
+         )
+         VALUES (1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE
+           company_name = VALUES(company_name),
+           company_tagline = VALUES(company_tagline),
+           logo_url = VALUES(logo_url),
+           phone = VALUES(phone),
+           whatsapp = VALUES(whatsapp),
+           email = VALUES(email),
+           website = VALUES(website),
+           address = VALUES(address),
+           tax_number = VALUES(tax_number),
+           bank_details = VALUES(bank_details),
+           payment_notes = VALUES(payment_notes),
+           terms_and_conditions = VALUES(terms_and_conditions),
+           signature_enabled = VALUES(signature_enabled),
+           signature_name = VALUES(signature_name),
+           signature_designation = VALUES(signature_designation),
+           signature_image_url = VALUES(signature_image_url),
+           signature_style = VALUES(signature_style),
+           default_currency = VALUES(default_currency),
+           invoice_prefix = VALUES(invoice_prefix),
+           next_number = VALUES(next_number)`,
+        [
+          updated.company_name || 'SN Travels Agency',
+          updated.company_tagline || '',
+          updated.logo_url || null,
+          updated.phone || '',
+          updated.whatsapp || '',
+          updated.email || '',
+          updated.website || '',
+          updated.address || '',
+          updated.tax_number || null,
+          updated.bank_details || '',
+          updated.payment_notes || '',
+          updated.terms_and_conditions || '',
+          updated.signature_enabled !== undefined ? Number(updated.signature_enabled) : 1,
+          updated.signature_name ?? 'Sarah Nadeem',
+          updated.signature_designation ?? 'Managing Director',
+          updated.signature_image_url || null,
+          updated.signature_style || 'script',
+          updated.default_currency || 'MYR',
+          updated.invoice_prefix || 'INV-2026-',
+          updated.next_number || 1001,
+        ]
+      );
+    });
 
     if (operatorId) {
       this.logActivity(
@@ -5233,9 +5174,7 @@ export const dbService = {
       store.invoice_catalog_items = getInitialData().invoice_catalog_items;
     }
     const now = new Date().toISOString();
-    const maxExistingId = store.invoice_catalog_items.reduce((max, it) => Math.max(max, Number(it.id) || 0), 0);
-    const id = Math.max(Number(store.nextIds.invoice_catalog_items) || 1, maxExistingId + 1);
-    store.nextIds.invoice_catalog_items = id + 1;
+    const id = nextEntityId('invoice_catalog_items', store.invoice_catalog_items);
     const maxOrder = store.invoice_catalog_items.reduce((max, it) => Math.max(max, Number(it.display_order) || 0), 0);
     const desiredOrder =
       data.display_order !== undefined && Number(data.display_order) > 0
@@ -5266,36 +5205,36 @@ export const dbService = {
     });
     saveStore(store);
 
-    if (pool && isConnectedToMySQL) {
-      try {
-        await pool.query(
-          `INSERT INTO invoice_catalog_items (id, name, description, default_unit_price, category, is_active, display_order)
-           VALUES (?, ?, ?, ?, ?, ?, ?)`,
-          [
-            newItem.id,
-            newItem.name,
-            newItem.description,
-            newItem.default_unit_price,
-            newItem.category,
-            newItem.is_active,
-            newItem.display_order,
-          ]
+    runMySQLWrite(async (activePool) => {
+      await activePool.query(
+        `INSERT INTO invoice_catalog_items (id, name, description, default_unit_price, category, is_active, display_order)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE
+           name = VALUES(name), description = VALUES(description),
+           default_unit_price = VALUES(default_unit_price), category = VALUES(category),
+           is_active = VALUES(is_active), display_order = VALUES(display_order)`,
+        [
+          newItem.id,
+          newItem.name,
+          newItem.description,
+          newItem.default_unit_price,
+          newItem.category,
+          newItem.is_active,
+          newItem.display_order,
+        ]
+      );
+      if (sorted.length > 0) {
+        const cases = sorted.map(() => 'WHEN ? THEN ?').join(' ');
+        const ids = sorted.map(it => it.id);
+        const params: number[] = [];
+        for (const it of sorted) params.push(it.id, it.display_order);
+        params.push(...ids);
+        await activePool.query(
+          `UPDATE invoice_catalog_items SET display_order = CASE id ${cases} END WHERE id IN (${ids.map(() => '?').join(',')})`,
+          params
         );
-        if (sorted.length > 0) {
-          const cases = sorted.map(() => 'WHEN ? THEN ?').join(' ');
-          const ids = sorted.map(it => it.id);
-          const params: number[] = [];
-          for (const it of sorted) params.push(it.id, it.display_order);
-          params.push(...ids);
-          await pool.query(
-            `UPDATE invoice_catalog_items SET display_order = CASE id ${cases} END WHERE id IN (${ids.map(() => '?').join(',')})`,
-            params
-          );
-        }
-      } catch (err: any) {
-        console.warn('[MySQL] Failed to insert invoice_catalog_item:', err.message);
       }
-    }
+    });
 
     if (operatorId) {
       this.logActivity(
@@ -5335,21 +5274,19 @@ export const dbService = {
     store.invoice_catalog_items = sorted;
     saveStore(store);
 
-    if (pool && isConnectedToMySQL && sorted.length > 0) {
-      try {
+    runMySQLWrite(async (activePool) => {
+      if (sorted.length > 0) {
         const cases = sorted.map(() => 'WHEN ? THEN ?').join(' ');
         const ids = sorted.map(it => it.id);
         const params: number[] = [];
         for (const it of sorted) params.push(it.id, it.display_order);
         params.push(...ids);
-        await pool.query(
+        await activePool.query(
           `UPDATE invoice_catalog_items SET display_order = CASE id ${cases} END WHERE id IN (${ids.map(() => '?').join(',')})`,
           params
         );
-      } catch (err: any) {
-        console.warn('[MySQL] Failed to reorder invoice_catalog_items:', err.message);
       }
-    }
+    });
 
     if (operatorId) {
       this.logActivity(
@@ -5379,32 +5316,28 @@ export const dbService = {
 
     saveStore(store);
 
-    if (pool && isConnectedToMySQL) {
-      try {
-        await pool.query(
-          `INSERT INTO invoice_catalog_items (id, name, description, default_unit_price, category, is_active, display_order)
-           VALUES (?, ?, ?, ?, ?, ?, ?)
-           ON DUPLICATE KEY UPDATE
-             name = VALUES(name),
-             description = VALUES(description),
-             default_unit_price = VALUES(default_unit_price),
-             category = VALUES(category),
-             is_active = VALUES(is_active),
-             display_order = VALUES(display_order)`,
-          [
-            item.id,
-            item.name,
-            item.description,
-            item.default_unit_price,
-            item.category,
-            item.is_active,
-            item.display_order,
-          ]
-        );
-      } catch (err: any) {
-        console.warn('[MySQL] Failed to update invoice_catalog_item:', err.message);
-      }
-    }
+    runMySQLWrite(async (activePool) => {
+      await activePool.query(
+        `INSERT INTO invoice_catalog_items (id, name, description, default_unit_price, category, is_active, display_order)
+         VALUES (?, ?, ?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE
+           name = VALUES(name),
+           description = VALUES(description),
+           default_unit_price = VALUES(default_unit_price),
+           category = VALUES(category),
+           is_active = VALUES(is_active),
+           display_order = VALUES(display_order)`,
+        [
+          item.id,
+          item.name,
+          item.description,
+          item.default_unit_price,
+          item.category,
+          item.is_active,
+          item.display_order,
+        ]
+      );
+    });
 
     if (operatorId) {
       this.logActivity(
@@ -5427,13 +5360,9 @@ export const dbService = {
     const [deleted] = store.invoice_catalog_items.splice(index, 1);
     saveStore(store);
 
-    if (pool && isConnectedToMySQL) {
-      try {
-        await pool.query('DELETE FROM invoice_catalog_items WHERE id = ?', [id]);
-      } catch (err: any) {
-        console.warn('[MySQL] Failed to delete invoice_catalog_item:', err.message);
-      }
-    }
+    runMySQLWrite(async (activePool) => {
+      await activePool.query('DELETE FROM invoice_catalog_items WHERE id = ?', [id]);
+    });
 
     if (operatorId) {
       this.logActivity(
@@ -5541,9 +5470,7 @@ export const dbService = {
     if (!store.invoice_settings) store.invoice_settings = getInitialData().invoice_settings;
 
     const now = new Date().toISOString();
-    const maxInvId = store.invoices.reduce((max, iv) => Math.max(max, Number(iv.id) || 0), 0);
-    const id = Math.max(Number(store.nextIds.invoices) || 1, maxInvId + 1);
-    store.nextIds.invoices = id + 1;
+    const id = nextEntityId('invoices', store.invoices);
 
     // Generate or validate unique Invoice Number and advance next_number
     const prefix = store.invoice_settings.invoice_prefix || 'INV-2026-';
@@ -5558,7 +5485,6 @@ export const dbService = {
       invoiceNumber = `${prefix}${nextNum}`;
       store.invoice_settings.next_number = nextNum + 1;
     } else {
-      // If provided invoice number ends with digits >= next_number, advance next_number
       const trailingDigitsMatch = invoiceNumber.match(/(\d+)$/);
       if (trailingDigitsMatch) {
         const usedNum = parseInt(trailingDigitsMatch[1], 10);
@@ -5572,7 +5498,6 @@ export const dbService = {
     const maxItemId = store.invoice_items.reduce((max, it) => Math.max(max, Number(it.id) || 0), 0);
     let nextItemId = Math.max(Number(store.nextIds.invoice_items) || 1, maxItemId + 1);
 
-    // Calculate items totals
     let calculatedSubtotal = 0;
     const preparedItems: InvoiceItem[] = itemsInput.map((it) => {
       const itemId = nextItemId++;
@@ -5648,59 +5573,59 @@ export const dbService = {
     preparedItems.forEach(it => store.invoice_items.push(it));
     saveStore(store);
 
-    if (pool && isConnectedToMySQL) {
-      try {
-        await pool.query(
-          `INSERT INTO invoices (id, invoice_number, client_id, issue_date, due_date, status, payment_method, currency, subtotal, discount, tax_rate, tax_amount, total_amount, paid_amount, balance_due, notes, created_by_user_id)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [
-            newInvoice.id,
-            newInvoice.invoice_number,
-            newInvoice.client_id,
-            newInvoice.issue_date,
-            newInvoice.due_date,
-            newInvoice.status,
-            newInvoice.payment_method,
-            newInvoice.currency,
-            newInvoice.subtotal,
-            newInvoice.discount,
-            newInvoice.tax_rate,
-            newInvoice.tax_amount,
-            newInvoice.total_amount,
-            newInvoice.paid_amount,
-            newInvoice.balance_due,
-            newInvoice.notes,
-            newInvoice.created_by_user_id,
-          ]
+    runMySQLWrite(async (activePool) => {
+      await activePool.query(
+        `INSERT INTO invoices (id, invoice_number, client_id, issue_date, due_date, status, payment_method, currency, subtotal, discount, tax_rate, tax_amount, total_amount, paid_amount, balance_due, notes, created_by_user_id)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         ON DUPLICATE KEY UPDATE
+           invoice_number = VALUES(invoice_number), status = VALUES(status),
+           total_amount = VALUES(total_amount), paid_amount = VALUES(paid_amount),
+           balance_due = VALUES(balance_due)`,
+        [
+          newInvoice.id,
+          newInvoice.invoice_number,
+          newInvoice.client_id,
+          newInvoice.issue_date,
+          newInvoice.due_date,
+          newInvoice.status,
+          newInvoice.payment_method,
+          newInvoice.currency,
+          newInvoice.subtotal,
+          newInvoice.discount,
+          newInvoice.tax_rate,
+          newInvoice.tax_amount,
+          newInvoice.total_amount,
+          newInvoice.paid_amount,
+          newInvoice.balance_due,
+          newInvoice.notes,
+          newInvoice.created_by_user_id,
+        ]
+      );
+
+      if (preparedItems.length > 0) {
+        const placeholders = preparedItems.map(() => '(?, ?, ?, ?, ?, ?, ?)').join(', ');
+        const flatParams = preparedItems.flatMap(it => [
+          it.id,
+          it.invoice_id,
+          it.catalog_item_id,
+          it.description,
+          it.quantity,
+          it.unit_price,
+          it.total,
+        ]);
+        await activePool.query(
+          `INSERT INTO invoice_items (id, invoice_id, catalog_item_id, description, quantity, unit_price, total)
+           VALUES ${placeholders}
+           ON DUPLICATE KEY UPDATE description = VALUES(description), quantity = VALUES(quantity), unit_price = VALUES(unit_price), total = VALUES(total)`,
+          flatParams
         );
-
-        if (preparedItems.length > 0) {
-          const placeholders = preparedItems.map(() => '(?, ?, ?, ?, ?, ?, ?)').join(', ');
-          const flatParams = preparedItems.flatMap(it => [
-            it.id,
-            it.invoice_id,
-            it.catalog_item_id,
-            it.description,
-            it.quantity,
-            it.unit_price,
-            it.total,
-          ]);
-          await pool.query(
-            `INSERT INTO invoice_items (id, invoice_id, catalog_item_id, description, quantity, unit_price, total)
-             VALUES ${placeholders}`,
-            flatParams
-          );
-        }
-
-        // Update settings next_number in MySQL
-        await pool.query(
-          'UPDATE invoice_settings SET next_number = ? WHERE id = 1',
-          [store.invoice_settings.next_number]
-        ).catch(() => {});
-      } catch (err: any) {
-        console.warn('[MySQL] Failed to insert invoice:', err.message);
       }
-    }
+
+      await activePool.query(
+        'UPDATE invoice_settings SET next_number = ? WHERE id = 1',
+        [store.invoice_settings.next_number]
+      ).catch(() => {});
+    });
 
     const client = store.clients.find(c => c.id === newInvoice.client_id);
     if (operatorId) {
@@ -5733,7 +5658,6 @@ export const dbService = {
 
     // Handle line items if updated
     if (Array.isArray(data.items)) {
-      // Remove previous items
       store.invoice_items = (store.invoice_items || []).filter(it => it.invoice_id !== id);
 
       const maxItemId = store.invoice_items.reduce((max, it) => Math.max(max, Number(it.id) || 0), 0);
@@ -5805,59 +5729,58 @@ export const dbService = {
     inv.updated_at = now;
     saveStore(store);
 
-    if (pool && isConnectedToMySQL) {
-      try {
-        await pool.query(
-          `UPDATE invoices SET
-             invoice_number = ?, client_id = ?, issue_date = ?, due_date = ?, status = ?,
-             payment_method = ?, currency = ?, subtotal = ?, discount = ?, tax_rate = ?,
-             tax_amount = ?, total_amount = ?, paid_amount = ?, balance_due = ?, notes = ?
-           WHERE id = ?`,
-          [
-            inv.invoice_number,
-            inv.client_id,
-            inv.issue_date,
-            inv.due_date,
-            inv.status,
-            inv.payment_method,
-            inv.currency,
-            inv.subtotal,
-            inv.discount,
-            inv.tax_rate,
-            inv.tax_amount,
-            inv.total_amount,
-            inv.paid_amount,
-            inv.balance_due,
-            inv.notes,
-            inv.id,
-          ]
-        );
+    const currentItemsSnapshot = Array.isArray(data.items)
+      ? store.invoice_items.filter(it => it.invoice_id === id)
+      : null;
 
-        if (Array.isArray(data.items)) {
-          await pool.query('DELETE FROM invoice_items WHERE invoice_id = ?', [id]);
-          const currentItems = store.invoice_items.filter(it => it.invoice_id === id);
-          if (currentItems.length > 0) {
-            const placeholders = currentItems.map(() => '(?, ?, ?, ?, ?, ?, ?)').join(', ');
-            const flatParams = currentItems.flatMap(it => [
-              it.id,
-              it.invoice_id,
-              it.catalog_item_id,
-              it.description,
-              it.quantity,
-              it.unit_price,
-              it.total,
-            ]);
-            await pool.query(
-              `INSERT INTO invoice_items (id, invoice_id, catalog_item_id, description, quantity, unit_price, total)
-               VALUES ${placeholders}`,
-              flatParams
-            );
-          }
+    runMySQLWrite(async (activePool) => {
+      await activePool.query(
+        `UPDATE invoices SET
+           invoice_number = ?, client_id = ?, issue_date = ?, due_date = ?, status = ?,
+           payment_method = ?, currency = ?, subtotal = ?, discount = ?, tax_rate = ?,
+           tax_amount = ?, total_amount = ?, paid_amount = ?, balance_due = ?, notes = ?
+         WHERE id = ?`,
+        [
+          inv.invoice_number,
+          inv.client_id,
+          inv.issue_date,
+          inv.due_date,
+          inv.status,
+          inv.payment_method,
+          inv.currency,
+          inv.subtotal,
+          inv.discount,
+          inv.tax_rate,
+          inv.tax_amount,
+          inv.total_amount,
+          inv.paid_amount,
+          inv.balance_due,
+          inv.notes,
+          inv.id,
+        ]
+      );
+
+      if (currentItemsSnapshot) {
+        await activePool.query('DELETE FROM invoice_items WHERE invoice_id = ?', [id]);
+        if (currentItemsSnapshot.length > 0) {
+          const placeholders = currentItemsSnapshot.map(() => '(?, ?, ?, ?, ?, ?, ?)').join(', ');
+          const flatParams = currentItemsSnapshot.flatMap(it => [
+            it.id,
+            it.invoice_id,
+            it.catalog_item_id,
+            it.description,
+            it.quantity,
+            it.unit_price,
+            it.total,
+          ]);
+          await activePool.query(
+            `INSERT INTO invoice_items (id, invoice_id, catalog_item_id, description, quantity, unit_price, total)
+             VALUES ${placeholders}`,
+            flatParams
+          );
         }
-      } catch (err: any) {
-        console.warn('[MySQL] Failed to update invoice in MySQL:', err.message);
       }
-    }
+    });
 
     if (operatorId) {
       this.logActivity(
@@ -5881,14 +5804,10 @@ export const dbService = {
     store.invoice_items = (store.invoice_items || []).filter(it => it.invoice_id !== id);
     saveStore(store);
 
-    if (pool && isConnectedToMySQL) {
-      try {
-        await pool.query('DELETE FROM invoice_items WHERE invoice_id = ?', [id]);
-        await pool.query('DELETE FROM invoices WHERE id = ?', [id]);
-      } catch (err: any) {
-        console.warn('[MySQL] Failed to delete invoice in MySQL:', err.message);
-      }
-    }
+    runMySQLWrite(async (activePool) => {
+      await activePool.query('DELETE FROM invoice_items WHERE invoice_id = ?', [id]);
+      await activePool.query('DELETE FROM invoices WHERE id = ?', [id]);
+    });
 
     if (operatorId) {
       this.logActivity(
@@ -5907,4 +5826,5 @@ export const dbService = {
 export function getMySQLPool() {
   return { pool, isConnected: isConnectedToMySQL };
 }
+
 

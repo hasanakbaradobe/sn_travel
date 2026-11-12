@@ -66,10 +66,10 @@ export function getInvoiceLogoCandidates(url?: string | null): string[] {
   const fileId = extractGoogleDriveId(raw);
   if (fileId) {
     return [
-      `/api/proxy-image?url=${encodeURIComponent(raw)}&fallback=404`,
       `https://lh3.googleusercontent.com/d/${fileId}`,
       `https://drive.google.com/thumbnail?id=${fileId}&sz=w1000`,
       `https://drive.google.com/uc?export=view&id=${fileId}`,
+      `/api/proxy-image?url=${encodeURIComponent(raw)}&fallback=404`,
     ];
   }
 
@@ -79,8 +79,8 @@ export function getInvoiceLogoCandidates(url?: string | null): string[] {
 
   if (/^https?:\/\//i.test(raw)) {
     return [
-      `/api/proxy-image?url=${encodeURIComponent(raw)}&fallback=404`,
       raw,
+      `/api/proxy-image?url=${encodeURIComponent(raw)}&fallback=404`,
     ];
   }
 

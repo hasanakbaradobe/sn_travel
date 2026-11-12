@@ -15,11 +15,19 @@ function expressApiPlugin(): Plugin {
       const initApiApp = async (): Promise<express.Express> => {
         const { apiRouter } = await import('./server/routes/api.ts');
         const apiApp = express();
+        apiApp.disable('x-powered-by');
+        apiApp.set('trust proxy', 1);
 
-        // HTTP Response Compression (Gzip / Deflate)
+        // HTTP Response Compression (Gzip / Deflate — skip Server-Sent Events stream)
         apiApp.use(
           compression({
             threshold: 1024,
+            filter: (req, res) => {
+              if (req.path === '/api/events' || req.headers.accept?.includes('text/event-stream')) {
+                return false;
+              }
+              return compression.filter(req, res);
+            },
           })
         );
 

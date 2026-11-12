@@ -298,11 +298,11 @@ function getResilientImageCandidates(rawUrl?: string | null): string[] {
   const fileId = extractDriveFileId(raw);
   if (fileId) {
     return [
-      `https://lh3.googleusercontent.com/d/${fileId}=w1920`,
       `https://lh3.googleusercontent.com/d/${fileId}`,
-      `/api/proxy-image?url=${encodeURIComponent(raw)}&fallback=404`,
       `https://drive.google.com/thumbnail?id=${fileId}&sz=w1600`,
       `https://drive.google.com/uc?export=view&id=${fileId}`,
+      `https://drive.usercontent.google.com/download?id=${fileId}&export=view`,
+      `/api/proxy-image?url=${encodeURIComponent(raw)}&fallback=404`,
     ];
   }
 

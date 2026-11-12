@@ -15,12 +15,118 @@ import {
   recordFailedLogin,
   resetLoginAttempts,
   validatePasswordStrength,
+  timingSafeEqualStrings,
+  checkEndpointRateLimit,
 } from '../services/auth.ts';
 import fs from 'fs';
 import path from 'path';
 import { publicSiteExportRouter, publicSiteAdminRouter } from './publicSiteRoutes.ts';
 
 export const apiRouter = Router();
+
+// --------------------------------------------------------------------------
+// SSRF & Redirect-Safe External URL Validator
+// Blocks loopback, RFC1918 private IPs, link-local metadata, IPv6 private ranges,
+// and validates every HTTP redirect hop manually.
+// --------------------------------------------------------------------------
+export function isSafeExternalUrl(input: string | URL): boolean {
+  try {
+    const parsed = typeof input === 'string' ? new URL(input) : input;
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+      return false;
+    }
+    if (parsed.username || parsed.password) {
+      return false;
+    }
+    const rawHost = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+    if (!rawHost) return false;
+
+    if (
+      rawHost === 'localhost' ||
+      rawHost === '0.0.0.0' ||
+      rawHost === '::1' ||
+      rawHost === '::' ||
+      rawHost === 'metadata.google.internal' ||
+      rawHost === 'metadata' ||
+      rawHost.endsWith('.internal') ||
+      rawHost.endsWith('.local') ||
+      rawHost.endsWith('.localhost')
+    ) {
+      return false;
+    }
+
+    // Block IPv6 loopback, link-local, unique-local, and IPv4-mapped private addresses
+    if (
+      rawHost.includes(':') &&
+      (/^::1$/.test(rawHost) ||
+        /^fe80:/i.test(rawHost) ||
+        /^fc00:/i.test(rawHost) ||
+        /^fd[0-9a-f]{2}:/i.test(rawHost) ||
+        /^::ffff:(127\.|10\.|192\.168\.|169\.254\.|172\.(1[6-9]|2[0-9]|3[0-1])\.|0\.)/i.test(rawHost))
+    ) {
+      return false;
+    }
+
+    // Block numeric integer or hex IP encodings (e.g. 2130706433 or 0x7f000001)
+    if (/^(0x[0-9a-f]+|\d+)$/i.test(rawHost)) {
+      return false;
+    }
+
+    // Block private/reserved IPv4 ranges
+    if (
+      /^127\./.test(rawHost) ||
+      /^10\./.test(rawHost) ||
+      /^192\.168\./.test(rawHost) ||
+      /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(rawHost) ||
+      /^169\.254\./.test(rawHost) ||
+      /^0\./.test(rawHost) ||
+      /^100\.(6[4-9]|[7-9]\d|1[0-1]\d|12[0-7])\./.test(rawHost)
+    ) {
+      return false;
+    }
+
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export async function fetchSafeExternal(
+  initialUrl: string,
+  options: RequestInit & { timeoutMs?: number; maxRedirects?: number } = {}
+): Promise<globalThis.Response> {
+  const { timeoutMs = 4500, maxRedirects = 4, ...fetchOpts } = options;
+  let currentUrl = initialUrl;
+
+  for (let hop = 0; hop <= maxRedirects; hop++) {
+    if (!isSafeExternalUrl(currentUrl)) {
+      throw new Error('Blocked unsafe external URL destination');
+    }
+
+    const response = await fetch(currentUrl, {
+      ...fetchOpts,
+      redirect: 'manual',
+      signal: fetchOpts.signal || AbortSignal.timeout(timeoutMs),
+    });
+
+    if (response.status >= 300 && response.status < 400) {
+      const location = response.headers.get('location');
+      if (!location) {
+        throw new Error(`Redirect HTTP ${response.status} missing Location header`);
+      }
+      const nextUrl = new URL(location, currentUrl).toString();
+      if (!isSafeExternalUrl(nextUrl)) {
+        throw new Error('Redirect target blocked by SSRF policy');
+      }
+      currentUrl = nextUrl;
+      continue;
+    }
+
+    return response;
+  }
+
+  throw new Error('Too many redirects');
+}
 
 // --------------------------------------------------------------------------
 // Server-Sent Events (SSE) Real-Time Broadcast Infrastructure
@@ -74,7 +180,33 @@ export function broadcastDataChange(eventType: string = 'data_changed', data?: a
   });
 }
 
-apiRouter.get('/events', (_req: Request, res: Response) => {
+apiRouter.get('/events', (req: Request, res: Response) => {
+  // Require valid authenticated token via Authorization header or ?token= query parameter
+  let token = '';
+  const authHeader = req.headers.authorization;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    token = authHeader.substring(7).trim();
+  } else if (typeof req.query.token === 'string') {
+    token = req.query.token.trim();
+  }
+
+  const payload = token ? verifyToken(token) : null;
+  const user = payload?.id ? dbService.getUserById(payload.id) : null;
+  if (!user || user.is_active !== 1) {
+    return res.status(401).json({ error: 'Authentication required for real-time event stream.' });
+  }
+
+  // Bound maximum concurrent SSE connections
+  if (sseClients.size >= 100) {
+    const oldest = sseClients.values().next().value;
+    if (oldest) {
+      try {
+        oldest.end();
+      } catch {}
+      sseClients.delete(oldest);
+    }
+  }
+
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache, no-transform');
   res.setHeader('Connection', 'keep-alive');
@@ -89,7 +221,7 @@ apiRouter.get('/events', (_req: Request, res: Response) => {
   }
   sseClients.add(res);
 
-  _req.on('close', () => {
+  req.on('close', () => {
     sseClients.delete(res);
   });
 });
@@ -187,12 +319,32 @@ function requireSuperAdmin(req: Request, res: Response, next: NextFunction) {
   next();
 }
 
+/**
+ * Middleware: Requires Admin or Super Admin privileges.
+ */
+function requireAdminOrSuperAdmin(req: Request, res: Response, next: NextFunction) {
+  const user = (req as any).user || getCurrentUser(req);
+  if (!user) {
+    return res.status(401).json({ error: 'Authentication required. Please sign in.' });
+  }
+  if (user.role !== 'super_admin' && user.role !== 'admin') {
+    return res.status(403).json({ error: 'Administrator or Super Admin access required for this action.' });
+  }
+  (req as any).user = user;
+  next();
+}
+
 // --------------------------------------------------------------------------
 // Public Auth Endpoints
 // --------------------------------------------------------------------------
 
 // Check if secret login URL protection is enabled, and validate candidate key
 apiRouter.get('/auth/secret-check', (req: Request, res: Response) => {
+  const clientIp = (req.headers['x-forwarded-for'] as string) || req.ip || req.socket.remoteAddress || 'unknown';
+  if (!checkEndpointRateLimit(`secret_check:${clientIp}`, 30, 60_000)) {
+    return res.status(429).json({ error: 'Too many verification requests. Please wait a moment.' });
+  }
+
   const { key } = req.query;
   const config = dbService.getSecretLoginSettings();
 
@@ -201,7 +353,8 @@ apiRouter.get('/auth/secret-check', (req: Request, res: Response) => {
   }
 
   const candidate = String(key || '').trim().toLowerCase();
-  const isValid = candidate.length > 0 && candidate === config.secretKey.toLowerCase();
+  const expected = String(config.secretKey || '').trim().toLowerCase();
+  const isValid = candidate.length > 0 && expected.length > 0 && timingSafeEqualStrings(candidate, expected);
 
   return res.json({
     protected: true,
@@ -225,7 +378,8 @@ apiRouter.post('/auth/login', (req: Request, res: Response) => {
       (req.headers['x-login-secret'] as string) ||
       '';
     const cleanProvided = String(providedSecret).trim().toLowerCase();
-    if (!cleanProvided || cleanProvided !== secretSettings.secretKey.toLowerCase()) {
+    const cleanExpected = String(secretSettings.secretKey || '').trim().toLowerCase();
+    if (!cleanProvided || !timingSafeEqualStrings(cleanProvided, cleanExpected)) {
       return res.status(403).json({
         error: 'Access denied: Valid secret login URL is required to sign in. Direct logins are blocked.',
       });
@@ -325,8 +479,31 @@ apiRouter.get('/auth/me', (req: Request, res: Response) => {
 });
 
 // Unified Bootstrap Endpoint — Fetches all core workspace datasets in 1 HTTP request
-apiRouter.get('/bootstrap', (_req: Request, res: Response) => {
-  return res.json({
+// Uses versioned micro-caching so repeated polls / multi-tab loads return in <1ms
+apiRouter.get('/bootstrap', (req: Request, res: Response) => {
+  const currentUser = (req as any).user;
+  const isSuperAdmin = currentUser?.role === 'super_admin';
+  const dataVersion = dbService.getDataVersion();
+  const cacheKey = `bootstrap_${isSuperAdmin ? 'super' : 'staff'}_v${dataVersion}`;
+
+  const cached = getCachedReference<any>(cacheKey);
+  if (cached) {
+    return res.json(cached);
+  }
+
+  const allUsers = dbService.getUsers();
+  const usersPayload = isSuperAdmin
+    ? allUsers
+    : allUsers
+        .filter((u) => u.is_active === 1)
+        .map((u) => ({
+          id: u.id,
+          name: u.name,
+          role: u.role,
+        }));
+
+  const payload = {
+    dataVersion,
     metrics: dbService.getDashboardMetrics(),
     clients: dbService.getClients(),
     applications: dbService.getApplications(),
@@ -337,7 +514,12 @@ apiRouter.get('/bootstrap', (_req: Request, res: Response) => {
     visaTypes: dbService.getVisaTypes(),
     countries: dbService.getCountries(),
     customFields: dbService.getCustomFields(),
-  });
+    dbStatus: dbService.getStatus(),
+    users: usersPayload,
+  };
+
+  setCachedReference(cacheKey, payload, 15000);
+  return res.json(payload);
 });
 
 apiRouter.post('/auth/change-password', (req: Request, res: Response) => {
@@ -882,7 +1064,7 @@ apiRouter.get('/countries', (req: Request, res: Response) => {
   return res.json(list);
 });
 
-apiRouter.post('/countries', async (req: Request, res: Response) => {
+apiRouter.post('/countries', requireAdminOrSuperAdmin, async (req: Request, res: Response) => {
   const currentUser = getCurrentUser(req);
   const { name, code } = req.body;
   if (!name || !name.trim()) {
@@ -890,26 +1072,29 @@ apiRouter.post('/countries', async (req: Request, res: Response) => {
   }
 
   const country = await dbService.createCountry({ name: name.trim(), code }, currentUser?.id || 1);
+  invalidateReferenceCache('countries_');
   return res.status(201).json(country);
 });
 
-apiRouter.put('/countries/:id', async (req: Request, res: Response) => {
+apiRouter.put('/countries/:id', requireAdminOrSuperAdmin, async (req: Request, res: Response) => {
   const currentUser = getCurrentUser(req);
   const id = parseInt(req.params.id, 10);
   const updated = await dbService.updateCountry(id, req.body, currentUser?.id || 1);
   if (!updated) {
     return res.status(404).json({ error: 'Country not found' });
   }
+  invalidateReferenceCache('countries_');
   return res.json(updated);
 });
 
-apiRouter.delete('/countries/:id', async (req: Request, res: Response) => {
+apiRouter.delete('/countries/:id', requireAdminOrSuperAdmin, async (req: Request, res: Response) => {
   const currentUser = getCurrentUser(req);
   const id = parseInt(req.params.id, 10);
   const success = await dbService.deleteCountry(id, currentUser?.id || 1);
   if (!success) {
     return res.status(404).json({ error: 'Country not found' });
   }
+  invalidateReferenceCache('countries_');
   return res.json({ message: 'Country deleted' });
 });
 
@@ -1148,8 +1333,13 @@ apiRouter.post('/data-cleanup/purge', requireSuperAdmin, async (req: Request, re
 // --------------------------------------------------------------------------
 // Dashboard & Activity Endpoints
 // --------------------------------------------------------------------------
-apiRouter.get('/dashboard', (req: Request, res: Response) => {
+apiRouter.get('/dashboard', (_req: Request, res: Response) => {
+  const cacheKey = `dashboard_v${dbService.getDataVersion()}`;
+  const cached = getCachedReference<any>(cacheKey);
+  if (cached) return res.json(cached);
+
   const metrics = dbService.getDashboardMetrics();
+  setCachedReference(cacheKey, metrics, 15000);
   return res.json(metrics);
 });
 
@@ -1302,7 +1492,7 @@ apiRouter.get('/hotels/:id', (req: Request, res: Response) => {
   return res.json(hotel);
 });
 
-apiRouter.post('/hotels', async (req: Request, res: Response) => {
+apiRouter.post('/hotels', requireAdminOrSuperAdmin, async (req: Request, res: Response) => {
   const currentUser = getCurrentUser(req);
   const { name, city, address, star_rating, phone, email, notes } = req.body;
   if (!name || !name.trim()) {
@@ -1313,26 +1503,29 @@ apiRouter.post('/hotels', async (req: Request, res: Response) => {
     { name, city, address, star_rating, phone, email, notes },
     currentUser?.id || 1
   );
+  invalidateReferenceCache('hotels_');
   return res.status(201).json(hotel);
 });
 
-apiRouter.put('/hotels/:id', async (req: Request, res: Response) => {
+apiRouter.put('/hotels/:id', requireAdminOrSuperAdmin, async (req: Request, res: Response) => {
   const currentUser = getCurrentUser(req);
   const id = parseInt(req.params.id, 10);
   const updated = await dbService.updateHotel(id, req.body, currentUser?.id || 1);
   if (!updated) {
     return res.status(404).json({ error: 'Hotel not found' });
   }
+  invalidateReferenceCache('hotels_');
   return res.json(updated);
 });
 
-apiRouter.delete('/hotels/:id', async (req: Request, res: Response) => {
+apiRouter.delete('/hotels/:id', requireAdminOrSuperAdmin, async (req: Request, res: Response) => {
   const currentUser = getCurrentUser(req);
   const id = parseInt(req.params.id, 10);
   const ok = await dbService.deleteHotel(id, currentUser?.id || 1);
   if (!ok) {
     return res.status(404).json({ error: 'Hotel not found' });
   }
+  invalidateReferenceCache('hotels_');
   return res.json({ success: true, message: 'Hotel deleted successfully' });
 });
 
@@ -1346,7 +1539,7 @@ apiRouter.get('/hotels/:id/rooms', (req: Request, res: Response) => {
   return res.json(rooms);
 });
 
-apiRouter.post('/hotels/:id/rooms', async (req: Request, res: Response) => {
+apiRouter.post('/hotels/:id/rooms', requireAdminOrSuperAdmin, async (req: Request, res: Response) => {
   const currentUser = getCurrentUser(req);
   const hotelId = parseInt(req.params.id, 10);
   const { name, price_per_night, currency, capacity, description } = req.body;
@@ -1359,26 +1552,29 @@ apiRouter.post('/hotels/:id/rooms', async (req: Request, res: Response) => {
     { name, price_per_night, currency, capacity, description },
     currentUser?.id || 1
   );
+  invalidateReferenceCache('hotels_');
   return res.status(201).json(room);
 });
 
-apiRouter.put('/hotel-rooms/:id', async (req: Request, res: Response) => {
+apiRouter.put('/hotel-rooms/:id', requireAdminOrSuperAdmin, async (req: Request, res: Response) => {
   const currentUser = getCurrentUser(req);
   const id = parseInt(req.params.id, 10);
   const updated = await dbService.updateHotelRoom(id, req.body, currentUser?.id || 1);
   if (!updated) {
     return res.status(404).json({ error: 'Room type not found' });
   }
+  invalidateReferenceCache('hotels_');
   return res.json(updated);
 });
 
-apiRouter.delete('/hotel-rooms/:id', async (req: Request, res: Response) => {
+apiRouter.delete('/hotel-rooms/:id', requireAdminOrSuperAdmin, async (req: Request, res: Response) => {
   const currentUser = getCurrentUser(req);
   const id = parseInt(req.params.id, 10);
   const ok = await dbService.deleteHotelRoom(id, currentUser?.id || 1);
   if (!ok) {
     return res.status(404).json({ error: 'Room type not found' });
   }
+  invalidateReferenceCache('hotels_');
   return res.json({ success: true, message: 'Room type deleted successfully' });
 });
 
@@ -1630,70 +1826,78 @@ apiRouter.delete('/follow-ups/:id', async (req: Request, res: Response) => {
 // --------------------------------------------------------------------------
 // Image Proxy Endpoint for Google Drive & External Images
 // --------------------------------------------------------------------------
+const imageProxyCache = new Map<
+  string,
+  { buffer: Buffer; contentType: string; expiresAt: number }
+>();
+
 apiRouter.get('/proxy-image', async (req: Request, res: Response) => {
+  const clientIp = (req.headers['x-forwarded-for'] as string) || req.ip || req.socket.remoteAddress || 'unknown';
+  if (!checkEndpointRateLimit(`proxy_img:${clientIp}`, 120, 60_000)) {
+    return res.status(429).send('Too many image proxy requests');
+  }
+
   const imageUrl = req.query.url as string;
-  if (!imageUrl || typeof imageUrl !== 'string') {
-    return res.status(400).send('Missing url parameter');
+  if (!imageUrl || typeof imageUrl !== 'string' || imageUrl.length > 2048) {
+    return res.status(400).send('Missing or invalid url parameter');
   }
 
   // Security: Guard against SSRF (Server-Side Request Forgery)
-  // Ensure the URL is an absolute http/https URL and block local/loopback/private IP addresses
-  let parsedUrl: URL;
-  try {
-    parsedUrl = new URL(imageUrl);
-    if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
-      return res.status(400).send('Invalid protocol');
-    }
-    const hostname = parsedUrl.hostname.toLowerCase();
-    if (
-      hostname === 'localhost' ||
-      hostname === '127.0.0.1' ||
-      hostname === '::1' ||
-      hostname === '0.0.0.0' ||
-      hostname.endsWith('.internal') ||
-      hostname.endsWith('.local') ||
-      /^10\./.test(hostname) ||
-      /^192\.168\./.test(hostname) ||
-      /^172\.(1[6-9]|2[0-9]|3[0-1])\./.test(hostname) ||
-      /^169\.254\./.test(hostname)
-    ) {
-      return res.status(403).send('Restricted destination');
-    }
-  } catch (err) {
-    return res.status(400).send('Malformed URL');
+  if (!isSafeExternalUrl(imageUrl)) {
+    return res.status(403).send('Restricted destination');
   }
 
+  // Security headers to prevent script execution in proxied images/SVGs
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader(
+    'Content-Security-Policy',
+    "default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline'; sandbox"
+  );
+
   // Extract Google Drive File ID or resolve Google Shareable Link if present
-  let candidateUrls: string[] = [];
   const driveFileMatch = imageUrl.match(/(?:drive|docs)\.google\.com\/file\/d\/([a-zA-Z0-9_-]+)/i);
-  const driveIdMatch = imageUrl.match(/(?:drive|docs|drive\.usercontent)\.google\.com\/(?:open|uc|thumbnail|download)\?(?:[^#]*&)?id=([a-zA-Z0-9_-]+)/i);
+  const driveIdMatch = imageUrl.match(
+    /(?:drive|docs|drive\.usercontent)\.google\.com\/(?:open|uc|thumbnail|download)\?(?:[^#]*&)?id=([a-zA-Z0-9_-]+)/i
+  );
   const lh3Match = imageUrl.match(/lh3\.googleusercontent\.com\/(?:u\/\d+\/)?d\/([a-zA-Z0-9_-]+)/i);
 
-  const fileId = (driveFileMatch && driveFileMatch[1]) || (driveIdMatch && driveIdMatch[1]) || (lh3Match && lh3Match[1]);
+  const fileId =
+    (driveFileMatch && driveFileMatch[1]) ||
+    (driveIdMatch && driveIdMatch[1]) ||
+    (lh3Match && lh3Match[1]);
+
+  const cacheKey = fileId ? `gdrive:${fileId}` : imageUrl;
+  const cachedImg = imageProxyCache.get(cacheKey);
+  if (cachedImg && Date.now() < cachedImg.expiresAt) {
+    res.setHeader('Content-Type', cachedImg.contentType);
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    return res.send(cachedImg.buffer);
+  }
+
+  let candidateUrls: string[] = [];
 
   if (fileId) {
     candidateUrls = [
-      `https://lh3.googleusercontent.com/d/${fileId}=w1600`,
-      `https://lh3.googleusercontent.com/d/${fileId}`,
       `https://drive.google.com/thumbnail?id=${fileId}&sz=w1600`,
       `https://drive.usercontent.google.com/download?id=${fileId}&export=view`,
       `https://drive.google.com/uc?export=download&id=${fileId}`,
+      `https://lh3.googleusercontent.com/d/${fileId}`,
       `https://drive.google.com/thumbnail?id=${fileId}&sz=w1000`,
     ];
   } else if (/google\.com\/imgres\?/i.test(imageUrl)) {
     try {
       const u = new URL(imageUrl);
       const imgurl = u.searchParams.get('imgurl');
-      if (imgurl) candidateUrls.push(imgurl);
+      if (imgurl && isSafeExternalUrl(imgurl)) candidateUrls.push(imgurl);
     } catch {}
     candidateUrls.push(imageUrl);
   } else if (/photos\.app\.goo\.gl|photos\.google\.com\/share|images\.app\.goo\.gl/i.test(imageUrl)) {
     try {
-      const pageResp = await fetch(imageUrl, {
-        signal: AbortSignal.timeout(7000),
-        redirect: 'follow',
+      const pageResp = await fetchSafeExternal(imageUrl, {
+        timeoutMs: 4500,
         headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
         },
       });
       if (pageResp.ok) {
@@ -1704,7 +1908,8 @@ apiRouter.get('/proxy-image', async (req: Request, res: Response) => {
         if (ogMatch && ogMatch[1]) {
           const rawOg = ogMatch[1].replace(/&amp;/g, '&');
           const hiResOg = rawOg.replace(/=w\d+-h\d+[^"'\s]*/i, '=w1600');
-          candidateUrls.push(hiResOg, rawOg);
+          if (isSafeExternalUrl(hiResOg)) candidateUrls.push(hiResOg);
+          if (isSafeExternalUrl(rawOg)) candidateUrls.push(rawOg);
         }
       }
     } catch {}
@@ -1715,35 +1920,76 @@ apiRouter.get('/proxy-image', async (req: Request, res: Response) => {
     candidateUrls = [imageUrl];
   }
 
-  for (const targetUrl of candidateUrls) {
+  // Race candidate URLs concurrently so the fastest working CDN endpoint wins immediately
+  const controllers = candidateUrls.map(() => new AbortController());
+  const fetchCandidate = async (targetUrl: string, idx: number): Promise<{ buffer: Buffer; contentType: string }> => {
+    const controller = controllers[idx];
+    const timer = setTimeout(() => controller.abort(), 4500);
     try {
-      const response = await fetch(targetUrl, {
-        signal: AbortSignal.timeout(8000),
+      const response = await fetchSafeExternal(targetUrl, {
+        signal: controller.signal,
+        timeoutMs: 4500,
         headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-          'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+          'User-Agent':
+            'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          Accept: 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
         },
       });
 
-      if (response.ok) {
-        const contentLength = Number(response.headers.get('content-length') || 0);
-        if (contentLength > 15 * 1024 * 1024) {
-          continue; // Skip oversized response
-        }
-        const contentType = response.headers.get('content-type') || 'image/jpeg';
-        if (contentType.includes('image') || contentType.includes('octet-stream')) {
-          const buffer = await response.arrayBuffer();
-          if (buffer.byteLength > 15 * 1024 * 1024) {
-            continue;
-          }
-          res.setHeader('Content-Type', contentType.includes('image') ? contentType : 'image/jpeg');
-          res.setHeader('Cache-Control', 'public, max-age=86400');
-          return res.send(Buffer.from(buffer));
-        }
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
       }
-    } catch (e) {
-      console.warn(`[ImageProxy] Failed to fetch target URL: ${targetUrl}`, e);
+
+      const contentLength = Number(response.headers.get('content-length') || 0);
+      if (contentLength > 15 * 1024 * 1024) {
+        throw new Error('Oversized image');
+      }
+
+      const contentType = response.headers.get('content-type') || 'image/jpeg';
+      if (!contentType.includes('image') && !contentType.includes('octet-stream')) {
+        throw new Error('Not an image response');
+      }
+
+      const arrayBuf = await response.arrayBuffer();
+      if (arrayBuf.byteLength === 0 || arrayBuf.byteLength > 15 * 1024 * 1024) {
+        throw new Error('Invalid image buffer size');
+      }
+
+      return {
+        buffer: Buffer.from(arrayBuf),
+        contentType: contentType.includes('image') ? contentType : 'image/jpeg',
+      };
+    } finally {
+      clearTimeout(timer);
     }
+  };
+
+  try {
+    const winner = await Promise.any(
+      candidateUrls.map((url, idx) => fetchCandidate(url, idx))
+    );
+    // Abort any slower in-flight candidate requests
+    controllers.forEach((c) => {
+      try {
+        c.abort();
+      } catch {}
+    });
+
+    if (imageProxyCache.size > 150) {
+      const oldestKey = imageProxyCache.keys().next().value;
+      if (oldestKey) imageProxyCache.delete(oldestKey);
+    }
+    imageProxyCache.set(cacheKey, {
+      buffer: winner.buffer,
+      contentType: winner.contentType,
+      expiresAt: Date.now() + 30 * 60 * 1000,
+    });
+
+    res.setHeader('Content-Type', winner.contentType);
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    return res.send(winner.buffer);
+  } catch {
+    // All server-side candidate fetches failed or timed out
   }
 
   if (req.query.fallback === '404') {
@@ -1775,7 +2021,7 @@ apiRouter.get('/invoice-settings', (_req: Request, res: Response) => {
   return res.json(settings);
 });
 
-apiRouter.put('/invoice-settings', async (req: Request, res: Response) => {
+apiRouter.put('/invoice-settings', requireAdminOrSuperAdmin, async (req: Request, res: Response) => {
   const currentUser = getCurrentUser(req);
   try {
     const updated = await dbService.updateInvoiceSettings(req.body, currentUser?.id || 1);
@@ -1799,7 +2045,7 @@ apiRouter.get('/invoice-catalog', (req: Request, res: Response) => {
   return res.json(items);
 });
 
-apiRouter.post('/invoice-catalog', async (req: Request, res: Response) => {
+apiRouter.post('/invoice-catalog', requireAdminOrSuperAdmin, async (req: Request, res: Response) => {
   const currentUser = getCurrentUser(req);
   const { name, default_unit_price, category, description, is_active, display_order } = req.body;
 
@@ -1828,7 +2074,7 @@ apiRouter.post('/invoice-catalog', async (req: Request, res: Response) => {
   }
 });
 
-apiRouter.put('/invoice-catalog/reorder', async (req: Request, res: Response) => {
+apiRouter.put('/invoice-catalog/reorder', requireAdminOrSuperAdmin, async (req: Request, res: Response) => {
   const currentUser = getCurrentUser(req);
   const { orderedIds } = req.body;
 
@@ -1849,7 +2095,7 @@ apiRouter.put('/invoice-catalog/reorder', async (req: Request, res: Response) =>
   }
 });
 
-apiRouter.put('/invoice-catalog/:id', async (req: Request, res: Response) => {
+apiRouter.put('/invoice-catalog/:id', requireAdminOrSuperAdmin, async (req: Request, res: Response) => {
   const currentUser = getCurrentUser(req);
   const id = parseInt(req.params.id, 10);
   try {
@@ -1865,7 +2111,7 @@ apiRouter.put('/invoice-catalog/:id', async (req: Request, res: Response) => {
   }
 });
 
-apiRouter.delete('/invoice-catalog/:id', async (req: Request, res: Response) => {
+apiRouter.delete('/invoice-catalog/:id', requireAdminOrSuperAdmin, async (req: Request, res: Response) => {
   const currentUser = getCurrentUser(req);
   const id = parseInt(req.params.id, 10);
   try {

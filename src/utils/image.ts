@@ -41,10 +41,10 @@ export function getGoogleDriveCandidateUrls(url: string | null | undefined): str
   const fileId = extractGoogleDriveFileId(trimmed);
   if (fileId) {
     return [
-      `/api/proxy-image?url=${encodeURIComponent(trimmed)}`,
       `https://lh3.googleusercontent.com/d/${fileId}`,
       `https://drive.google.com/thumbnail?id=${fileId}&sz=w1000`,
       `https://drive.google.com/uc?export=download&id=${fileId}`,
+      `/api/proxy-image?url=${encodeURIComponent(trimmed)}`,
     ];
   }
 
