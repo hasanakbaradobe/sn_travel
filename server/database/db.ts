@@ -1512,7 +1512,7 @@ async function syncFromMySQL(force = false): Promise<void> {
       const [u, c, cl, cf, cfv, vt, va, ash, t, cm, al, h, hr, hb, s, fu, invS, invCat, inv, invItems] = await Promise.all([
         safeQuery('SELECT * FROM users'),
         safeQuery('SELECT * FROM countries ORDER BY display_order ASC, name ASC'),
-        safeQuery('SELECT * FROM clients'),
+        safeQuery('SELECT * FROM clients ORDER BY id DESC'),
         safeQuery('SELECT * FROM client_custom_fields ORDER BY display_order ASC'),
         safeQuery('SELECT * FROM client_custom_field_values'),
         safeQuery('SELECT * FROM visa_types'),
@@ -1540,10 +1540,22 @@ async function syncFromMySQL(force = false): Promise<void> {
       if (Array.isArray(u) && u.length > 0) store.users = u;
       if (Array.isArray(c) && c.length > 0) store.countries = c;
       if (Array.isArray(cl)) {
-        store.clients = cl.map((item: any) => ({
-          ...item,
-          date_of_birth: item.date_of_birth ? String(item.date_of_birth).slice(0, 10) : null,
-        }));
+        const extractSerial = (c: any): number => {
+          const raw = String(c.client_id || '').trim();
+          if (/^\d+$/.test(raw)) return parseInt(raw, 10);
+          const m = raw.match(/\d+/g);
+          if (m && m.length > 0) {
+            const n = parseInt(m[m.length - 1], 10);
+            if (!isNaN(n)) return n;
+          }
+          return Number(c.id) || 0;
+        };
+        store.clients = cl
+          .map((item: any) => ({
+            ...item,
+            date_of_birth: item.date_of_birth ? String(item.date_of_birth).slice(0, 10) : null,
+          }))
+          .sort((a: any, b: any) => extractSerial(b) - extractSerial(a) || Number(b.id) - Number(a.id));
       }
       if (Array.isArray(cf) && cf.length > 0) store.client_custom_fields = cf;
       if (Array.isArray(cfv)) store.client_custom_field_values = cfv;
@@ -1828,7 +1840,19 @@ export const dbService = {
 
   // Clients
   getClients(search?: string, country?: string) {
-    let list = store.clients;
+    const extractSerial = (c: Client): number => {
+      const raw = String(c.client_id || '').trim();
+      if (/^\d+$/.test(raw)) return parseInt(raw, 10);
+      const m = raw.match(/\d+/g);
+      if (m && m.length > 0) {
+        const n = parseInt(m[m.length - 1], 10);
+        if (!isNaN(n)) return n;
+      }
+      return Number(c.id) || 0;
+    };
+    let list = [...store.clients].sort(
+      (a, b) => extractSerial(b) - extractSerial(a) || Number(b.id) - Number(a.id)
+    );
     if (search) {
       const q = search.toLowerCase().trim();
       list = list.filter(c =>
@@ -4606,14 +4630,15 @@ export const dbService = {
 
     const attentionSet = new Set(['File Missing', 'Need to Prepare', 'Modify', 'Rejected']);
     const appsRequiringAttention: any[] = [];
-    const latestAppStatusByClient = new Map<number, string>();
+    const latestAppByClient = new Map<number, VisaApplication>();
 
     for (const a of store.visa_applications) {
       if (a.status !== 'Rejected' && a.status !== 'Returned') {
         activeApplications++;
       }
-      if (!latestAppStatusByClient.has(a.client_id)) {
-        latestAppStatusByClient.set(a.client_id, a.status);
+      const prevApp = latestAppByClient.get(a.client_id);
+      if (!prevApp || Number(a.id) >= Number(prevApp.id)) {
+        latestAppByClient.set(a.client_id, a);
       }
       if (attentionSet.has(a.status)) {
         const client = clientById.get(a.client_id);
@@ -4639,11 +4664,28 @@ export const dbService = {
       else upcomingTasks++;
     }
 
-    const recentClients = store.clients
-      .slice(0, 5)
+    const extractSerial = (c: Client): number => {
+      const raw = String(c.client_id || '').trim();
+      if (/^\d+$/.test(raw)) return parseInt(raw, 10);
+      const m = raw.match(/\d+/g);
+      if (m && m.length > 0) {
+        const n = parseInt(m[m.length - 1], 10);
+        if (!isNaN(n)) return n;
+      }
+      return Number(c.id) || 0;
+    };
+
+    const recentClients = [...store.clients]
+      .sort(
+        (a, b) =>
+          extractSerial(b) - extractSerial(a) ||
+          Number(b.id) - Number(a.id) ||
+          new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime()
+      )
+      .slice(0, 6)
       .map(c => ({
         ...c,
-        active_status: latestAppStatusByClient.get(c.id) || 'New',
+        active_status: latestAppByClient.get(c.id)?.status || 'New',
       }));
 
     const recentActivity = this.getActivityLogs(8);

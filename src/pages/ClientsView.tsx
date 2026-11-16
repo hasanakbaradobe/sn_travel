@@ -44,7 +44,7 @@ export const ClientsView: React.FC<ClientsViewProps> = ({
   const [localSearch, setLocalSearch] = useState(searchFilter);
   const debouncedSearch = useDebounce(localSearch, 300);
   const [selectedCountry, setSelectedCountry] = useState<string>('ALL');
-  const [sortField, setSortField] = useState<'name' | 'id' | 'country' | 'created'>('created');
+  const [sortField, setSortField] = useState<'name' | 'id' | 'country' | 'created'>('id');
   const [sortAsc, setSortAsc] = useState<boolean>(false);
   const [clientToDelete, setClientToDelete] = useState<Client | null>(null);
   const [deleting, setDeleting] = useState(false);
@@ -117,12 +117,39 @@ export const ClientsView: React.FC<ClientsViewProps> = ({
       result = result.filter((c) => c.country && c.country.toLowerCase() === selectedCountry.toLowerCase());
     }
 
+    const getClientNumericSerial = (c: Client): number => {
+      const raw = String(c.client_id || '').trim();
+      if (/^\d+$/.test(raw)) {
+        return parseInt(raw, 10);
+      }
+      const matches = raw.match(/\d+/g);
+      if (matches && matches.length > 0) {
+        const parsed = parseInt(matches[matches.length - 1], 10);
+        if (!isNaN(parsed)) return parsed;
+      }
+      return Number(c.id) || 0;
+    };
+
     result.sort((a, b) => {
       let cmp = 0;
-      if (sortField === 'name') cmp = (a.full_name || '').localeCompare(b.full_name || '');
-      else if (sortField === 'id') cmp = (a.client_id || '').localeCompare(b.client_id || '');
-      else if (sortField === 'country') cmp = (a.country || '').localeCompare(b.country || '');
-      else if (sortField === 'created') cmp = new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+      if (sortField === 'name') {
+        cmp = (a.full_name || '').localeCompare(b.full_name || '');
+      } else if (sortField === 'id') {
+        const numDiff = getClientNumericSerial(a) - getClientNumericSerial(b);
+        cmp =
+          numDiff !== 0
+            ? numDiff
+            : String(a.client_id || '').localeCompare(String(b.client_id || ''), undefined, {
+                numeric: true,
+                sensitivity: 'base',
+              }) || Number(a.id) - Number(b.id);
+      } else if (sortField === 'country') {
+        cmp = (a.country || '').localeCompare(b.country || '');
+      } else if (sortField === 'created') {
+        cmp =
+          new Date(a.created_at || 0).getTime() - new Date(b.created_at || 0).getTime() ||
+          getClientNumericSerial(a) - getClientNumericSerial(b);
+      }
       return sortAsc ? cmp : -cmp;
     });
 
@@ -144,7 +171,7 @@ export const ClientsView: React.FC<ClientsViewProps> = ({
       setSortAsc(!sortAsc);
     } else {
       setSortField(field);
-      setSortAsc(true);
+      setSortAsc(field === 'id' || field === 'created' ? false : true);
     }
   };
 

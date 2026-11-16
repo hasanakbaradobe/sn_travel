@@ -11,12 +11,13 @@ import {
   AlertCircle,
   Sparkles,
 } from 'lucide-react';
-import { DashboardMetrics, Task } from '../types';
+import { DashboardMetrics, Task, Client, ApplicationStatus } from '../types';
 import { STATUS_CONFIG, getPriorityBadge } from '../utils/status';
 import { ClientAvatar } from '../components/ClientAvatar';
 
 interface DashboardViewProps {
   metrics: DashboardMetrics | null;
+  clients?: Client[];
   loading: boolean;
   onOpenClient: (clientId: number) => void;
   onOpenNewClient: () => void;
@@ -31,6 +32,7 @@ interface DashboardViewProps {
 
 export const DashboardView: React.FC<DashboardViewProps> = ({
   metrics,
+  clients = [],
   loading,
   onOpenClient,
   onOpenNewClient,
@@ -304,53 +306,132 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             <div className="px-5 py-4 bg-slate-50/70 border-b border-slate-200/80 flex items-center justify-between">
               <div>
                 <h2 className="font-bold text-sm text-slate-900">Recently Registered Clients</h2>
-                <p className="text-[11px] text-slate-500">Newly added travelers and passport records</p>
+                <p className="text-[11px] text-slate-500">Newly added travelers and passport records (newest first)</p>
               </div>
-              <button
-                onClick={onOpenNewClient}
-                className="text-xs text-sky-700 hover:text-sky-900 font-bold px-2.5 py-1 rounded-lg hover:bg-sky-50 transition-colors flex items-center gap-1 cursor-pointer"
-              >
-                <span>+ Add Client</span>
-              </button>
+              <div className="flex items-center gap-2">
+                {onNavigate && (
+                  <button
+                    onClick={() => onNavigate('clients')}
+                    className="text-xs font-semibold text-slate-600 hover:text-sky-700 transition-colors cursor-pointer"
+                  >
+                    View all →
+                  </button>
+                )}
+                <button
+                  onClick={onOpenNewClient}
+                  className="text-xs text-sky-700 hover:text-sky-900 font-bold px-2.5 py-1 rounded-lg hover:bg-sky-50 transition-colors flex items-center gap-1 cursor-pointer"
+                >
+                  <span>+ Add Client</span>
+                </button>
+              </div>
             </div>
 
             <div className="divide-y divide-slate-100">
-              {metrics.recent_clients.map((client) => (
-                <div
-                  key={client.id}
-                  onClick={() => onOpenClient(client.id)}
-                  className="p-4 hover:bg-slate-50/90 transition-all cursor-pointer flex items-center justify-between group"
-                >
-                  <div className="flex items-center gap-3 min-w-0">
-                    <ClientAvatar
-                      name={client.full_name}
-                      photoUrl={client.photo_url}
-                      size="md"
-                      className="w-9 h-9 rounded-xl text-sm shrink-0"
-                    />
-                    <div className="min-w-0">
-                      <div className="font-bold text-sm text-slate-900 group-hover:text-sky-700 transition-colors flex items-center gap-2">
-                        <span className="truncate">{client.full_name}</span>
-                        <span className="text-[10px] text-slate-400 font-mono font-medium bg-slate-100 px-1.5 py-0.2 rounded">
-                          {client.client_id}
-                        </span>
+              {(() => {
+                const todayIso = new Date().toISOString().slice(0, 10);
+                const mergedMap = new Map<number, Client & { active_status?: string }>();
+                if (Array.isArray(metrics.recent_clients)) {
+                  for (const rc of metrics.recent_clients) {
+                    mergedMap.set(Number(rc.id), rc);
+                  }
+                }
+                if (Array.isArray(clients)) {
+                  for (const c of clients) {
+                    const existing = mergedMap.get(Number(c.id));
+                    mergedMap.set(Number(c.id), {
+                      ...existing,
+                      ...c,
+                      active_status: c.active_application?.status || existing?.active_status || 'New',
+                    });
+                  }
+                }
+                const extractSerial = (c: Client): number => {
+                  const raw = String(c.client_id || '').trim();
+                  if (/^\d+$/.test(raw)) return parseInt(raw, 10);
+                  const m = raw.match(/\d+/g);
+                  if (m && m.length > 0) {
+                    const n = parseInt(m[m.length - 1], 10);
+                    if (!isNaN(n)) return n;
+                  }
+                  return Number(c.id) || 0;
+                };
+                const sortedRecent = Array.from(mergedMap.values())
+                  .sort(
+                    (a, b) =>
+                      extractSerial(b) - extractSerial(a) ||
+                      Number(b.id) - Number(a.id) ||
+                      new Date(b.created_at || 0).getTime() - new Date(a.created_at || 0).getTime()
+                  )
+                  .slice(0, 6);
+
+                if (sortedRecent.length === 0) {
+                  return (
+                    <div className="p-8 text-center text-slate-400 text-xs">
+                      No clients registered yet. Click &ldquo;+ Add Client&rdquo; to register your first traveler.
+                    </div>
+                  );
+                }
+
+                return sortedRecent.map((client) => {
+                  const createdDate = client.created_at ? String(client.created_at).slice(0, 10) : '';
+                  const isAddedToday = createdDate === todayIso;
+                  const activeStatus = client.active_application?.status || client.active_status;
+                  const statusConf = activeStatus ? STATUS_CONFIG[activeStatus as ApplicationStatus] : null;
+
+                  return (
+                    <div
+                      key={client.id}
+                      onClick={() => onOpenClient(client.id)}
+                      className="p-4 hover:bg-slate-50/90 transition-all cursor-pointer flex items-center justify-between group"
+                    >
+                      <div className="flex items-center gap-3 min-w-0">
+                        <ClientAvatar
+                          fullName={client.full_name}
+                          photoUrl={client.photo_url}
+                          size="md"
+                          className="w-9 h-9 rounded-xl text-sm shrink-0"
+                        />
+                        <div className="min-w-0">
+                          <div className="font-bold text-sm text-slate-900 group-hover:text-sky-700 transition-colors flex items-center gap-2 flex-wrap">
+                            <span className="truncate">{client.full_name}</span>
+                            <span className="text-[10px] text-slate-500 font-mono font-semibold bg-slate-100 px-1.5 py-0.5 rounded border border-slate-200/80">
+                              #{client.client_id}
+                            </span>
+                            {isAddedToday && (
+                              <span className="text-[10px] font-bold text-emerald-700 bg-emerald-50 px-1.5 py-0.5 rounded border border-emerald-200">
+                                Added Today
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-xs text-slate-500 truncate mt-0.5">
+                            Passport: <span className="font-mono text-slate-700 font-medium">{client.passport_number}</span> • {client.country}
+                            {createdDate && !isAddedToday && (
+                              <span className="text-slate-400"> • Added {createdDate}</span>
+                            )}
+                          </div>
+                        </div>
                       </div>
-                      <div className="text-xs text-slate-500 truncate mt-0.5">
-                        Passport: <span className="font-mono text-slate-700">{client.passport_number}</span> • {client.country}
+
+                      <div className="flex items-center gap-2 shrink-0">
+                        {statusConf && (
+                          <span
+                            className={`hidden sm:inline-flex items-center gap-1 text-[10px] font-semibold px-2 py-0.5 rounded-full border ${statusConf.bgClass} ${statusConf.textClass} ${statusConf.borderClass}`}
+                          >
+                            <span className={`w-1.5 h-1.5 rounded-full ${statusConf.dotClass}`} />
+                            {activeStatus}
+                          </span>
+                        )}
+                        {client.google_drive_url && (
+                          <span className="text-[10px] font-semibold text-amber-800 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200">
+                            Drive
+                          </span>
+                        )}
+                        <ChevronRight className="w-4 h-4 text-slate-300 group-hover:text-sky-600 group-hover:translate-x-0.5 transition-all" />
                       </div>
                     </div>
-                  </div>
-
-                  <div className="flex items-center gap-2.5 shrink-0">
-                    {client.google_drive_url && (
-                      <span className="text-[10px] font-semibold text-amber-800 bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200">
-                        Drive
-                      </span>
-                    )}
-                    <ChevronRight className="w-4 h-4 text-slate-300 group-hover:text-sky-600 group-hover:translate-x-0.5 transition-all" />
-                  </div>
-                </div>
-              ))}
+                  );
+                });
+              })()}
             </div>
           </div>
         </div>

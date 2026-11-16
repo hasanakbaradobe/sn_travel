@@ -777,6 +777,19 @@ export default function App() {
 
   // Handle client creation success
   const handleClientCreated = (newClient: Client) => {
+    setClients((prev) => [newClient, ...prev.filter((c) => c.id !== newClient.id)]);
+    setMetrics((prev) =>
+      prev
+        ? {
+            ...prev,
+            total_clients: prev.total_clients + 1,
+            recent_clients: [
+              { ...newClient, active_status: 'New' },
+              ...prev.recent_clients.filter((c) => c.id !== newClient.id),
+            ].slice(0, 6),
+          }
+        : prev
+    );
     refreshAllData(true);
     // Open the new client's profile immediately with proper URL synchronization
     navigateTo('clients', newClient.id);
@@ -863,6 +876,7 @@ export default function App() {
             {currentTab === 'dashboard' && (
               <DashboardView
                 metrics={metrics}
+                clients={clients}
                 loading={loading}
                 onOpenClient={handleOpenClient}
                 onOpenNewClient={() => setCreateClientModalOpen(true)}
