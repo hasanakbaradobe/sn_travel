@@ -26,6 +26,8 @@ import {
   Loader2,
   GripVertical,
   Trash2,
+  Copy,
+  Check,
 } from 'lucide-react';
 import { Task, VisaApplication, Client, User as UserType, HotelBooking } from '../types';
 import { getPriorityBadge, STATUS_CONFIG } from '../utils/status';
@@ -49,6 +51,7 @@ export interface CalendarEvent {
   passportNumber?: string;
   applicationId?: number;
   applicationCode?: string;
+  applicationStatus?: string;
   visaTypeName?: string;
   assignedUserName?: string;
   taskId?: number;
@@ -131,6 +134,48 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
 
   const [calendarError, setCalendarError] = useState<string | null>(null);
   const [selectedHotelBooking, setSelectedHotelBooking] = useState<HotelBooking | null>(null);
+  const [copiedEventId, setCopiedEventId] = useState<string | null>(null);
+
+  const handleCopyPassport = async (e: React.MouseEvent, passportNumber: string, copyKey: string) => {
+    e.stopPropagation();
+    e.preventDefault();
+    const cleanPassport = passportNumber.trim();
+    if (!cleanPassport) return;
+
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(cleanPassport);
+      } else {
+        const textArea = document.createElement('textarea');
+        textArea.value = cleanPassport;
+        textArea.style.position = 'fixed';
+        textArea.style.left = '-9999px';
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textArea);
+      }
+      setCopiedEventId(copyKey);
+      setTimeout(() => {
+        setCopiedEventId((prev) => (prev === copyKey ? null : prev));
+      }, 2000);
+    } catch {
+      const textArea = document.createElement('textarea');
+      textArea.value = cleanPassport;
+      textArea.style.position = 'fixed';
+      textArea.style.left = '-9999px';
+      document.body.appendChild(textArea);
+      textArea.focus();
+      textArea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textArea);
+      setCopiedEventId(copyKey);
+      setTimeout(() => {
+        setCopiedEventId((prev) => (prev === copyKey ? null : prev));
+      }, 2000);
+    }
+  };
 
   // Toggle hotel booking status (e.g. Confirmed <-> Checked Out)
   const handleToggleHotelBooking = async (booking: HotelBooking) => {
@@ -142,6 +187,181 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
       console.error('Failed to update hotel booking status:', err);
       setCalendarError('Could not update hotel check-out status: ' + (err.message || 'Unknown error'));
     }
+  };
+
+  // Direct Quick Status Change State (Online Review Completed -> Pending Collection / Rejected)
+  const [localAppStatusOverrides, setLocalAppStatusOverrides] = useState<Record<number, string>>({});
+  const [updatingStatusAppId, setUpdatingStatusAppId] = useState<number | null>(null);
+
+  useEffect(() => {
+    setLocalAppStatusOverrides({});
+  }, [applications]);
+
+  const handleQuickStatusChange = async (
+    e: React.MouseEvent,
+    ev: CalendarEvent,
+    targetStatus: 'Pending Collection' | 'Rejected' | 'Online Review Completed'
+  ) => {
+    e.stopPropagation();
+    if (!ev.applicationId) return;
+    const appId = ev.applicationId;
+    const cName =
+      ev.clientName ||
+      ev.title.replace(/^(Delivery|Pending Collection|Rejected)\s*-\s*/i, '').trim() ||
+      'Client';
+    const newTaskTitle =
+      targetStatus === 'Pending Collection'
+        ? `Pending Collection - ${cName}`
+        : targetStatus === 'Rejected'
+        ? `Rejected - ${cName}`
+        : `Delivery - ${cName}`;
+
+    // Instant optimistic update
+    setLocalAppStatusOverrides((prev) => ({ ...prev, [appId]: targetStatus }));
+    if (ev.taskId) {
+      setLocalTasks((prev) =>
+        prev.map((t) => (t.id === ev.taskId ? { ...t, title: newTaskTitle } : t))
+      );
+    }
+    setUpdatingStatusAppId(appId);
+
+    try {
+      await api.updateApplicationStatus(
+        appId,
+        targetStatus,
+        ev.date,
+        `Status changed to ${targetStatus} directly from Calendar View`
+      );
+      if (onRefreshData) onRefreshData(true);
+    } catch (err: any) {
+      console.error('Failed to update application status from calendar:', err);
+      setCalendarError('Could not update application status: ' + (err.message || 'Unknown error'));
+      setLocalAppStatusOverrides((prev) => {
+        const next = { ...prev };
+        delete next[appId];
+        return next;
+      });
+    } finally {
+      setUpdatingStatusAppId(null);
+    }
+  };
+
+  const renderQuickStatusControls = (ev: CalendarEvent, theme: 'dark' | 'light' | 'compact' = 'light') => {
+    const isEligibleTask =
+      !!ev.applicationId &&
+      !ev.isCompleted &&
+      (ev.type === 'delivery' ||
+        ev.applicationStatus === 'Online Review Completed' ||
+        ev.applicationStatus === 'Pending Collection' ||
+        ev.applicationStatus === 'Rejected' ||
+        /^(Delivery|Pending Collection|Rejected)\s*-/i.test(ev.title || ''));
+
+    if (!isEligibleTask) return null;
+
+    const currentAppStatus =
+      ev.applicationStatus ||
+      (/^Pending Collection\s*-/i.test(ev.title || '')
+        ? 'Pending Collection'
+        : /^Rejected\s*-/i.test(ev.title || '')
+        ? 'Rejected'
+        : 'Online Review Completed');
+
+    const isBusy = updatingStatusAppId === ev.applicationId;
+
+    if (theme === 'dark') {
+      return (
+        <div
+          className="flex items-center gap-1 flex-wrap"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {currentAppStatus !== 'Pending Collection' && (
+            <button
+              type="button"
+              disabled={isBusy}
+              onClick={(e) => handleQuickStatusChange(e, ev, 'Pending Collection')}
+              title="Mark Application as Pending Collection"
+              className="px-2.5 py-1 bg-teal-600 hover:bg-teal-500 disabled:opacity-50 text-white rounded-lg text-xs font-semibold transition flex items-center gap-1 cursor-pointer active:scale-95 shadow-2xs"
+            >
+              <CheckCircle2 className="w-3 h-3" />
+              <span>Pending Collection</span>
+            </button>
+          )}
+          {currentAppStatus !== 'Rejected' && (
+            <button
+              type="button"
+              disabled={isBusy}
+              onClick={(e) => handleQuickStatusChange(e, ev, 'Rejected')}
+              title="Mark Application as Rejected"
+              className="px-2.5 py-1 bg-rose-700/90 hover:bg-rose-600 disabled:opacity-50 text-white rounded-lg text-xs font-semibold transition flex items-center gap-1 cursor-pointer active:scale-95 shadow-2xs"
+            >
+              <X className="w-3 h-3" />
+              <span>Rejected</span>
+            </button>
+          )}
+          {(currentAppStatus === 'Pending Collection' || currentAppStatus === 'Rejected') && (
+            <button
+              type="button"
+              disabled={isBusy}
+              onClick={(e) => handleQuickStatusChange(e, ev, 'Online Review Completed')}
+              title="Revert to Online Review Completed (Delivery)"
+              className="px-2 py-1 bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-300 hover:text-white rounded-lg text-[11px] font-semibold border border-slate-700 transition flex items-center gap-1 cursor-pointer active:scale-95"
+            >
+              <RotateCcw className="w-3 h-3 text-sky-400" />
+              <span>Online Review</span>
+            </button>
+          )}
+        </div>
+      );
+    }
+
+    const sizeClass =
+      theme === 'compact'
+        ? 'px-2 py-1 rounded-lg text-[10px] font-bold'
+        : 'px-2.5 py-1 rounded-lg text-xs font-semibold';
+
+    return (
+      <div
+        className="flex items-center gap-1 flex-wrap"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {currentAppStatus !== 'Pending Collection' && (
+          <button
+            type="button"
+            disabled={isBusy}
+            onClick={(e) => handleQuickStatusChange(e, ev, 'Pending Collection')}
+            title="Mark Application as Pending Collection"
+            className={`${sizeClass} bg-teal-600 hover:bg-teal-700 disabled:opacity-50 text-white border border-teal-700 transition flex items-center gap-1 cursor-pointer active:scale-95 shadow-2xs`}
+          >
+            <CheckCircle2 className="w-3 h-3" />
+            <span>Pending Collection</span>
+          </button>
+        )}
+        {currentAppStatus !== 'Rejected' && (
+          <button
+            type="button"
+            disabled={isBusy}
+            onClick={(e) => handleQuickStatusChange(e, ev, 'Rejected')}
+            title="Mark Application as Rejected"
+            className={`${sizeClass} bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white border border-rose-700 transition flex items-center gap-1 cursor-pointer active:scale-95 shadow-2xs`}
+          >
+            <X className="w-3 h-3" />
+            <span>Rejected</span>
+          </button>
+        )}
+        {(currentAppStatus === 'Pending Collection' || currentAppStatus === 'Rejected') && (
+          <button
+            type="button"
+            disabled={isBusy}
+            onClick={(e) => handleQuickStatusChange(e, ev, 'Online Review Completed')}
+            title="Revert to Online Review Completed (Delivery)"
+            className={`${sizeClass} bg-white hover:bg-slate-100 disabled:opacity-50 text-slate-700 border border-slate-300 transition flex items-center gap-1 cursor-pointer active:scale-95`}
+          >
+            <RotateCcw className="w-3 h-3 text-sky-600" />
+            <span>Online Review</span>
+          </button>
+        )}
+      </div>
+    );
   };
 
   useEffect(() => {
@@ -397,8 +617,12 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
   const allEvents: CalendarEvent[] = useMemo(() => {
     const list: CalendarEvent[] = [];
     const clientPhotoMap = new Map<number, string | null>();
+    const clientPassportMap = new Map<number, string>();
     clients.forEach((c) => {
       clientPhotoMap.set(c.id, c.photo_url || null);
+      if (c.passport_number) {
+        clientPassportMap.set(c.id, c.passport_number);
+      }
     });
 
     const cleanDate = (val?: string | null): string => {
@@ -408,6 +632,11 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
       if (s.includes(' ')) return s.split(' ')[0];
       return s.slice(0, 10);
     };
+
+    const appById = new Map<number, VisaApplication>();
+    applications.forEach((a) => {
+      appById.set(a.id, a);
+    });
 
     const hotelCheckoutTaskIds = new Set(
       hotelBookings.filter((b) => b.checkout_task_id).map((b) => b.checkout_task_id)
@@ -426,11 +655,45 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
       const isDelivery = t.is_delivery_task === 1;
       const isFollowUp = t.title.startsWith('[Follow-up]') || t.title.toLowerCase().includes('follow-up');
       const photo = t.client_id ? clientPhotoMap.get(t.client_id) : null;
+      const passportNum = t.passport_number || (t.client_id ? clientPassportMap.get(t.client_id) : undefined);
+
+      const linkedApp = t.application_id
+        ? appById.get(t.application_id)
+        : t.client_id
+        ? applications.find(
+            (a) =>
+              a.client_id === t.client_id &&
+              (a.status === 'Pending Collection' ||
+                a.status === 'Online Review Completed' ||
+                a.status === 'Rejected')
+          )
+        : undefined;
+
+      const effectiveAppStatus = linkedApp
+        ? localAppStatusOverrides[linkedApp.id] || linkedApp.status
+        : undefined;
+
+      let displayTitle = t.title;
+      if (isDelivery || /^(Delivery|Pending Collection|Rejected)\s*-/i.test(t.title || '')) {
+        const resolvedClientName =
+          t.client_name ||
+          linkedApp?.client_name ||
+          t.title.replace(/^(Delivery|Pending Collection|Rejected)\s*-\s*/i, '').trim() ||
+          'Client';
+        if (effectiveAppStatus === 'Pending Collection') {
+          displayTitle = `Pending Collection - ${resolvedClientName}`;
+        } else if (effectiveAppStatus === 'Rejected') {
+          displayTitle = `Rejected - ${resolvedClientName}`;
+        } else if (effectiveAppStatus === 'Online Review Completed') {
+          displayTitle = `Delivery - ${resolvedClientName}`;
+        }
+      }
+
       list.push({
         id: `task-${t.id}`,
         type: isDelivery ? 'delivery' : isFollowUp ? 'followup' : 'task',
-        title: t.title,
-        subtitle: t.client_name ? `${t.client_name} (${t.passport_number || t.client_code || ''})` : undefined,
+        title: displayTitle,
+        subtitle: t.client_name ? `${t.client_name} (${passportNum || t.client_code || ''})` : undefined,
         date: cleanDate(t.due_date),
         priority: t.priority,
         status: t.status,
@@ -439,39 +702,55 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
         clientName: t.client_name || undefined,
         clientCode: t.client_code || undefined,
         clientPhotoUrl: photo,
-        passportNumber: t.passport_number || undefined,
-        applicationId: t.application_id || undefined,
-        applicationCode: t.application_code || undefined,
+        passportNumber: passportNum || undefined,
+        applicationId: t.application_id || linkedApp?.id || undefined,
+        applicationCode: t.application_code || linkedApp?.application_id || undefined,
+        applicationStatus: effectiveAppStatus,
         assignedUserName: t.assigned_user_name || undefined,
         taskId: t.id,
         rawTask: t,
+        rawApp: linkedApp,
       });
     });
 
-    // 2. Visa Application Delivery Dates
+    // 2. Visa Application Delivery / Upcoming Dates
     const existingDeliveryAppIds = new Set(
-      localTasks.filter((t) => t.is_delivery_task === 1 && t.application_id).map((t) => t.application_id)
+      localTasks
+        .filter((t) => (t.is_delivery_task === 1 || /^Upcoming Client\s*-/i.test(t.title || '')) && t.application_id)
+        .map((t) => t.application_id)
     );
 
     applications.forEach((app) => {
       if (app.delivery_date && !existingDeliveryAppIds.has(app.id)) {
         const photo = app.client_photo_url || (app.client_id ? clientPhotoMap.get(app.client_id) : null);
+        const passportNum = app.passport_number || (app.client_id ? clientPassportMap.get(app.client_id) : undefined);
+        const effectiveStatus = localAppStatusOverrides[app.id] || app.status;
+        const isUpcomingApp = effectiveStatus === 'Upcoming';
         list.push({
           id: `app-delivery-${app.id}`,
-          type: 'delivery',
-          title: `${app.status === 'Pending Collection' ? '📌 Collection' : '📦 Delivery'}: ${app.client_name || 'Client'} (${app.visa_type_name || 'Visa'})`,
-          subtitle: `Passport: ${app.passport_number || ''} • Status: ${app.status}`,
+          type: isUpcomingApp ? 'task' : 'delivery',
+          title: isUpcomingApp
+            ? `Upcoming Client - ${app.client_name || 'Client'}`
+            : `${
+                effectiveStatus === 'Pending Collection'
+                  ? 'Pending Collection'
+                  : effectiveStatus === 'Rejected'
+                  ? 'Rejected'
+                  : 'Delivery'
+              } - ${app.client_name || 'Client'}`,
+          subtitle: `Passport: ${passportNum || ''} • Status: ${effectiveStatus}`,
           date: cleanDate(app.delivery_date),
-          priority: 'High',
-          status: app.status,
-          isCompleted: app.status === 'Returned',
+          priority: isUpcomingApp ? 'Normal' : 'High',
+          status: effectiveStatus,
+          isCompleted: effectiveStatus === 'Returned',
           clientId: app.client_id,
           clientName: app.client_name,
           clientCode: app.client_code,
           clientPhotoUrl: photo,
-          passportNumber: app.passport_number,
+          passportNumber: passportNum,
           applicationId: app.id,
           applicationCode: app.application_id,
+          applicationStatus: effectiveStatus,
           visaTypeName: app.visa_type_name,
           assignedUserName: app.assigned_user_name || undefined,
           rawApp: app,
@@ -482,6 +761,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
     // 3. Hotel Bookings Check-Out Dates
     hotelBookings.forEach((b) => {
       const photo = b.client_photo_url || (b.client_id ? clientPhotoMap.get(b.client_id) : null);
+      const passportNum = b.passport_number || (b.client_id ? clientPassportMap.get(b.client_id) : undefined);
       list.push({
         id: `hotel-checkout-${b.id}`,
         type: 'hotel_checkout',
@@ -495,7 +775,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
         clientName: b.client_name,
         clientCode: b.client_code,
         clientPhotoUrl: photo,
-        passportNumber: b.passport_number,
+        passportNumber: passportNum,
         hotelName: b.hotel_name,
         roomTypeName: b.room_type_name,
         comment: b.comment || undefined,
@@ -505,7 +785,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
     });
 
     return list;
-  }, [localTasks, applications, clients, hotelBookings]);
+  }, [localTasks, applications, clients, hotelBookings, localAppStatusOverrides]);
 
   // Helper: Sort events so uncompleted tasks go up (top) and completed tasks go down (bottom)
   const sortEventsUncompletedFirst = (events: CalendarEvent[]): CalendarEvent[] => {
@@ -893,6 +1173,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
             activeDailyHubEvents.map((ev) => {
               const priorityBadge = ev.priority ? getPriorityBadge(ev.priority) : null;
               const isOverdue = !ev.isCompleted && ev.date < todayStr;
+              const isRejected = !ev.isCompleted && (ev.applicationStatus === 'Rejected' || /^Rejected\s*-/i.test(ev.title || ''));
               const isDraggable = !!((ev.taskId || ev.applicationId) && !ev.isCompleted);
               const isBeingDragged = !!(ev.taskId && draggingTaskId === ev.taskId);
 
@@ -912,6 +1193,8 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                   } ${
                     ev.isCompleted
                       ? 'bg-slate-900/40 border-slate-800 text-slate-500 opacity-60'
+                      : isRejected
+                      ? 'bg-rose-950/40 border-rose-700/70 border-l-4 border-l-rose-500 hover:border-rose-500'
                       : isOverdue
                       ? 'bg-rose-950/30 border-rose-800/60 hover:border-rose-600'
                       : ev.type === 'delivery'
@@ -1050,7 +1333,8 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                   </div>
 
                   {/* Right Actions: 1-Click Postpone & Shortcuts */}
-                  <div className="flex items-center gap-1.5 self-end sm:self-center shrink-0">
+                  <div className="flex items-center gap-1.5 self-end sm:self-center shrink-0 flex-wrap justify-end">
+                    {renderQuickStatusControls(ev, 'dark')}
                     {ev.taskId && !ev.isCompleted && (
                       <>
                         {postponeMenuTaskId === ev.taskId ? (
@@ -1104,6 +1388,31 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                           </button>
                         )}
                       </>
+                    )}
+
+                    {ev.passportNumber && (
+                      <button
+                        type="button"
+                        onClick={(e) => handleCopyPassport(e, ev.passportNumber!, `hub-${ev.id}`)}
+                        title={`Copy Passport Number: ${ev.passportNumber}`}
+                        className={`px-2.5 py-1 rounded-lg text-xs font-semibold border transition flex items-center gap-1.5 cursor-pointer active:scale-95 ${
+                          copiedEventId === `hub-${ev.id}`
+                            ? 'bg-emerald-600 text-white border-emerald-500 shadow-xs'
+                            : 'bg-slate-800/90 hover:bg-slate-700 text-slate-200 hover:text-white border-slate-700'
+                        }`}
+                      >
+                        {copiedEventId === `hub-${ev.id}` ? (
+                          <>
+                            <Check className="w-3 h-3 text-white" />
+                            <span>Copied!</span>
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-3 h-3 text-sky-400" />
+                            <span className="font-mono">{ev.passportNumber}</span>
+                          </>
+                        )}
+                      </button>
                     )}
 
                     {ev.clientId && (
@@ -1386,6 +1695,9 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
               const isToday = cell.dateStr === todayStr;
               const isSelected = selectedDate === cell.dateStr;
               const isOverTarget = dragOverDate === cell.dateStr;
+              const hasRejectedEvent = cellEvents.some(
+                (ev) => !ev.isCompleted && (ev.applicationStatus === 'Rejected' || /^Rejected\s*-/i.test(ev.title || ''))
+              );
 
               return (
                 <div
@@ -1405,6 +1717,8 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                       ? 'bg-slate-50/50 text-slate-300'
                       : isSelected
                       ? 'bg-sky-50/70 ring-2 ring-sky-600 inset-0'
+                      : hasRejectedEvent
+                      ? 'bg-rose-50/40 hover:bg-rose-50/70'
                       : isToday
                       ? 'bg-amber-50/30'
                       : 'bg-white hover:bg-slate-50/70'
@@ -1434,6 +1748,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                   <div className="space-y-1 overflow-y-auto max-h-24">
                     {cellEvents.slice(0, 3).map((ev) => {
                       const isCompleted = ev.isCompleted;
+                      const isRejected = !isCompleted && (ev.applicationStatus === 'Rejected' || /^Rejected\s*-/i.test(ev.title || ''));
                       const isDelivery = ev.type === 'delivery';
                       const isHotel = ev.type === 'hotel_checkout';
                       const isFollowUp = ev.type === 'followup';
@@ -1464,6 +1779,8 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                           } ${
                             isCompleted
                               ? 'bg-slate-100 border-slate-200 text-slate-400 line-through'
+                              : isRejected
+                              ? 'bg-rose-100/85 border-rose-300 border-l-4 border-l-rose-500 text-rose-900 font-semibold'
                               : isHotel
                               ? 'bg-teal-50 border-teal-300 text-teal-950 font-semibold'
                               : isFollowUp
@@ -1620,6 +1937,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                       colEvents.map((ev) => {
                         const isDraggable = !!((ev.taskId || ev.applicationId) && !ev.isCompleted);
                         const isBeingDragged = !!(ev.taskId && draggingTaskId === ev.taskId);
+                        const isRejected = !ev.isCompleted && (ev.applicationStatus === 'Rejected' || /^Rejected\s*-/i.test(ev.title || ''));
 
                         return (
                           <div
@@ -1637,6 +1955,8 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                             } ${
                               ev.isCompleted
                                 ? 'bg-slate-100 border-slate-200 text-slate-400 line-through'
+                                : isRejected
+                                ? 'bg-rose-100/85 border-rose-300 border-l-4 border-l-rose-500 text-rose-900 font-semibold'
                                 : ev.type === 'delivery'
                                 ? 'bg-emerald-50 border-emerald-300 text-emerald-950 font-semibold'
                                 : ev.type === 'hotel_checkout'
@@ -1695,6 +2015,8 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                                 <span className="truncate">{ev.clientName}</span>
                               </div>
                             )}
+
+                            {renderQuickStatusControls(ev, 'compact')}
                           </div>
                         );
                       })
@@ -1741,10 +2063,16 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                 No tasks or passport deliveries scheduled for this day. Click &quot;Add Task Today&quot; to create one.
               </div>
             ) : (
-              (eventsByDate[currentDate.toISOString().split('T')[0]] || []).map((ev) => (
+              (eventsByDate[currentDate.toISOString().split('T')[0]] || []).map((ev) => {
+                const isRejected = !ev.isCompleted && (ev.applicationStatus === 'Rejected' || /^Rejected\s*-/i.test(ev.title || ''));
+                return (
                 <div
                   key={ev.id}
-                  className="p-4 bg-slate-50 border border-slate-200 rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-white hover:border-sky-300 transition shadow-2xs"
+                  className={`p-4 border rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 transition shadow-2xs ${
+                    isRejected
+                      ? 'bg-rose-50/75 border-rose-300 border-l-4 border-l-rose-500 hover:bg-rose-50'
+                      : 'bg-slate-50 border-slate-200 hover:bg-white hover:border-sky-300'
+                  }`}
                 >
                   <div className="flex items-center gap-3">
                     {ev.taskId ? (
@@ -1801,7 +2129,32 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap justify-end">
+                    {renderQuickStatusControls(ev, 'light')}
+                    {ev.passportNumber && (
+                      <button
+                        type="button"
+                        onClick={(e) => handleCopyPassport(e, ev.passportNumber!, `day-${ev.id}`)}
+                        title={`Copy Passport Number: ${ev.passportNumber}`}
+                        className={`px-3 py-1.5 rounded-xl text-xs font-semibold border transition flex items-center gap-1.5 cursor-pointer active:scale-95 ${
+                          copiedEventId === `day-${ev.id}`
+                            ? 'bg-emerald-600 text-white border-emerald-600'
+                            : 'bg-white border-slate-200 text-slate-700 hover:bg-sky-50 hover:text-sky-700 hover:border-sky-200'
+                        }`}
+                      >
+                        {copiedEventId === `day-${ev.id}` ? (
+                          <>
+                            <Check className="w-3.5 h-3.5" />
+                            <span>Copied!</span>
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-3.5 h-3.5 text-sky-600" />
+                            <span className="font-mono">{ev.passportNumber}</span>
+                          </>
+                        )}
+                      </button>
+                    )}
                     {ev.rawBooking && (
                       <button
                         onClick={() => ev.rawBooking && setSelectedHotelBooking(ev.rawBooking)}
@@ -1820,7 +2173,8 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                     )}
                   </div>
                 </div>
-              ))
+                );
+              })
             )}
           </div>
         </div>
@@ -1844,12 +2198,17 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
               .map((ev) => {
                 const priorityBadge = ev.priority ? getPriorityBadge(ev.priority) : null;
                 const isOverdue = !ev.isCompleted && ev.date < todayStr;
+                const isRejected = !ev.isCompleted && (ev.applicationStatus === 'Rejected' || /^Rejected\s*-/i.test(ev.title || ''));
 
                 return (
                   <div
                     key={ev.id}
-                    className={`p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 hover:bg-slate-50 transition ${
-                      isOverdue ? 'bg-red-50/30' : ''
+                    className={`p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 transition ${
+                      isRejected
+                        ? 'bg-rose-50/65 border-l-4 border-l-rose-500 hover:bg-rose-50/90'
+                        : isOverdue
+                        ? 'bg-red-50/30 hover:bg-slate-50'
+                        : 'hover:bg-slate-50'
                     }`}
                   >
                     <div className="flex items-start gap-3">
@@ -1945,11 +2304,37 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-2 self-end sm:self-auto">
+                    <div className="flex items-center gap-2 self-end sm:self-auto flex-wrap justify-end">
+                      {renderQuickStatusControls(ev, 'light')}
                       {priorityBadge && (
                         <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${priorityBadge.bg}`}>
                           {ev.priority}
                         </span>
+                      )}
+
+                      {ev.passportNumber && (
+                        <button
+                          type="button"
+                          onClick={(e) => handleCopyPassport(e, ev.passportNumber!, `agenda-${ev.id}`)}
+                          title={`Copy Passport Number: ${ev.passportNumber}`}
+                          className={`px-2.5 py-1 text-xs font-semibold rounded-lg border transition flex items-center gap-1.5 cursor-pointer active:scale-95 ${
+                            copiedEventId === `agenda-${ev.id}`
+                              ? 'bg-emerald-600 text-white border-emerald-600'
+                              : 'text-slate-700 bg-white hover:bg-sky-50 hover:text-sky-700 border-slate-200'
+                          }`}
+                        >
+                          {copiedEventId === `agenda-${ev.id}` ? (
+                            <>
+                              <Check className="w-3 h-3" />
+                              <span>Copied!</span>
+                            </>
+                          ) : (
+                            <>
+                              <Copy className="w-3 h-3 text-sky-600" />
+                              <span className="font-mono">{ev.passportNumber}</span>
+                            </>
+                          )}
+                        </button>
                       )}
 
                       {ev.rawBooking && (
@@ -2013,10 +2398,16 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                   No tasks or deliveries scheduled on {selectedDate}.
                 </div>
               ) : (
-                selectedDayEvents.map((ev) => (
+                selectedDayEvents.map((ev) => {
+                  const isRejected = !ev.isCompleted && (ev.applicationStatus === 'Rejected' || /^Rejected\s*-/i.test(ev.title || ''));
+                  return (
                   <div
                     key={ev.id}
-                    className="p-3 bg-slate-50 border border-slate-200 rounded-xl flex items-start justify-between gap-3"
+                    className={`p-3 border rounded-xl flex items-start justify-between gap-3 ${
+                      isRejected
+                        ? 'bg-rose-50/80 border-rose-300 border-l-4 border-l-rose-500'
+                        : 'bg-slate-50 border-slate-200'
+                    }`}
                   >
                     <div className="flex items-start gap-2.5">
                       {ev.taskId ? (
@@ -2063,10 +2454,37 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                             Note: {ev.comment}
                           </div>
                         )}
+                        <div className="mt-2">
+                          {renderQuickStatusControls(ev, 'compact')}
+                        </div>
                       </div>
                     </div>
 
                     <div className="flex items-center gap-1.5 shrink-0">
+                      {ev.passportNumber && (
+                        <button
+                          type="button"
+                          onClick={(e) => handleCopyPassport(e, ev.passportNumber!, `modal-${ev.id}`)}
+                          title={`Copy Passport Number: ${ev.passportNumber}`}
+                          className={`px-2 py-1 rounded-lg text-[10px] font-bold border transition flex items-center gap-1 cursor-pointer active:scale-95 ${
+                            copiedEventId === `modal-${ev.id}`
+                              ? 'bg-emerald-600 text-white border-emerald-600 shadow-2xs'
+                              : 'bg-white border-slate-200 text-slate-700 hover:bg-sky-50 hover:text-sky-700 hover:border-sky-200'
+                          }`}
+                        >
+                          {copiedEventId === `modal-${ev.id}` ? (
+                            <>
+                              <Check className="w-3 h-3" />
+                              <span>Copied!</span>
+                            </>
+                          ) : (
+                            <>
+                              <Copy className="w-3 h-3 text-sky-600" />
+                              <span className="font-mono">{ev.passportNumber}</span>
+                            </>
+                          )}
+                        </button>
+                      )}
                       {ev.rawBooking && (
                         <button
                           onClick={() => {
@@ -2091,7 +2509,8 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                       )}
                     </div>
                   </div>
-                ))
+                );
+              })
               )}
             </div>
 

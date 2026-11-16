@@ -45,6 +45,7 @@ import { CreateFollowUpModal } from '../components/CreateFollowUpModal';
 import { CreateInvoiceModal } from '../components/CreateInvoiceModal';
 import { InvoiceDetailModal } from '../components/InvoiceDetailModal';
 import { Hotel } from '../types';
+import { getBookingPriceString, parseHotelPriceInput } from '../utils/hotelPrice';
 
 interface ClientProfileViewProps {
   clientId: number;
@@ -175,6 +176,9 @@ export const ClientProfileView: React.FC<ClientProfileViewProps> = ({
         usersList.length > 0 ? Promise.resolve(usersList) : api.getUsers().catch(() => []),
       ]);
       setClient(data);
+      setSelectedBookingForDetail((prev) =>
+        prev && data.hotel_bookings ? data.hotel_bookings.find((b) => b.id === prev.id) || prev : prev
+      );
       setCountries(ctrs);
       setHotelsList(htls);
       if (Array.isArray(usrs) && usrs.length > 0) setUsersList(usrs);
@@ -1314,17 +1318,21 @@ export const ClientProfileView: React.FC<ClientProfileViewProps> = ({
                       </div>
                     </div>
 
-                    {/* Delivery Date Notification Banner */}
+                    {/* Delivery / Upcoming Date Notification Banner */}
                     {app.delivery_date && (
-                      <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-lg text-xs flex items-center justify-between text-emerald-950">
+                      <div className={`p-3 border rounded-lg text-xs flex items-center justify-between ${
+                        app.status === 'Upcoming'
+                          ? 'bg-sky-50 border-sky-200 text-sky-950'
+                          : 'bg-emerald-50 border-emerald-200 text-emerald-950'
+                      }`}>
                         <div className="flex items-center gap-2">
-                          <Calendar className="w-4 h-4 text-emerald-700" />
+                          <Calendar className={`w-4 h-4 ${app.status === 'Upcoming' ? 'text-sky-700' : 'text-emerald-700'}`} />
                           <span>
-                            Delivery Scheduled on:{' '}
+                            {app.status === 'Upcoming' ? 'Upcoming Client Scheduled on:' : 'Delivery Scheduled on:'}{' '}
                             <strong className="font-bold">{app.delivery_date}</strong>
                           </span>
                         </div>
-                        <span className="text-[11px] text-emerald-800 font-medium">
+                        <span className={`text-[11px] font-medium ${app.status === 'Upcoming' ? 'text-sky-800' : 'text-emerald-800'}`}>
                           Auto-linked to Calendar Task
                         </span>
                       </div>
@@ -1449,6 +1457,32 @@ export const ClientProfileView: React.FC<ClientProfileViewProps> = ({
                         </div>
                       </div>
                     </div>
+
+                    {/* Price & Payment Breakdown */}
+                    {(() => {
+                      const parsed = parseHotelPriceInput(getBookingPriceString(booking));
+                      if (parsed.total === null) return null;
+                      return (
+                        <div className="flex flex-wrap items-center justify-between gap-2 bg-emerald-50/70 p-3 rounded-lg border border-emerald-200/80 text-xs">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <DollarSign className="w-4 h-4 text-emerald-700 shrink-0" />
+                            <span className="font-bold text-emerald-950">Payments:</span>
+                            {parsed.steps.map((step, idx) => (
+                              <React.Fragment key={idx}>
+                                {idx > 0 && <span className="font-bold text-emerald-700">+</span>}
+                                <span className="px-2 py-0.5 rounded bg-white border border-emerald-200 font-semibold text-slate-800">
+                                  {step.amount.toLocaleString()}
+                                  {step.note ? ` (${step.note})` : ''}
+                                </span>
+                              </React.Fragment>
+                            ))}
+                          </div>
+                          <span className="px-2.5 py-1 rounded-lg bg-emerald-700 text-white font-extrabold">
+                            Total: {parsed.total.toLocaleString()}
+                          </span>
+                        </div>
+                      );
+                    })()}
 
                     {/* Staff Comment */}
                     {booking.comment && (

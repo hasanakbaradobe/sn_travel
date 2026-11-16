@@ -13,10 +13,12 @@ import {
   Loader2,
   CheckCircle2,
   Users,
+  Plus,
 } from 'lucide-react';
 import { Client, Hotel, HotelRoom } from '../types';
 import { api } from '../services/api';
 import { ClientSelectSearch } from './ClientSelectSearch';
+import { parseHotelPriceInput } from '../utils/hotelPrice';
 
 interface NewHotelBookingModalProps {
   isOpen: boolean;
@@ -186,6 +188,8 @@ export const NewHotelBookingModal: React.FC<NewHotelBookingModalProps> = ({
       roomTypeName = room ? room.name : undefined;
     }
 
+    const parsedPrice = parseHotelPriceInput(totalPrice);
+
     try {
       setSubmitting(true);
       await api.createHotelBooking({
@@ -200,7 +204,8 @@ export const NewHotelBookingModal: React.FC<NewHotelBookingModalProps> = ({
         status,
         comment: comment.trim() || null,
         special_requests: specialRequests.trim() || null,
-        total_price: totalPrice ? parseFloat(totalPrice) : null,
+        total_price: parsedPrice.total,
+        price_details: parsedPrice.cleanExpression || (totalPrice.trim() ? totalPrice.trim() : null),
         currency,
       });
 
@@ -446,15 +451,42 @@ export const NewHotelBookingModal: React.FC<NewHotelBookingModalProps> = ({
             </div>
 
             <div>
-              <label className="block text-xs font-medium text-slate-600 mb-1">Total ($)</label>
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-xs font-medium text-slate-600">Price / Payments</label>
+                <button
+                  type="button"
+                  onClick={() => {
+                    const trimmed = totalPrice.trim();
+                    setTotalPrice(trimmed ? `${trimmed} + ` : '');
+                  }}
+                  title="Add another payment (+)"
+                  className="text-[10px] font-bold text-teal-700 bg-teal-50 hover:bg-teal-100 border border-teal-200 px-1.5 py-0.5 rounded flex items-center gap-0.5 transition"
+                >
+                  <Plus className="w-2.5 h-2.5" />
+                  <span>Add +</span>
+                </button>
+              </div>
               <input
-                type="number"
-                step="0.01"
-                placeholder="Optional"
+                type="text"
+                placeholder="e.g. 200 + 100"
                 value={totalPrice}
                 onChange={(e) => setTotalPrice(e.target.value)}
-                className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-teal-500"
+                className="w-full px-3 py-2 bg-white border border-slate-300 rounded-xl text-sm font-medium focus:outline-none focus:ring-2 focus:ring-teal-500"
               />
+              {(() => {
+                const parsed = parseHotelPriceInput(totalPrice);
+                if (parsed.total === null) return null;
+                return (
+                  <div className="mt-1 text-[11px] flex items-center justify-between text-teal-800 bg-teal-50/80 px-2 py-0.5 rounded border border-teal-200/70">
+                    <span className="truncate">
+                      {parsed.steps.length > 1
+                        ? `${parsed.steps.length} payments`
+                        : 'Total'}
+                    </span>
+                    <span className="font-bold ml-1 shrink-0">= {parsed.total}</span>
+                  </div>
+                );
+              })()}
             </div>
           </div>
 

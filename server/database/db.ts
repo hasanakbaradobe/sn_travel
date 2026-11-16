@@ -208,13 +208,14 @@ async function probeMySQLConnection(force = false): Promise<boolean> {
             conn.query("SELECT setting_value FROM settings WHERE setting_key = 'default_currency_myr_set' LIMIT 1").catch(() => [[]]),
           ]);
 
-          // Ensure new signature columns exist on existing MySQL invoice_settings table
+          // Ensure new signature columns exist on existing MySQL invoice_settings table and price_details on hotel_bookings
           await Promise.allSettled([
             conn.query("ALTER TABLE invoice_settings ADD COLUMN signature_enabled TINYINT(1) NOT NULL DEFAULT 1").catch(() => {}),
             conn.query("ALTER TABLE invoice_settings ADD COLUMN signature_name VARCHAR(150) DEFAULT 'Sarah Nadeem'").catch(() => {}),
             conn.query("ALTER TABLE invoice_settings ADD COLUMN signature_designation VARCHAR(150) DEFAULT 'Managing Director'").catch(() => {}),
             conn.query("ALTER TABLE invoice_settings ADD COLUMN signature_image_url LONGTEXT DEFAULT NULL").catch(() => {}),
             conn.query("ALTER TABLE invoice_settings ADD COLUMN signature_style VARCHAR(20) DEFAULT 'script'").catch(() => {}),
+            conn.query("ALTER TABLE hotel_bookings ADD COLUMN price_details VARCHAR(500) DEFAULT NULL").catch(() => {}),
           ]);
 
           if (invSetRows && invSetRows[0] && Number(invSetRows[0].cnt) === 0) {
@@ -569,6 +570,7 @@ interface HotelBooking {
   comment?: string | null;
   special_requests?: string | null;
   total_price?: number | null;
+  price_details?: string | null;
   currency?: string;
   checkout_task_id?: number | null;
   created_by_user_id?: number | null;
@@ -1356,23 +1358,112 @@ let lastLocalMutationTime = 0;
 const SYNC_CACHE_TTL_MS = 30000; // 30 seconds TTL for background MySQL syncs
 let inFlightSyncPromise: Promise<void> | null = null;
 const pendingWritePromises = new Set<Promise<any>>();
+let writePipelineChain: Promise<any> = Promise.resolve();
+
+async function ensureClientAndAppInMySQL(
+  activePool: mysql.Pool,
+  clientId?: number | null,
+  applicationId?: number | null
+): Promise<{ validClientId: number | null; validAppId: number | null }> {
+  let resolvedClientId = clientId ? Number(clientId) : null;
+  const resolvedAppId = applicationId ? Number(applicationId) : null;
+
+  const app = resolvedAppId ? store.visa_applications.find(a => Number(a.id) === resolvedAppId) : null;
+  if (app && !resolvedClientId) {
+    resolvedClientId = Number(app.client_id);
+  }
+
+  if (resolvedClientId) {
+    const client = store.clients.find(c => Number(c.id) === resolvedClientId);
+    if (client) {
+      await activePool.query(
+        `INSERT INTO clients (id, client_id, full_name, passport_number, country, phone, whatsapp, email, date_of_birth, address, occupation, notes, google_drive_url, photo_url, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
+         ON DUPLICATE KEY UPDATE
+           full_name = VALUES(full_name), passport_number = VALUES(passport_number), updated_at = NOW()`,
+        [
+          client.id,
+          client.client_id,
+          client.full_name,
+          client.passport_number,
+          client.country,
+          client.phone,
+          client.whatsapp,
+          client.email,
+          client.date_of_birth,
+          client.address,
+          client.occupation,
+          client.notes,
+          client.google_drive_url,
+          client.photo_url,
+        ]
+      );
+    }
+  }
+
+  if (resolvedAppId) {
+    if (app) {
+      const vt = store.visa_types.find(v => Number(v.id) === Number(app.visa_type_id));
+      if (vt) {
+        await activePool.query(
+          `INSERT INTO visa_types (id, name, description, is_active, created_at, updated_at)
+           VALUES (?, ?, ?, ?, NOW(), NOW())
+           ON DUPLICATE KEY UPDATE name = VALUES(name)`,
+          [vt.id, vt.name, vt.description, vt.is_active]
+        );
+      }
+      const validAssignedUserId = app.assigned_user_id && store.users.some(u => u.id === app.assigned_user_id)
+        ? app.assigned_user_id
+        : null;
+      await activePool.query(
+        `INSERT INTO visa_applications (id, application_id, client_id, visa_type_id, status, delivery_date, notes, assigned_user_id, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
+         ON DUPLICATE KEY UPDATE
+           status = VALUES(status), delivery_date = VALUES(delivery_date),
+           notes = VALUES(notes), assigned_user_id = VALUES(assigned_user_id), updated_at = NOW()`,
+        [
+          app.id,
+          app.application_id,
+          app.client_id,
+          app.visa_type_id,
+          app.status,
+          app.delivery_date,
+          app.notes,
+          validAssignedUserId,
+        ]
+      );
+      return { validClientId: resolvedClientId, validAppId: app.id };
+    } else {
+      const [rows] = await activePool.query<mysql.RowDataPacket[]>(
+        'SELECT id FROM visa_applications WHERE id = ? LIMIT 1',
+        [resolvedAppId]
+      );
+      if (!Array.isArray(rows) || rows.length === 0) {
+        return { validClientId: resolvedClientId, validAppId: null };
+      }
+    }
+  }
+
+  return { validClientId: resolvedClientId, validAppId: resolvedAppId };
+}
 
 /**
- * Executes a MySQL write operation in a non-blocking write-through pipeline.
+ * Executes a MySQL write operation in a serialized non-blocking write-through pipeline.
  * In-memory relational store is already updated synchronously so API responses return in <1ms,
- * while MySQL queries execute immediately on the connection pool in the background.
+ * while MySQL queries execute in strict FIFO order on the connection pool in the background.
  */
 function runMySQLWrite(task: (activePool: mysql.Pool) => Promise<any>): void {
   lastLocalMutationTime = Date.now();
   if (!isConnectedToMySQL || !pool) return;
   const activePool = pool;
-  const p = (async () => {
+  const p = writePipelineChain.then(async () => {
     try {
       await task(activePool);
     } catch (err: any) {
       console.error('[MySQL Write Pipeline Error]:', err?.message || err);
     }
-  })();
+  });
+  writePipelineChain = p;
   pendingWritePromises.add(p);
   p.finally(() => {
     pendingWritePromises.delete(p);
@@ -2395,7 +2486,7 @@ export const dbService = {
     const appId = `APP-${String(id).padStart(6, '0')}`;
     const now = new Date().toISOString();
     const status = data.status || 'Upcoming';
-    const deliveryDate = (status === 'Online Review Completed' || status === 'Pending Collection') && data.delivery_date ? data.delivery_date : null;
+    const deliveryDate = (status === 'Online Review Completed' || status === 'Pending Collection' || status === 'Upcoming') && data.delivery_date ? data.delivery_date : null;
 
     const validAssignedUserId = data.assigned_user_id && store.users.some(u => u.id === data.assigned_user_id) ? data.assigned_user_id : null;
     const validUserId = userId && store.users.some(u => u.id === userId) ? userId : 1;
@@ -2432,14 +2523,7 @@ export const dbService = {
     const clientName = client?.full_name || 'Client';
 
     runMySQLWrite(async (activePool) => {
-      await activePool.query(
-        `INSERT INTO visa_applications (id, application_id, client_id, visa_type_id, status, delivery_date, notes, assigned_user_id, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
-         ON DUPLICATE KEY UPDATE
-           application_id = VALUES(application_id), status = VALUES(status), delivery_date = VALUES(delivery_date),
-           notes = VALUES(notes), assigned_user_id = VALUES(assigned_user_id), updated_at = NOW()`,
-        [app.id, app.application_id, app.client_id, app.visa_type_id, app.status, app.delivery_date, app.notes, app.assigned_user_id]
-      );
+      await ensureClientAndAppInMySQL(activePool, app.client_id, app.id);
       await activePool.query(
         `INSERT INTO application_status_history (id, application_id, old_status, new_status, delivery_date, changed_by_user_id, notes, created_at)
          VALUES (?, ?, NULL, ?, ?, ?, 'Visa application created', NOW())
@@ -2448,9 +2532,11 @@ export const dbService = {
       );
     });
 
-    // If initial status requires a delivery date, create delivery task
+    // If initial status requires a delivery date or has an optional Upcoming Client date, create linked calendar task
     if ((status === 'Online Review Completed' || status === 'Pending Collection') && app.delivery_date) {
       await this.syncDeliveryTask(app, clientName, validUserId);
+    } else if (status === 'Upcoming' && app.delivery_date) {
+      await this.syncUpcomingTask(app, clientName, validUserId);
     }
 
     saveStore(store);
@@ -2476,10 +2562,14 @@ export const dbService = {
     const client = store.clients.find(c => c.id === app.client_id);
     const clientName = client?.full_name || 'Client';
 
-    // Delivery date business logic
+    // Delivery / Upcoming date business logic
     if (newStatus === 'Online Review Completed' || newStatus === 'Pending Collection') {
       if (deliveryDate) {
         app.delivery_date = deliveryDate;
+      }
+    } else if (newStatus === 'Upcoming') {
+      if (deliveryDate !== undefined) {
+        app.delivery_date = deliveryDate || null;
       }
     }
 
@@ -2499,6 +2589,7 @@ export const dbService = {
     });
 
     runMySQLWrite(async (activePool) => {
+      await ensureClientAndAppInMySQL(activePool, app.client_id, id);
       await activePool.query(
         'UPDATE visa_applications SET status = ?, delivery_date = ?, notes = COALESCE(?, notes), updated_at = NOW() WHERE id = ?',
         [newStatus, app.delivery_date || null, notes ? notes.trim() : null, id]
@@ -2528,9 +2619,11 @@ export const dbService = {
       }
     });
 
-    // If status has a collection/delivery date, create/update delivery task
-    if ((newStatus === 'Online Review Completed' || newStatus === 'Pending Collection') && app.delivery_date) {
+    // If status has a collection/delivery date or optional Upcoming Client date, create/update linked task
+    if ((newStatus === 'Online Review Completed' || newStatus === 'Pending Collection' || newStatus === 'Rejected') && app.delivery_date) {
       await this.syncDeliveryTask(app, clientName, userId);
+    } else if (newStatus === 'Upcoming' && app.delivery_date) {
+      await this.syncUpcomingTask(app, clientName, userId);
     }
 
     // If status is Returned, complete any pending collection or delivery tasks linked to this application (excluding follow-up tasks)
@@ -2678,10 +2771,18 @@ export const dbService = {
     if (data.assigned_user_id !== undefined) app.assigned_user_id = data.assigned_user_id;
     if (data.notes !== undefined) app.notes = data.notes;
 
+    const oldDeliveryDate = app.delivery_date;
     if (data.delivery_date !== undefined) {
-      const oldDeliveryDate = app.delivery_date;
       app.delivery_date = data.delivery_date;
-      if (app.delivery_date && app.delivery_date !== oldDeliveryDate) {
+    }
+
+    const statusChanged = data.status !== undefined && data.status !== oldStatus;
+    const deliveryDateChanged = data.delivery_date !== undefined && app.delivery_date !== oldDeliveryDate;
+
+    if (app.delivery_date && (statusChanged || deliveryDateChanged)) {
+      if (app.status === 'Upcoming') {
+        await this.syncUpcomingTask(app, clientName, userId);
+      } else if (app.status !== 'Returned') {
         await this.syncDeliveryTask(app, clientName, userId);
       }
     }
@@ -2691,6 +2792,7 @@ export const dbService = {
     saveStore(store);
 
     runMySQLWrite(async (activePool) => {
+      await ensureClientAndAppInMySQL(activePool, app.client_id, id);
       await activePool.query(
         `UPDATE visa_applications SET status = ?, visa_type_id = ?, assigned_user_id = ?, notes = ?, delivery_date = ?, updated_at = NOW() WHERE id = ?`,
         [app.status, app.visa_type_id, app.assigned_user_id || null, app.notes || null, app.delivery_date || null, id]
@@ -2701,9 +2803,85 @@ export const dbService = {
     return app;
   },
 
+  async syncUpcomingTask(app: VisaApplication, clientName: string, userId: number) {
+    if (!app.delivery_date) return;
+    const taskTitle = `Upcoming Client - ${clientName}`;
+    const existingTask = store.tasks.find(
+      t => t.application_id === app.id && t.is_delivery_task === 0 && /^Upcoming Client\s*-/i.test(t.title || '')
+    );
+
+    const validAssignedUserId = app.assigned_user_id && store.users.some(u => u.id === app.assigned_user_id)
+      ? app.assigned_user_id
+      : (userId && store.users.some(u => u.id === userId) ? userId : (store.users[0]?.id || null));
+
+    if (existingTask) {
+      existingTask.due_date = app.delivery_date;
+      if (existingTask.status === 'Completed') {
+        existingTask.status = 'Pending';
+        existingTask.completed_at = null;
+      }
+      existingTask.updated_at = new Date().toISOString();
+      if (validAssignedUserId) {
+        existingTask.assigned_user_id = validAssignedUserId;
+      }
+      runMySQLWrite(async (activePool) => {
+        await ensureClientAndAppInMySQL(activePool, app.client_id, app.id);
+        await activePool.query(
+          'UPDATE tasks SET due_date = ?, status = ?, completed_at = ?, assigned_user_id = COALESCE(?, assigned_user_id), updated_at = NOW() WHERE id = ?',
+          [app.delivery_date, existingTask.status, null, validAssignedUserId, existingTask.id]
+        );
+      });
+      this.logActivity(userId, 'UPDATE_TASK', 'TASK', existingTask.id, `Updated upcoming client date to ${app.delivery_date} for task "${existingTask.title}"`);
+    } else {
+      const taskId = nextEntityId('tasks', store.tasks);
+      const taskDesc = `Upcoming client scheduled for ${clientName} (${app.application_id}).${app.notes ? ` Notes: ${app.notes}` : ''}`;
+      const newTask: Task = {
+        id: taskId,
+        title: taskTitle,
+        description: taskDesc,
+        client_id: app.client_id,
+        application_id: app.id,
+        assigned_user_id: validAssignedUserId,
+        due_date: app.delivery_date,
+        priority: 'Normal',
+        status: 'Pending',
+        is_delivery_task: 0,
+        completed_at: null,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+      store.tasks.push(newTask);
+
+      runMySQLWrite(async (activePool) => {
+        const { validClientId, validAppId } = await ensureClientAndAppInMySQL(activePool, app.client_id, app.id);
+        await activePool.query(
+          `INSERT INTO tasks (id, title, description, client_id, application_id, assigned_user_id, due_date, priority, status, is_delivery_task, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, 'Normal', 'Pending', 0, NOW(), NOW())
+           ON DUPLICATE KEY UPDATE due_date = VALUES(due_date), status = VALUES(status), updated_at = NOW()`,
+          [
+            taskId,
+            taskTitle,
+            taskDesc,
+            validClientId,
+            validAppId,
+            validAssignedUserId,
+            app.delivery_date,
+          ]
+        );
+      });
+
+      this.logActivity(userId, 'CREATE_TASK', 'TASK', taskId, `Auto-created upcoming client task "${taskTitle}" on ${app.delivery_date}`);
+    }
+  },
+
   async syncDeliveryTask(app: VisaApplication, clientName: string, userId: number) {
     if (!app.delivery_date) return;
-    const taskTitle = `Delivery - ${clientName}`;
+    const taskTitle = app.status === 'Pending Collection'
+      ? `Pending Collection - ${clientName}`
+      : app.status === 'Rejected'
+      ? `Rejected - ${clientName}`
+      : `Delivery - ${clientName}`;
+    const taskDesc = `Scheduled passport/visa collection/delivery for ${clientName} (${app.application_id}). Status: ${app.status}.`;
     const existingTask = store.tasks.find(
       t => t.application_id === app.id && t.is_delivery_task === 1
     );
@@ -2713,6 +2891,8 @@ export const dbService = {
       : (userId && store.users.some(u => u.id === userId) ? userId : (store.users[0]?.id || null));
 
     if (existingTask) {
+      existingTask.title = taskTitle;
+      existingTask.description = taskDesc;
       existingTask.due_date = app.delivery_date;
       if (app.status !== 'Returned' && existingTask.status === 'Completed') {
         existingTask.status = 'Pending';
@@ -2723,15 +2903,15 @@ export const dbService = {
         existingTask.assigned_user_id = validAssignedUserId;
       }
       runMySQLWrite(async (activePool) => {
+        await ensureClientAndAppInMySQL(activePool, app.client_id, app.id);
         await activePool.query(
-          'UPDATE tasks SET due_date = ?, status = ?, completed_at = ?, assigned_user_id = COALESCE(?, assigned_user_id), updated_at = NOW() WHERE id = ?',
-          [app.delivery_date, existingTask.status, existingTask.completed_at ? new Date(existingTask.completed_at) : null, validAssignedUserId, existingTask.id]
+          'UPDATE tasks SET title = ?, description = ?, due_date = ?, status = ?, completed_at = ?, assigned_user_id = COALESCE(?, assigned_user_id), updated_at = NOW() WHERE id = ?',
+          [taskTitle, taskDesc, app.delivery_date, existingTask.status, existingTask.completed_at ? new Date(existingTask.completed_at) : null, validAssignedUserId, existingTask.id]
         );
       });
-      this.logActivity(userId, 'UPDATE_TASK', 'TASK', existingTask.id, `Updated delivery date to ${app.delivery_date} for task "${existingTask.title}"`);
+      this.logActivity(userId, 'UPDATE_TASK', 'TASK', existingTask.id, `Updated task "${existingTask.title}" scheduled on ${app.delivery_date}`);
     } else {
       const taskId = nextEntityId('tasks', store.tasks);
-      const taskDesc = `Scheduled passport/visa collection/delivery for ${clientName} (${app.application_id}). Status: ${app.status}.`;
       const newTask: Task = {
         id: taskId,
         title: taskTitle,
@@ -2750,23 +2930,24 @@ export const dbService = {
       store.tasks.push(newTask);
 
       runMySQLWrite(async (activePool) => {
+        const { validClientId, validAppId } = await ensureClientAndAppInMySQL(activePool, app.client_id, app.id);
         await activePool.query(
           `INSERT INTO tasks (id, title, description, client_id, application_id, assigned_user_id, due_date, priority, status, is_delivery_task, created_at, updated_at)
            VALUES (?, ?, ?, ?, ?, ?, ?, 'High', 'Pending', 1, NOW(), NOW())
-           ON DUPLICATE KEY UPDATE due_date = VALUES(due_date), status = VALUES(status), updated_at = NOW()`,
+           ON DUPLICATE KEY UPDATE title = VALUES(title), description = VALUES(description), due_date = VALUES(due_date), status = VALUES(status), updated_at = NOW()`,
           [
             taskId,
             taskTitle,
             taskDesc,
-            app.client_id,
-            app.id,
+            validClientId,
+            validAppId,
             validAssignedUserId,
             app.delivery_date,
           ]
         );
       });
 
-      this.logActivity(userId, 'CREATE_TASK', 'TASK', taskId, `Auto-created delivery task "${taskTitle}" on ${app.delivery_date}`);
+      this.logActivity(userId, 'CREATE_TASK', 'TASK', taskId, `Auto-created task "${taskTitle}" on ${app.delivery_date}`);
     }
   },
 
@@ -2817,8 +2998,20 @@ export const dbService = {
       const client = t.client_id ? clientById.get(t.client_id) : null;
       const app = t.application_id ? appById.get(t.application_id) : null;
       const user = t.assigned_user_id ? userById.get(t.assigned_user_id) : null;
+      let resolvedTitle = t.title;
+      if ((t.is_delivery_task === 1 || /^(Delivery|Pending Collection|Rejected)\s*-/i.test(t.title || '')) && app) {
+        const cName = client?.full_name || t.title.replace(/^(Delivery|Pending Collection|Rejected)\s*-\s*/i, '').trim() || 'Client';
+        if (app.status === 'Pending Collection') {
+          resolvedTitle = `Pending Collection - ${cName}`;
+        } else if (app.status === 'Rejected') {
+          resolvedTitle = `Rejected - ${cName}`;
+        } else if (app.status === 'Online Review Completed') {
+          resolvedTitle = `Delivery - ${cName}`;
+        }
+      }
       return {
         ...t,
+        title: resolvedTitle,
         client_name: client?.full_name || null,
         client_code: client?.client_id || null,
         passport_number: client?.passport_number || null,
@@ -2834,8 +3027,20 @@ export const dbService = {
     const client = t.client_id ? store.clients.find(c => c.id === t.client_id) : null;
     const app = t.application_id ? store.visa_applications.find(a => a.id === t.application_id) : null;
     const user = t.assigned_user_id ? store.users.find(u => u.id === t.assigned_user_id) : null;
+    let resolvedTitle = t.title;
+    if ((t.is_delivery_task === 1 || /^(Delivery|Pending Collection|Rejected)\s*-/i.test(t.title || '')) && app) {
+      const cName = client?.full_name || t.title.replace(/^(Delivery|Pending Collection|Rejected)\s*-\s*/i, '').trim() || 'Client';
+      if (app.status === 'Pending Collection') {
+        resolvedTitle = `Pending Collection - ${cName}`;
+      } else if (app.status === 'Rejected') {
+        resolvedTitle = `Rejected - ${cName}`;
+      } else if (app.status === 'Online Review Completed') {
+        resolvedTitle = `Delivery - ${cName}`;
+      }
+    }
     return {
       ...t,
+      title: resolvedTitle,
       client_name: client?.full_name || null,
       client_code: client?.client_id || null,
       passport_number: client?.passport_number || null,
@@ -2876,6 +3081,7 @@ export const dbService = {
     saveStore(store);
 
     runMySQLWrite(async (activePool) => {
+      const { validClientId, validAppId } = await ensureClientAndAppInMySQL(activePool, task.client_id, task.application_id);
       await activePool.query(
         `INSERT INTO tasks (id, title, description, client_id, application_id, assigned_user_id, due_date, priority, status, is_delivery_task, created_at, updated_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'Pending', 0, NOW(), NOW())
@@ -2886,8 +3092,8 @@ export const dbService = {
           task.id,
           task.title,
           task.description,
-          task.client_id,
-          task.application_id,
+          validClientId,
+          validAppId,
           task.assigned_user_id,
           task.due_date,
           task.priority,
@@ -2986,6 +3192,7 @@ export const dbService = {
     saveStore(store);
 
     runMySQLWrite(async (activePool) => {
+      const { validClientId, validAppId } = await ensureClientAndAppInMySQL(activePool, task.client_id, task.application_id);
       await activePool.query(
         `UPDATE tasks SET
           title = ?, description = ?, client_id = ?, application_id = ?,
@@ -2995,8 +3202,8 @@ export const dbService = {
         [
           task.title,
           task.description,
-          task.client_id,
-          task.application_id,
+          validClientId,
+          validAppId,
           task.assigned_user_id,
           task.due_date,
           task.priority,
@@ -3120,11 +3327,12 @@ export const dbService = {
     saveStore(store);
 
     runMySQLWrite(async (activePool) => {
+      const { validClientId, validAppId } = await ensureClientAndAppInMySQL(activePool, comment.client_id, comment.application_id);
       await activePool.query(
         `INSERT INTO comments (id, client_id, application_id, user_id, message, created_at)
          VALUES (?, ?, ?, ?, ?, NOW())
          ON DUPLICATE KEY UPDATE message = VALUES(message)`,
-        [comment.id, comment.client_id, comment.application_id, comment.user_id, comment.message]
+        [comment.id, validClientId, validAppId, comment.user_id, comment.message]
       );
     });
 
@@ -3727,7 +3935,8 @@ export const dbService = {
     status?: 'Confirmed' | 'Checked In' | 'Checked Out' | 'Cancelled';
     comment?: string | null;
     special_requests?: string | null;
-    total_price?: number | null;
+    total_price?: number | string | null;
+    price_details?: string | null;
     currency?: string;
   }, userId = 1) {
     if (!store.hotel_bookings) store.hotel_bookings = [];
@@ -3750,6 +3959,34 @@ export const dbService = {
     const id = nextEntityId('hotel_bookings', store.hotel_bookings);
     const refNum = `HB-${String(id).padStart(6, '0')}`;
     const now = new Date().toISOString();
+
+    // Parse price expression (supports e.g. "200 + 100 + 50")
+    const parsePriceFields = (rawTotal: any, rawDetails: any): { total_price: number | null; price_details: string | null } => {
+      const exprSource = rawDetails !== undefined && rawDetails !== null && String(rawDetails).trim() !== ''
+        ? String(rawDetails).trim()
+        : (rawTotal !== undefined && rawTotal !== null && String(rawTotal).trim() !== '' ? String(rawTotal).trim() : '');
+      if (!exprSource) {
+        return { total_price: null, price_details: null };
+      }
+      const segments = exprSource.split('+').map(s => s.trim()).filter(Boolean);
+      const amounts: number[] = [];
+      for (const seg of segments) {
+        const m = seg.replace(/,/g, '').match(/-?\d+(\.\d+)?/);
+        if (m) {
+          const val = parseFloat(m[0]);
+          if (!isNaN(val)) amounts.push(val);
+        }
+      }
+      const computedSum = amounts.length > 0
+        ? Math.round(amounts.reduce((a, b) => a + b, 0) * 100) / 100
+        : (rawTotal !== undefined && rawTotal !== null && !isNaN(Number(rawTotal)) ? Number(rawTotal) : null);
+      return {
+        total_price: computedSum,
+        price_details: segments.join(' + ') || exprSource,
+      };
+    };
+
+    const resolvedPrice = parsePriceFields(data.total_price, data.price_details);
 
     // AUTOMATIC TASK CREATION: Create a task for staff on the check-out date!
     const checkoutTaskId = nextEntityId('tasks', store.tasks);
@@ -3787,8 +4024,9 @@ export const dbService = {
       status: data.status || 'Confirmed',
       comment: data.comment ? data.comment.trim() : null,
       special_requests: data.special_requests ? data.special_requests.trim() : null,
-      total_price: data.total_price !== undefined && data.total_price !== null ? Number(data.total_price) : null,
-      currency: data.currency ? data.currency.trim().toUpperCase() : 'USD',
+      total_price: resolvedPrice.total_price,
+      price_details: resolvedPrice.price_details,
+      currency: data.currency ? data.currency.trim().toUpperCase() : 'MYR',
       checkout_task_id: checkoutTaskId,
       created_by_user_id: userId,
       created_at: now,
@@ -3806,32 +4044,64 @@ export const dbService = {
         [checkoutTaskId, taskTitle, taskDesc, client.id, userId || 1, data.check_out_date]
       );
 
-      await activePool.query(
-        `INSERT INTO hotel_bookings (id, booking_reference, client_id, hotel_id, room_type_id, room_type_name, check_in_date, check_out_date, guest_count, room_count, status, comment, special_requests, total_price, currency, checkout_task_id, created_by_user_id, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
-         ON DUPLICATE KEY UPDATE
-           booking_reference = VALUES(booking_reference), status = VALUES(status),
-           check_in_date = VALUES(check_in_date), check_out_date = VALUES(check_out_date), updated_at = NOW()`,
-        [
-          booking.id,
-          booking.booking_reference,
-          booking.client_id,
-          booking.hotel_id,
-          booking.room_type_id,
-          booking.room_type_name,
-          booking.check_in_date,
-          booking.check_out_date,
-          booking.guest_count,
-          booking.room_count,
-          booking.status,
-          booking.comment,
-          booking.special_requests,
-          booking.total_price,
-          booking.currency,
-          booking.checkout_task_id,
-          booking.created_by_user_id,
-        ]
-      );
+      try {
+        await activePool.query(
+          `INSERT INTO hotel_bookings (id, booking_reference, client_id, hotel_id, room_type_id, room_type_name, check_in_date, check_out_date, guest_count, room_count, status, comment, special_requests, total_price, price_details, currency, checkout_task_id, created_by_user_id, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
+           ON DUPLICATE KEY UPDATE
+             booking_reference = VALUES(booking_reference), status = VALUES(status),
+             total_price = VALUES(total_price), price_details = VALUES(price_details),
+             check_in_date = VALUES(check_in_date), check_out_date = VALUES(check_out_date), updated_at = NOW()`,
+          [
+            booking.id,
+            booking.booking_reference,
+            booking.client_id,
+            booking.hotel_id,
+            booking.room_type_id,
+            booking.room_type_name,
+            booking.check_in_date,
+            booking.check_out_date,
+            booking.guest_count,
+            booking.room_count,
+            booking.status,
+            booking.comment,
+            booking.special_requests,
+            booking.total_price,
+            booking.price_details,
+            booking.currency,
+            booking.checkout_task_id,
+            booking.created_by_user_id,
+          ]
+        );
+      } catch {
+        await activePool.query(
+          `INSERT INTO hotel_bookings (id, booking_reference, client_id, hotel_id, room_type_id, room_type_name, check_in_date, check_out_date, guest_count, room_count, status, comment, special_requests, total_price, currency, checkout_task_id, created_by_user_id, created_at, updated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
+           ON DUPLICATE KEY UPDATE
+             booking_reference = VALUES(booking_reference), status = VALUES(status),
+             total_price = VALUES(total_price),
+             check_in_date = VALUES(check_in_date), check_out_date = VALUES(check_out_date), updated_at = NOW()`,
+          [
+            booking.id,
+            booking.booking_reference,
+            booking.client_id,
+            booking.hotel_id,
+            booking.room_type_id,
+            booking.room_type_name,
+            booking.check_in_date,
+            booking.check_out_date,
+            booking.guest_count,
+            booking.room_count,
+            booking.status,
+            booking.comment,
+            booking.special_requests,
+            booking.total_price,
+            booking.currency,
+            booking.checkout_task_id,
+            booking.created_by_user_id,
+          ]
+        );
+      }
     });
 
     this.logActivity(
@@ -3845,7 +4115,7 @@ export const dbService = {
     return this.getHotelBookingById(id);
   },
 
-  async updateHotelBooking(id: number, data: Partial<HotelBooking>, userId = 1) {
+  async updateHotelBooking(id: number, data: Partial<HotelBooking> & { total_price?: number | string | null; price_details?: string | null }, userId = 1) {
     if (!store.hotel_bookings) return null;
     const booking = store.hotel_bookings.find(b => b.id === id);
     if (!booking) return null;
@@ -3862,8 +4132,32 @@ export const dbService = {
     if (data.status !== undefined) booking.status = data.status;
     if (data.comment !== undefined) booking.comment = data.comment ? data.comment.trim() : null;
     if (data.special_requests !== undefined) booking.special_requests = data.special_requests ? data.special_requests.trim() : null;
-    if (data.total_price !== undefined) booking.total_price = data.total_price !== null ? Number(data.total_price) : null;
-    if (data.currency !== undefined) booking.currency = data.currency ? data.currency.trim().toUpperCase() : 'USD';
+
+    if (data.price_details !== undefined || data.total_price !== undefined) {
+      const exprSource = data.price_details !== undefined && data.price_details !== null
+        ? String(data.price_details).trim()
+        : (data.total_price !== undefined && data.total_price !== null ? String(data.total_price).trim() : '');
+      if (!exprSource) {
+        booking.total_price = null;
+        booking.price_details = null;
+      } else {
+        const segments = exprSource.split('+').map(s => s.trim()).filter(Boolean);
+        const amounts: number[] = [];
+        for (const seg of segments) {
+          const m = seg.replace(/,/g, '').match(/-?\d+(\.\d+)?/);
+          if (m) {
+            const val = parseFloat(m[0]);
+            if (!isNaN(val)) amounts.push(val);
+          }
+        }
+        booking.total_price = amounts.length > 0
+          ? Math.round(amounts.reduce((a, b) => a + b, 0) * 100) / 100
+          : (data.total_price !== undefined && data.total_price !== null && !isNaN(Number(data.total_price)) ? Number(data.total_price) : null);
+        booking.price_details = segments.join(' + ') || exprSource;
+      }
+    }
+
+    if (data.currency !== undefined) booking.currency = data.currency ? data.currency.trim().toUpperCase() : 'MYR';
 
     booking.updated_at = new Date().toISOString();
 
@@ -3879,10 +4173,17 @@ export const dbService = {
     saveStore(store);
 
     runMySQLWrite(async (activePool) => {
-      await activePool.query(
-        `UPDATE hotel_bookings SET hotel_id = ?, room_type_id = ?, room_type_name = ?, check_in_date = ?, check_out_date = ?, guest_count = ?, room_count = ?, status = ?, comment = ?, special_requests = ?, total_price = ?, currency = ?, updated_at = NOW() WHERE id = ?`,
-        [booking.hotel_id, booking.room_type_id, booking.room_type_name, booking.check_in_date, booking.check_out_date, booking.guest_count, booking.room_count, booking.status, booking.comment, booking.special_requests, booking.total_price, booking.currency, id]
-      );
+      try {
+        await activePool.query(
+          `UPDATE hotel_bookings SET hotel_id = ?, room_type_id = ?, room_type_name = ?, check_in_date = ?, check_out_date = ?, guest_count = ?, room_count = ?, status = ?, comment = ?, special_requests = ?, total_price = ?, price_details = ?, currency = ?, updated_at = NOW() WHERE id = ?`,
+          [booking.hotel_id, booking.room_type_id, booking.room_type_name, booking.check_in_date, booking.check_out_date, booking.guest_count, booking.room_count, booking.status, booking.comment, booking.special_requests, booking.total_price, booking.price_details || null, booking.currency, id]
+        );
+      } catch {
+        await activePool.query(
+          `UPDATE hotel_bookings SET hotel_id = ?, room_type_id = ?, room_type_name = ?, check_in_date = ?, check_out_date = ?, guest_count = ?, room_count = ?, status = ?, comment = ?, special_requests = ?, total_price = ?, currency = ?, updated_at = NOW() WHERE id = ?`,
+          [booking.hotel_id, booking.room_type_id, booking.room_type_name, booking.check_in_date, booking.check_out_date, booking.guest_count, booking.room_count, booking.status, booking.comment, booking.special_requests, booking.total_price, booking.currency, id]
+        );
+      }
       if (booking.checkout_task_id && data.check_out_date && data.check_out_date !== oldCheckoutDate) {
         await activePool.query('UPDATE tasks SET due_date = ?, updated_at = NOW() WHERE id = ?', [data.check_out_date, booking.checkout_task_id]);
       }

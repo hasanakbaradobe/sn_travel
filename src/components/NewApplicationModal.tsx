@@ -184,6 +184,37 @@ export const NewApplicationModal: React.FC<NewApplicationModalProps> = ({
             </select>
           </div>
 
+          {/* Optional Upcoming Client Date */}
+          {status === 'Upcoming' && (
+            <div className="p-3.5 bg-sky-50 border border-sky-200 rounded-xl space-y-2 animate-in fade-in">
+              <div className="flex items-center justify-between">
+                <label className="block text-xs font-bold text-sky-950 flex items-center gap-1.5">
+                  <Calendar className="w-4 h-4 text-sky-600" />
+                  <span>Upcoming Client Date</span>
+                  <span className="text-[11px] font-normal text-sky-700">(Optional)</span>
+                </label>
+                {deliveryDate && (
+                  <button
+                    type="button"
+                    onClick={() => setDeliveryDate('')}
+                    className="text-[11px] text-sky-700 hover:text-sky-900 underline cursor-pointer"
+                  >
+                    Clear date
+                  </button>
+                )}
+              </div>
+              <p className="text-[11px] text-sky-800">
+                Optional: If you select a future date, this will automatically be listed as an <strong>Upcoming Client</strong> task in the Calendar.
+              </p>
+              <input
+                type="date"
+                value={deliveryDate}
+                onChange={(e) => setDeliveryDate(e.target.value)}
+                className="w-full px-3 py-2 bg-white border border-sky-300 rounded-lg text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-sky-500"
+              />
+            </div>
+          )}
+
           {/* Conditional Delivery / Collection Date */}
           {(status === 'Online Review Completed' || status === 'Pending Collection') && (
             <div className="p-3.5 bg-emerald-50 border border-emerald-200 rounded-xl space-y-2 animate-in fade-in">

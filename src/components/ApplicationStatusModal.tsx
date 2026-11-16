@@ -163,7 +163,7 @@ export const ApplicationStatusModal: React.FC<ApplicationStatusModalProps> = ({
             </div>
           )}
 
-          {/* Special Delivery / Collection Date Container */}
+          {/* Special Delivery / Collection / Upcoming Date Container */}
           {isDateRequiredStatus ? (
             <div className="p-4 bg-emerald-50 border border-emerald-300 rounded-xl space-y-2 animate-in fade-in duration-150">
               <div className="flex items-center justify-between">
@@ -177,7 +177,10 @@ export const ApplicationStatusModal: React.FC<ApplicationStatusModalProps> = ({
               </div>
               <p className="text-[11px] text-emerald-800">
                 Status is <strong className="font-bold">{currentStatus}</strong>. Saving a date will automatically create/update task:{' '}
-                <strong className="font-semibold">Delivery - {application.client_name || 'Client'}</strong> in the Calendar.
+                <strong className="font-semibold">
+                  {currentStatus === 'Pending Collection' ? 'Pending Collection' : 'Delivery'} - {application.client_name || 'Client'}
+                </strong>{' '}
+                in the Calendar.
               </p>
               <input
                 type="date"
@@ -187,11 +190,45 @@ export const ApplicationStatusModal: React.FC<ApplicationStatusModalProps> = ({
                 className="w-full px-3 py-2 bg-white border border-emerald-400 rounded-lg text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-emerald-500"
               />
             </div>
+          ) : currentStatus === 'Upcoming' ? (
+            <div className="p-4 bg-sky-50 border border-sky-200 rounded-xl space-y-2 animate-in fade-in duration-150">
+              <div className="flex items-center justify-between">
+                <label className="text-xs font-bold text-sky-950 flex items-center gap-1.5">
+                  <Calendar className="w-4 h-4 text-sky-600" />
+                  <span>Upcoming Client Date</span>
+                  <span className="text-[11px] font-normal text-sky-700">(Optional)</span>
+                </label>
+                <div className="flex items-center gap-2">
+                  {deliveryDate && (
+                    <button
+                      type="button"
+                      onClick={() => setDeliveryDate('')}
+                      className="text-[11px] text-sky-700 hover:text-sky-900 underline cursor-pointer"
+                    >
+                      Clear
+                    </button>
+                  )}
+                  <span className="text-[10px] bg-sky-200 text-sky-900 font-semibold px-2 py-0.5 rounded-full flex items-center gap-1">
+                    <Sparkles className="w-2.5 h-2.5" /> Optional Calendar Task
+                  </span>
+                </div>
+              </div>
+              <p className="text-[11px] text-sky-800">
+                Optional: If you select a future date, this will automatically create/update task:{' '}
+                <strong className="font-semibold">Upcoming Client - {application.client_name || 'Client'}</strong> in the Calendar.
+              </p>
+              <input
+                type="date"
+                value={deliveryDate}
+                onChange={(e) => setDeliveryDate(e.target.value)}
+                className="w-full px-3 py-2 bg-white border border-sky-300 rounded-lg text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-sky-500"
+              />
+            </div>
           ) : application.delivery_date ? (
             <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-600 flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Clock className="w-4 h-4 text-slate-400" />
-                <span>Existing delivery date on file: <strong className="text-slate-800">{application.delivery_date}</strong></span>
+                <span>Existing scheduled date on file: <strong className="text-slate-800">{application.delivery_date}</strong></span>
               </div>
               <span className="text-[11px] text-slate-500">(Retained in history)</span>
             </div>

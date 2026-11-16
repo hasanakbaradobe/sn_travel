@@ -283,6 +283,7 @@ export interface HotelBooking {
   comment?: string | null;
   special_requests?: string | null;
   total_price?: number | null;
+  price_details?: string | null;
   currency?: string;
   checkout_task_id?: number | null;
   created_by_user_id?: number | null;

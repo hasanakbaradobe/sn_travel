@@ -1616,6 +1616,7 @@ apiRouter.post('/hotel-bookings', async (req: Request, res: Response) => {
     comment,
     special_requests,
     total_price,
+    price_details,
     currency,
   } = req.body;
 
@@ -1649,6 +1650,7 @@ apiRouter.post('/hotel-bookings', async (req: Request, res: Response) => {
         comment,
         special_requests,
         total_price,
+        price_details,
         currency,
       },
       currentUser?.id || 1

@@ -743,6 +743,7 @@ class ApiService {
     comment?: string | null;
     special_requests?: string | null;
     total_price?: number | null;
+    price_details?: string | null;
     currency?: string;
   }): Promise<HotelBooking> {
     return this.request<HotelBooking>('/hotel-bookings', {

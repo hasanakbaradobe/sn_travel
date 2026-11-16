@@ -18,12 +18,14 @@ import {
   LayoutGrid,
   List,
   RefreshCw,
+  DollarSign,
 } from 'lucide-react';
 import { HotelBooking, HotelBookingStatus, Client, Hotel } from '../types';
 import { ClientAvatar } from '../components/ClientAvatar';
 import { api } from '../services/api';
 import { NewHotelBookingModal } from '../components/NewHotelBookingModal';
 import { HotelBookingDetailModal } from '../components/HotelBookingDetailModal';
+import { getBookingPriceString, parseHotelPriceInput } from '../utils/hotelPrice';
 
 interface HotelsViewProps {
   clients: Client[];
@@ -63,6 +65,7 @@ export const HotelsView: React.FC<HotelsViewProps> = ({
       }
       const data = await api.getHotelBookings();
       setBookings(data);
+      setSelectedBooking((prev) => (prev ? data.find((x) => x.id === prev.id) || prev : null));
     } catch (err) {
       console.error('Failed to load hotel bookings', err);
     } finally {
@@ -452,6 +455,29 @@ export const HotelsView: React.FC<HotelsViewProps> = ({
                         <span className="font-semibold text-slate-800 truncate max-w-[150px]">{b.room_type_name}</span>
                       </div>
                     )}
+
+                    {(() => {
+                      const priceStr = getBookingPriceString(b);
+                      const parsed = parseHotelPriceInput(priceStr);
+                      if (parsed.total === null) return null;
+                      return (
+                        <div className="flex items-center justify-between text-[11px] bg-emerald-50/70 px-2.5 py-1.5 rounded-lg border border-emerald-200/70 text-emerald-950">
+                          <span className="flex items-center gap-1 font-medium truncate">
+                            <DollarSign className="w-3.5 h-3.5 text-emerald-700 shrink-0" />
+                            {parsed.steps.length > 1 ? (
+                              <span className="font-mono font-semibold text-emerald-800 truncate" title={parsed.cleanExpression || ''}>
+                                {parsed.cleanExpression}
+                              </span>
+                            ) : (
+                              <span>Price Paid</span>
+                            )}
+                          </span>
+                          <span className="font-extrabold text-emerald-900 bg-white px-2 py-0.5 rounded border border-emerald-200 ml-1.5 shrink-0">
+                            {parsed.steps.length > 1 ? `= ${parsed.total.toLocaleString()}` : parsed.total.toLocaleString()}
+                          </span>
+                        </div>
+                      );
+                    })()}
                   </div>
 
                   {/* Comment / Special Request Preview */}
@@ -499,13 +525,16 @@ export const HotelsView: React.FC<HotelsViewProps> = ({
                   <th className="py-3 px-4">Check-in</th>
                   <th className="py-3 px-4">Check-out</th>
                   <th className="py-3 px-4">Room Type</th>
+                  <th className="py-3 px-4">Price / Payments</th>
                   <th className="py-3 px-4">Comment</th>
                   <th className="py-3 px-4">Status</th>
                   <th className="py-3 px-4 text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {filteredBookings.map((b) => (
+                {filteredBookings.map((b) => {
+                  const parsedPrice = parseHotelPriceInput(getBookingPriceString(b));
+                  return (
                   <tr
                     key={b.id}
                     onClick={() => handleOpenDetail(b)}
@@ -541,6 +570,21 @@ export const HotelsView: React.FC<HotelsViewProps> = ({
 
                     <td className="py-3 px-4 text-slate-700">{b.room_type_name || 'Standard'}</td>
 
+                    <td className="py-3 px-4">
+                      {parsedPrice.total !== null ? (
+                        <div>
+                          <div className="font-bold text-emerald-900">{parsedPrice.total.toLocaleString()}</div>
+                          {parsedPrice.steps.length > 1 && (
+                            <div className="text-[10px] font-mono text-emerald-700">
+                              {parsedPrice.cleanExpression}
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <span className="text-slate-400">—</span>
+                      )}
+                    </td>
+
                     <td className="py-3 px-4 max-w-xs truncate text-slate-500 italic">{b.comment || '—'}</td>
 
                     <td className="py-3 px-4">
@@ -561,7 +605,8 @@ export const HotelsView: React.FC<HotelsViewProps> = ({
                       </button>
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>
