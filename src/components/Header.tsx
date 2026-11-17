@@ -84,19 +84,19 @@ export const Header: React.FC<HeaderProps> = ({
   }, [userDropdownOpen]);
 
   return (
-    <header className="h-16 bg-white/95 backdrop-blur-md border-b border-slate-200/80 sticky top-0 z-30 flex items-center justify-between px-4 sm:px-6 transition-all">
+    <header className="h-16 bg-white/95 backdrop-blur-md border-b border-slate-200/80 sticky top-0 z-30 flex items-center justify-between gap-2 px-3 sm:px-6 transition-all">
       {/* Left: Mobile hamburger & Global Search */}
-      <div className="flex items-center gap-3 flex-1 max-w-2xl">
+      <div className="flex items-center gap-2 sm:gap-3 flex-1 min-w-0 max-w-2xl">
         <button
           onClick={onToggleMobileSidebar}
-          className="lg:hidden p-2 rounded-xl text-slate-600 hover:text-slate-900 hover:bg-slate-100 transition-colors cursor-pointer"
+          className="lg:hidden p-2 rounded-xl text-slate-600 hover:text-slate-900 hover:bg-slate-100 transition-colors cursor-pointer shrink-0"
           aria-label="Toggle navigation menu"
         >
           <Menu className="w-5 h-5" />
         </button>
 
         {/* Global Search Input */}
-        <div className="relative w-full max-w-md">
+        <div className="relative w-full max-w-md min-w-0">
           <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
           <input
             ref={searchInputRef}
@@ -108,13 +108,13 @@ export const Header: React.FC<HeaderProps> = ({
                 onOpenCommandPalette();
               }
             }}
-            placeholder="Search by client name, passport, ID (e.g. CL-000001)..."
-            className="w-full pl-9 pr-14 py-2 bg-slate-50/90 hover:bg-slate-100/70 border border-slate-200 rounded-xl text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-600 focus:bg-white transition-all shadow-2xs"
+            placeholder="Search client, passport, ID..."
+            className="w-full pl-9 pr-10 sm:pr-14 py-2 bg-slate-50/90 hover:bg-slate-100/70 border border-slate-200 rounded-xl text-xs sm:text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-600 focus:bg-white transition-all shadow-2xs"
           />
           {searchQuery ? (
             <button
               onClick={() => onGlobalSearch('')}
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-xs font-semibold text-slate-400 hover:text-slate-600 px-1.5 py-0.5 rounded hover:bg-slate-200/60 transition-colors"
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[11px] font-semibold text-slate-400 hover:text-slate-600 px-1.5 py-0.5 rounded hover:bg-slate-200/60 transition-colors"
             >
               Clear
             </button>
@@ -132,25 +132,26 @@ export const Header: React.FC<HeaderProps> = ({
       </div>
 
       {/* Right: Quick Create Client + User Role Menu */}
-      <div className="flex items-center gap-2 sm:gap-3">
-        {/* Scan Passport Action */}
+      <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
+        {/* Scan Passport Action (Visible on Mobile & Desktop) */}
         {onOpenPassportScanner && (
           <button
             onClick={onOpenPassportScanner}
-            className="hidden md:flex items-center gap-1.5 px-3 py-1.5 bg-gradient-to-r from-slate-900 to-sky-950 hover:from-slate-800 hover:to-sky-900 text-sky-300 border border-sky-800/40 rounded-lg text-xs font-semibold shadow-xs transition active:scale-95"
+            className="flex items-center gap-1.5 px-2.5 sm:px-3 py-2 sm:py-1.5 bg-gradient-to-r from-slate-900 to-sky-950 hover:from-slate-800 hover:to-sky-900 text-sky-300 border border-sky-800/40 rounded-xl sm:rounded-lg text-xs font-semibold shadow-xs transition active:scale-95 cursor-pointer"
             title="Scan passport identity page with AI OCR"
           >
-            <Sparkles className="w-3.5 h-3.5 text-sky-400" />
-            <span>Scan Passport</span>
+            <Sparkles className="w-3.5 h-3.5 text-sky-400 shrink-0" />
+            <span className="hidden md:inline">Scan Passport</span>
           </button>
         )}
 
         {/* New Client Action */}
         <button
           onClick={onOpenNewClient}
-          className="flex items-center gap-1.5 px-3 py-1.5 bg-sky-700 hover:bg-sky-800 text-white rounded-lg text-sm font-medium shadow-sm transition active:scale-95"
+          className="flex items-center gap-1.5 px-2.5 sm:px-3 py-2 sm:py-1.5 bg-sky-700 hover:bg-sky-800 text-white rounded-xl sm:rounded-lg text-xs sm:text-sm font-semibold shadow-sm transition active:scale-95 cursor-pointer"
+          title="Register New Client"
         >
-          <Plus className="w-4 h-4" />
+          <Plus className="w-4 h-4 shrink-0" />
           <span className="hidden sm:inline">New Client</span>
         </button>
 

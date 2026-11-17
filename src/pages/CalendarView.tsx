@@ -192,6 +192,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
   // Direct Quick Status Change State (Online Review Completed -> Pending Collection / Rejected)
   const [localAppStatusOverrides, setLocalAppStatusOverrides] = useState<Record<number, string>>({});
   const [updatingStatusAppId, setUpdatingStatusAppId] = useState<number | null>(null);
+  const [updatingStatusEventId, setUpdatingStatusEventId] = useState<string | null>(null);
 
   useEffect(() => {
     setLocalAppStatusOverrides({});
@@ -203,12 +204,51 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
     targetStatus: 'Pending Collection' | 'Rejected' | 'Online Review Completed'
   ) => {
     e.stopPropagation();
-    if (!ev.applicationId) return;
-    const appId = ev.applicationId;
+    e.preventDefault();
+
     const cName =
       ev.clientName ||
       ev.title.replace(/^(Delivery|Pending Collection|Rejected)\s*-\s*/i, '').trim() ||
       'Client';
+
+    // Resolve application ID from event, or fallback-search applications by clientId / passportNumber / clientName
+    let resolvedAppId: number | undefined =
+      ev.applicationId && applications.some((a) => a.id === ev.applicationId)
+        ? ev.applicationId
+        : undefined;
+
+    if (!resolvedAppId) {
+      const matchedApp =
+        (ev.clientId
+          ? applications.find(
+              (a) =>
+                a.client_id === ev.clientId &&
+                (a.status === 'Online Review Completed' ||
+                  a.status === 'Pending Collection' ||
+                  a.status === 'Rejected')
+            ) || applications.find((a) => a.client_id === ev.clientId)
+          : undefined) ||
+        (ev.passportNumber
+          ? applications.find(
+              (a) =>
+                (a.passport_number || '').trim().toUpperCase() ===
+                ev.passportNumber!.trim().toUpperCase()
+            )
+          : undefined) ||
+        (cName && cName !== 'Client'
+          ? applications.find(
+              (a) => (a.client_name || '').trim().toLowerCase() === cName.trim().toLowerCase()
+            )
+          : undefined);
+      if (matchedApp) {
+        resolvedAppId = matchedApp.id;
+      } else if (ev.applicationId) {
+        resolvedAppId = ev.applicationId;
+      }
+    }
+
+    if (!resolvedAppId && !ev.taskId) return;
+
     const newTaskTitle =
       targetStatus === 'Pending Collection'
         ? `Pending Collection - ${cName}`
@@ -217,38 +257,58 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
         : `Delivery - ${cName}`;
 
     // Instant optimistic update
-    setLocalAppStatusOverrides((prev) => ({ ...prev, [appId]: targetStatus }));
+    if (resolvedAppId) {
+      setLocalAppStatusOverrides((prev) => ({ ...prev, [resolvedAppId!]: targetStatus }));
+      setUpdatingStatusAppId(resolvedAppId);
+    }
     if (ev.taskId) {
       setLocalTasks((prev) =>
         prev.map((t) => (t.id === ev.taskId ? { ...t, title: newTaskTitle } : t))
       );
     }
-    setUpdatingStatusAppId(appId);
+    setUpdatingStatusEventId(ev.id);
 
     try {
-      await api.updateApplicationStatus(
-        appId,
-        targetStatus,
-        ev.date,
-        `Status changed to ${targetStatus} directly from Calendar View`
-      );
+      let updatedApp = false;
+      if (resolvedAppId) {
+        try {
+          await api.updateApplicationStatus(
+            resolvedAppId,
+            targetStatus,
+            ev.date,
+            `Status changed to ${targetStatus} directly from Calendar View`
+          );
+          updatedApp = true;
+        } catch (appErr) {
+          // If application ID wasn't found on backend, still allow task title update below
+          if (!ev.taskId) throw appErr;
+        }
+      }
+      if (ev.taskId) {
+        await api.updateTask(ev.taskId, { title: newTaskTitle }).catch((taskErr) => {
+          if (!updatedApp) throw taskErr;
+        });
+      }
       if (onRefreshData) onRefreshData(true);
     } catch (err: any) {
       console.error('Failed to update application status from calendar:', err);
       setCalendarError('Could not update application status: ' + (err.message || 'Unknown error'));
-      setLocalAppStatusOverrides((prev) => {
-        const next = { ...prev };
-        delete next[appId];
-        return next;
-      });
+      if (resolvedAppId) {
+        setLocalAppStatusOverrides((prev) => {
+          const next = { ...prev };
+          delete next[resolvedAppId!];
+          return next;
+        });
+      }
     } finally {
       setUpdatingStatusAppId(null);
+      setUpdatingStatusEventId(null);
     }
   };
 
   const renderQuickStatusControls = (ev: CalendarEvent, theme: 'dark' | 'light' | 'compact' = 'light') => {
     const isEligibleTask =
-      !!ev.applicationId &&
+      (!!ev.applicationId || !!ev.taskId) &&
       !ev.isCompleted &&
       (ev.type === 'delivery' ||
         ev.applicationStatus === 'Online Review Completed' ||
@@ -259,14 +319,15 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
     if (!isEligibleTask) return null;
 
     const currentAppStatus =
-      ev.applicationStatus ||
       (/^Pending Collection\s*-/i.test(ev.title || '')
         ? 'Pending Collection'
         : /^Rejected\s*-/i.test(ev.title || '')
         ? 'Rejected'
-        : 'Online Review Completed');
+        : ev.applicationStatus) || 'Online Review Completed';
 
-    const isBusy = updatingStatusAppId === ev.applicationId;
+    const isBusy =
+      (!!ev.applicationId && updatingStatusAppId === ev.applicationId) ||
+      updatingStatusEventId === ev.id;
 
     if (theme === 'dark') {
       return (
@@ -390,8 +451,31 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
   const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'completed' | 'overdue'>('all');
   const [userFilter, setUserFilter] = useState<string>('all');
 
-  const todayStr = new Date().toISOString().split('T')[0];
-  const tomorrowStr = new Date(Date.now() + 86400000).toISOString().split('T')[0];
+  const formatLocalDate = (d: Date): string => {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, '0');
+    const day = String(d.getDate()).padStart(2, '0');
+    return `${y}-${m}-${day}`;
+  };
+
+  const shiftDateString = (dateStr: string, deltaDays: number): string => {
+    const clean = String(dateStr || '').trim().slice(0, 10);
+    const parts = clean.split('-').map(Number);
+    if (parts.length !== 3 || parts.some(isNaN)) {
+      const fallback = new Date();
+      fallback.setDate(fallback.getDate() + deltaDays);
+      return formatLocalDate(fallback);
+    }
+    const [y, m, d] = parts;
+    const utc = new Date(Date.UTC(y, m - 1, d + deltaDays));
+    const ny = utc.getUTCFullYear();
+    const nm = String(utc.getUTCMonth() + 1).padStart(2, '0');
+    const nd = String(utc.getUTCDate()).padStart(2, '0');
+    return `${ny}-${nm}-${nd}`;
+  };
+
+  const todayStr = formatLocalDate(new Date());
+  const tomorrowStr = shiftDateString(todayStr, 1);
 
   // Month navigation helpers
   const year = currentDate.getFullYear();
@@ -537,9 +621,8 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
     if (!task) return;
     try {
       setPostponing(true);
-      const baseDate = new Date(task.due_date > todayStr ? task.due_date : todayStr);
-      baseDate.setDate(baseDate.getDate() + daysToAdd);
-      const newDueDate = baseDate.toISOString().split('T')[0];
+      const baseDateStr = task.due_date > todayStr ? task.due_date : todayStr;
+      const newDueDate = shiftDateString(baseDateStr, daysToAdd);
 
       await handleRescheduleTask(taskId, newDueDate, task.title);
       setPostponeMenuTaskId(null);
@@ -654,20 +737,48 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
 
       const isDelivery = t.is_delivery_task === 1;
       const isFollowUp = t.title.startsWith('[Follow-up]') || t.title.toLowerCase().includes('follow-up');
-      const photo = t.client_id ? clientPhotoMap.get(t.client_id) : null;
-      const passportNum = t.passport_number || (t.client_id ? clientPassportMap.get(t.client_id) : undefined);
+      const extractedName = t.title
+        .replace(/^(\[Follow-up\]|Delivery|Pending Collection|Rejected|Upcoming Client)\s*[-:]?\s*/i, '')
+        .trim();
 
-      const linkedApp = t.application_id
-        ? appById.get(t.application_id)
-        : t.client_id
-        ? applications.find(
-            (a) =>
-              a.client_id === t.client_id &&
-              (a.status === 'Pending Collection' ||
-                a.status === 'Online Review Completed' ||
-                a.status === 'Rejected')
-          )
-        : undefined;
+      const matchedClient =
+        (t.client_id ? clients.find((c) => c.id === t.client_id) : undefined) ||
+        (t.passport_number
+          ? clients.find(
+              (c) =>
+                (c.passport_number || '').trim().toUpperCase() ===
+                t.passport_number!.trim().toUpperCase()
+            )
+          : undefined) ||
+        (extractedName
+          ? clients.find(
+              (c) => (c.full_name || '').trim().toLowerCase() === extractedName.toLowerCase()
+            )
+          : undefined);
+
+      const resolvedClientId = t.client_id || matchedClient?.id;
+      const photo = resolvedClientId ? clientPhotoMap.get(resolvedClientId) : null;
+      const passportNum =
+        t.passport_number ||
+        (resolvedClientId ? clientPassportMap.get(resolvedClientId) : undefined);
+
+      const linkedApp =
+        (t.application_id ? appById.get(t.application_id) : undefined) ||
+        (resolvedClientId
+          ? applications.find(
+              (a) =>
+                a.client_id === resolvedClientId &&
+                (a.status === 'Pending Collection' ||
+                  a.status === 'Online Review Completed' ||
+                  a.status === 'Rejected')
+            ) || applications.find((a) => a.client_id === resolvedClientId)
+          : undefined);
+
+      const finalClientId = resolvedClientId || linkedApp?.client_id || undefined;
+      const finalClientName =
+        t.client_name || matchedClient?.full_name || linkedApp?.client_name || undefined;
+      const finalClientCode =
+        t.client_code || matchedClient?.client_id || linkedApp?.client_code || undefined;
 
       const effectiveAppStatus = linkedApp
         ? localAppStatusOverrides[linkedApp.id] || linkedApp.status
@@ -676,8 +787,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
       let displayTitle = t.title;
       if (isDelivery || /^(Delivery|Pending Collection|Rejected)\s*-/i.test(t.title || '')) {
         const resolvedClientName =
-          t.client_name ||
-          linkedApp?.client_name ||
+          finalClientName ||
           t.title.replace(/^(Delivery|Pending Collection|Rejected)\s*-\s*/i, '').trim() ||
           'Client';
         if (effectiveAppStatus === 'Pending Collection') {
@@ -693,17 +803,17 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
         id: `task-${t.id}`,
         type: isDelivery ? 'delivery' : isFollowUp ? 'followup' : 'task',
         title: displayTitle,
-        subtitle: t.client_name ? `${t.client_name} (${passportNum || t.client_code || ''})` : undefined,
+        subtitle: finalClientName ? `${finalClientName} (${passportNum || finalClientCode || ''})` : undefined,
         date: cleanDate(t.due_date),
         priority: t.priority,
         status: t.status,
         isCompleted: t.status === 'Completed',
-        clientId: t.client_id || undefined,
-        clientName: t.client_name || undefined,
-        clientCode: t.client_code || undefined,
+        clientId: finalClientId,
+        clientName: finalClientName,
+        clientCode: finalClientCode,
         clientPhotoUrl: photo,
         passportNumber: passportNum || undefined,
-        applicationId: t.application_id || linkedApp?.id || undefined,
+        applicationId: linkedApp?.id || (t.application_id && appById.has(t.application_id) ? t.application_id : undefined),
         applicationCode: t.application_code || linkedApp?.application_id || undefined,
         applicationStatus: effectiveAppStatus,
         assignedUserName: t.assigned_user_name || undefined,
@@ -921,7 +1031,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
     for (let i = 0; i < 7; i++) {
       const d = new Date(startOfWeek);
       d.setDate(startOfWeek.getDate() + i);
-      const str = d.toISOString().split('T')[0];
+      const str = formatLocalDate(d);
       days.push({
         dateStr: str,
         dayNum: d.getDate(),
@@ -976,12 +1086,12 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
   }, [dailyHubTab, todayEvents, overdueEvents, todayDeliveries, todayHotels, tomorrowEvents]);
 
   return (
-    <div className="p-4 sm:p-6 lg:p-8 space-y-6 max-w-7xl mx-auto">
+    <div className="p-3.5 sm:p-6 lg:p-8 space-y-5 sm:space-y-6 max-w-7xl mx-auto">
       {/* Top Header & Action Controls */}
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 pb-2 border-b border-slate-200">
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3.5 sm:gap-4 pb-2 border-b border-slate-200">
         <div>
           <div className="flex items-center gap-2.5">
-            <div className="w-10 h-10 rounded-xl bg-sky-700 text-white flex items-center justify-center shadow-xs">
+            <div className="w-10 h-10 rounded-xl bg-sky-700 text-white flex items-center justify-center shadow-xs shrink-0">
               <CalendarIcon className="w-5 h-5" />
             </div>
             <div>
@@ -995,43 +1105,43 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
           </div>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex items-center justify-between sm:justify-start gap-2 w-full lg:w-auto">
           {/* Calendar View Switcher */}
-          <div className="bg-slate-100 p-1 rounded-xl flex text-xs font-semibold border border-slate-200 shadow-2xs">
+          <div className="bg-slate-100 p-1 rounded-xl grid grid-cols-4 sm:flex flex-1 sm:flex-initial text-xs font-semibold border border-slate-200 shadow-2xs">
             <button
               onClick={() => setCalendarView('month')}
-              className={`px-3 py-1.5 rounded-lg transition flex items-center gap-1.5 cursor-pointer ${
+              className={`px-2 sm:px-3 py-1.5 rounded-lg transition flex items-center justify-center gap-1 sm:gap-1.5 cursor-pointer ${
                 calendarView === 'month' ? 'bg-white shadow-xs text-slate-900 font-bold' : 'text-slate-500 hover:text-slate-800'
               }`}
             >
-              <CalendarDays className="w-3.5 h-3.5 text-sky-600" />
+              <CalendarDays className="w-3.5 h-3.5 text-sky-600 shrink-0" />
               <span>Month</span>
             </button>
             <button
               onClick={() => setCalendarView('week')}
-              className={`px-3 py-1.5 rounded-lg transition flex items-center gap-1.5 cursor-pointer ${
+              className={`px-2 sm:px-3 py-1.5 rounded-lg transition flex items-center justify-center gap-1 sm:gap-1.5 cursor-pointer ${
                 calendarView === 'week' ? 'bg-white shadow-xs text-slate-900 font-bold' : 'text-slate-500 hover:text-slate-800'
               }`}
             >
-              <Layers className="w-3.5 h-3.5 text-sky-600" />
+              <Layers className="w-3.5 h-3.5 text-sky-600 shrink-0" />
               <span>Week</span>
             </button>
             <button
               onClick={() => setCalendarView('day')}
-              className={`px-3 py-1.5 rounded-lg transition flex items-center gap-1.5 cursor-pointer ${
+              className={`px-2 sm:px-3 py-1.5 rounded-lg transition flex items-center justify-center gap-1 sm:gap-1.5 cursor-pointer ${
                 calendarView === 'day' ? 'bg-white shadow-xs text-slate-900 font-bold' : 'text-slate-500 hover:text-slate-800'
               }`}
             >
-              <Clock className="w-3.5 h-3.5 text-sky-600" />
+              <Clock className="w-3.5 h-3.5 text-sky-600 shrink-0" />
               <span>Day</span>
             </button>
             <button
               onClick={() => setCalendarView('agenda')}
-              className={`px-3 py-1.5 rounded-lg transition flex items-center gap-1.5 cursor-pointer ${
+              className={`px-2 sm:px-3 py-1.5 rounded-lg transition flex items-center justify-center gap-1 sm:gap-1.5 cursor-pointer ${
                 calendarView === 'agenda' ? 'bg-white shadow-xs text-slate-900 font-bold' : 'text-slate-500 hover:text-slate-800'
               }`}
             >
-              <ListOrdered className="w-3.5 h-3.5 text-sky-600" />
+              <ListOrdered className="w-3.5 h-3.5 text-sky-600 shrink-0" />
               <span>Agenda</span>
             </button>
           </div>
@@ -1039,10 +1149,10 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
           {/* New Task Button */}
           <button
             onClick={() => onOpenNewTask(selectedDate || todayStr)}
-            className="px-3.5 py-2 bg-sky-700 hover:bg-sky-800 text-white rounded-xl text-xs font-semibold shadow-xs flex items-center gap-1.5 transition active:scale-95 cursor-pointer"
+            className="px-3 sm:px-3.5 py-2 bg-sky-700 hover:bg-sky-800 text-white rounded-xl text-xs font-semibold shadow-xs flex items-center gap-1.5 transition active:scale-95 cursor-pointer shrink-0"
           >
             <Plus className="w-4 h-4" />
-            <span>New Task</span>
+            <span className="hidden xs:inline sm:inline">New Task</span>
           </button>
         </div>
       </div>
@@ -1050,10 +1160,10 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
       {/* ======================================================== */}
       {/* 🚀 TODAY'S DAILY OPERATIONS COMMAND CENTER (Interactive Hub) */}
       {/* ======================================================== */}
-      <div className="bg-gradient-to-b from-slate-900 to-slate-950 rounded-2xl border border-slate-800 text-white p-5 sm:p-6 shadow-xl space-y-5">
+      <div className="bg-gradient-to-b from-slate-900 to-slate-950 rounded-2xl border border-slate-800 text-white p-4 sm:p-6 shadow-xl space-y-4 sm:space-y-5">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-sky-500/20 border border-sky-400/30 flex items-center justify-center text-sky-400">
+            <div className="w-10 h-10 rounded-xl bg-sky-500/20 border border-sky-400/30 flex items-center justify-center text-sky-400 shrink-0">
               <Sparkles className="w-5 h-5" />
             </div>
             <div>
@@ -1062,7 +1172,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                   Daily Operations Plan
                 </h2>
                 <span className="text-[11px] px-2 py-0.5 rounded-full bg-sky-500/20 text-sky-300 font-bold border border-sky-500/30 font-mono">
-                  {new Date().toLocaleDateString('default', { weekday: 'long', month: 'short', day: 'numeric' })}
+                  {new Date().toLocaleDateString('default', { weekday: 'short', month: 'short', day: 'numeric' })}
                 </span>
               </div>
               <p className="text-xs text-slate-400 mt-0.5">
@@ -1072,15 +1182,15 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
           </div>
 
           {/* Today's Progress Bar */}
-          <div className="flex items-center gap-3 bg-slate-800/80 px-4 py-2.5 rounded-xl border border-slate-700/80">
-            <div className="text-right">
-              <div className="text-xs font-bold text-white flex items-center gap-1.5 justify-end">
+          <div className="flex items-center justify-between sm:justify-end gap-3 bg-slate-800/80 px-3.5 py-2 sm:px-4 sm:py-2.5 rounded-xl border border-slate-700/80">
+            <div className="sm:text-right">
+              <div className="text-xs font-bold text-white flex items-center gap-1.5 sm:justify-end">
                 <span>{todayCompletedCount} of {todayEvents.length} Done</span>
                 <span className="text-emerald-400 font-mono">({todayProgressPercent}%)</span>
               </div>
               <div className="text-[10px] text-slate-400">Today&apos;s Completion Rate</div>
             </div>
-            <div className="w-20 sm:w-28 h-2 bg-slate-700 rounded-full overflow-hidden">
+            <div className="w-24 sm:w-28 h-2 bg-slate-700 rounded-full overflow-hidden shrink-0">
               <div
                 className="h-full bg-gradient-to-r from-sky-400 to-emerald-400 rounded-full transition-all duration-300"
                 style={{ width: `${todayProgressPercent}%` }}
@@ -1090,7 +1200,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
         </div>
 
         {/* Hub Tabs / Filter Pills */}
-        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs font-semibold scrollbar-none">
+        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 text-xs font-semibold no-scrollbar">
           <button
             onClick={() => setDailyHubTab('today')}
             className={`px-3 py-1.5 rounded-xl transition flex items-center gap-1.5 whitespace-nowrap cursor-pointer ${
@@ -1161,7 +1271,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
         </div>
 
         {/* Task Cards Grid for Active Hub Tab */}
-        <div className="space-y-2.5 max-h-80 overflow-y-auto pr-1">
+        <div className="space-y-2.5 max-h-96 sm:max-h-80 overflow-y-auto pr-0.5 sm:pr-1">
           {activeDailyHubEvents.length === 0 ? (
             <div className="p-8 text-center bg-slate-900/60 rounded-xl border border-dashed border-slate-800 text-slate-400 text-xs">
               <CheckCircle2 className="w-6 h-6 text-emerald-500/80 mx-auto mb-2" />
@@ -1204,11 +1314,11 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                       : 'bg-slate-900/80 border-slate-800 hover:border-slate-700'
                   }`}
                 >
-                  <div className="flex items-start gap-3 min-w-0">
-                    {/* Drag Grip Handle */}
+                  <div className="flex items-start gap-2.5 sm:gap-3 min-w-0">
+                    {/* Drag Grip Handle (Desktop) */}
                     {isDraggable && (
                       <div
-                        className="text-slate-500 group-hover/hub:text-sky-400 mt-1 shrink-0 cursor-grab active:cursor-grabbing transition"
+                        className="hidden sm:block text-slate-500 group-hover/hub:text-sky-400 mt-1 shrink-0 cursor-grab active:cursor-grabbing transition"
                         title="Drag onto calendar below to reschedule"
                       >
                         <GripVertical className="w-4 h-4" />
@@ -1272,14 +1382,14 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                         photoUrl={ev.clientPhotoUrl}
                         size="sm"
                         allowPreview={true}
-                        className="ring-1 ring-slate-700 shadow-xs"
+                        className="ring-1 ring-slate-700 shadow-xs shrink-0"
                       />
                     )}
 
-                    <div className="min-w-0">
+                    <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2 flex-wrap">
                         <span
-                          className={`font-semibold text-xs sm:text-sm ${
+                          className={`font-semibold text-xs sm:text-sm leading-snug ${
                             ev.isCompleted ? 'line-through text-slate-500' : 'text-white'
                           }`}
                         >
@@ -1300,7 +1410,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                       </div>
 
                       {ev.subtitle && (
-                        <div className="text-xs text-slate-400 mt-0.5 truncate">{ev.subtitle}</div>
+                        <div className="text-xs text-slate-400 mt-0.5 break-words sm:truncate">{ev.subtitle}</div>
                       )}
 
                       <div className="flex items-center gap-2 text-[11px] text-slate-400 mt-1 flex-wrap font-mono">
@@ -1332,8 +1442,8 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                     </div>
                   </div>
 
-                  {/* Right Actions: 1-Click Postpone & Shortcuts */}
-                  <div className="flex items-center gap-1.5 self-end sm:self-center shrink-0 flex-wrap justify-end">
+                  {/* Right / Bottom Actions: 1-Click Postpone & Shortcuts */}
+                  <div className="w-full sm:w-auto pt-2.5 sm:pt-0 border-t border-slate-800/80 sm:border-t-0 flex items-center gap-1.5 shrink-0 flex-wrap justify-between sm:justify-end">
                     {renderQuickStatusControls(ev, 'dark')}
                     {ev.taskId && !ev.isCompleted && (
                       <>
@@ -1491,44 +1601,44 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
       </div>
 
       {/* KPI Metric Strip */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-5 gap-3">
-        <div className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-xs flex items-center gap-3">
-          <div className="w-9 h-9 rounded-lg bg-sky-50 text-sky-700 flex items-center justify-center shrink-0">
+      <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-5 gap-2.5 sm:gap-3">
+        <div className="bg-white p-3 sm:p-3.5 rounded-xl border border-slate-200 shadow-xs flex items-center gap-2.5 sm:gap-3">
+          <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-lg bg-sky-50 text-sky-700 flex items-center justify-center shrink-0">
             <CalendarIcon className="w-4 h-4" />
           </div>
-          <div>
-            <div className="text-lg font-bold text-slate-900 leading-tight">{metrics.total}</div>
-            <div className="text-[11px] text-slate-500">Scheduled This Month</div>
+          <div className="min-w-0">
+            <div className="text-base sm:text-lg font-bold text-slate-900 leading-tight">{metrics.total}</div>
+            <div className="text-[10px] sm:text-[11px] text-slate-500 truncate">This Month</div>
           </div>
         </div>
 
-        <div className="bg-white p-3.5 rounded-xl border border-emerald-200 bg-emerald-50/20 shadow-xs flex items-center gap-3">
-          <div className="w-9 h-9 rounded-lg bg-emerald-100 text-emerald-800 flex items-center justify-center shrink-0">
+        <div className="bg-white p-3 sm:p-3.5 rounded-xl border border-emerald-200 bg-emerald-50/20 shadow-xs flex items-center gap-2.5 sm:gap-3">
+          <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-lg bg-emerald-100 text-emerald-800 flex items-center justify-center shrink-0">
             <Package className="w-4 h-4" />
           </div>
-          <div>
-            <div className="text-lg font-bold text-emerald-900 leading-tight">{metrics.deliveries}</div>
-            <div className="text-[11px] text-emerald-700 font-medium">Passport Deliveries</div>
+          <div className="min-w-0">
+            <div className="text-base sm:text-lg font-bold text-emerald-900 leading-tight">{metrics.deliveries}</div>
+            <div className="text-[10px] sm:text-[11px] text-emerald-700 font-medium truncate">Deliveries</div>
           </div>
         </div>
 
-        <div className="bg-white p-3.5 rounded-xl border border-amber-200 bg-amber-50/20 shadow-xs flex items-center gap-3">
-          <div className="w-9 h-9 rounded-lg bg-amber-100 text-amber-800 flex items-center justify-center shrink-0">
+        <div className="bg-white p-3 sm:p-3.5 rounded-xl border border-amber-200 bg-amber-50/20 shadow-xs flex items-center gap-2.5 sm:gap-3">
+          <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-lg bg-amber-100 text-amber-800 flex items-center justify-center shrink-0">
             <Clock className="w-4 h-4" />
           </div>
-          <div>
-            <div className="text-lg font-bold text-amber-900 leading-tight">{metrics.urgent}</div>
-            <div className="text-[11px] text-amber-700 font-medium">Urgent Deadlines</div>
+          <div className="min-w-0">
+            <div className="text-base sm:text-lg font-bold text-amber-900 leading-tight">{metrics.urgent}</div>
+            <div className="text-[10px] sm:text-[11px] text-amber-700 font-medium truncate">Urgent Items</div>
           </div>
         </div>
 
-        <div className="bg-white p-3.5 rounded-xl border border-red-200 bg-red-50/20 shadow-xs flex items-center gap-3">
-          <div className="w-9 h-9 rounded-lg bg-red-100 text-red-700 flex items-center justify-center shrink-0">
+        <div className="bg-white p-3 sm:p-3.5 rounded-xl border border-red-200 bg-red-50/20 shadow-xs flex items-center gap-2.5 sm:gap-3">
+          <div className="w-8 h-8 sm:w-9 sm:h-9 rounded-lg bg-red-100 text-red-700 flex items-center justify-center shrink-0">
             <AlertTriangle className="w-4 h-4" />
           </div>
-          <div>
-            <div className="text-lg font-bold text-red-800 leading-tight">{metrics.overdue}</div>
-            <div className="text-[11px] text-red-600 font-medium">Overdue Items</div>
+          <div className="min-w-0">
+            <div className="text-base sm:text-lg font-bold text-red-800 leading-tight">{metrics.overdue}</div>
+            <div className="text-[10px] sm:text-[11px] text-red-600 font-medium truncate">Overdue</div>
           </div>
         </div>
 
@@ -1552,7 +1662,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
       </div>
 
       {/* Filter & Search Bar */}
-      <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-xs flex flex-col md:flex-row items-center justify-between gap-3">
+      <div className="bg-white p-3 sm:p-3.5 rounded-2xl border border-slate-200 shadow-xs flex flex-col md:flex-row items-center justify-between gap-2.5 sm:gap-3">
         {/* Search */}
         <div className="relative w-full md:max-w-xs">
           <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
@@ -1561,19 +1671,19 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Search task, client, passport, app ID..."
-            className="w-full pl-9 pr-4 py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-600"
+            className="w-full pl-9 pr-4 py-2 sm:py-1.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-600"
           />
         </div>
 
         {/* Filters */}
-        <div className="flex flex-wrap items-center gap-2 w-full md:w-auto justify-end">
+        <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-2 w-full md:w-auto justify-end">
           {/* Type Filter */}
-          <div className="flex items-center gap-1.5 bg-slate-50 px-2.5 py-1 rounded-xl border border-slate-200 text-xs">
-            <Filter className="w-3.5 h-3.5 text-slate-400" />
+          <div className="flex items-center gap-1.5 bg-slate-50 px-2.5 py-2 sm:py-1 rounded-xl border border-slate-200 text-xs">
+            <Filter className="w-3.5 h-3.5 text-slate-400 shrink-0" />
             <select
               value={typeFilter}
               onChange={(e) => setTypeFilter(e.target.value as any)}
-              className="bg-transparent font-semibold text-slate-700 focus:outline-none cursor-pointer text-xs"
+              className="w-full bg-transparent font-semibold text-slate-700 focus:outline-none cursor-pointer text-xs"
             >
               <option value="all">All Event Types</option>
               <option value="followup">💬 Client Follow-ups</option>
@@ -1585,11 +1695,11 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
           </div>
 
           {/* Status Filter */}
-          <div className="bg-slate-50 px-2.5 py-1 rounded-xl border border-slate-200 text-xs">
+          <div className="bg-slate-50 px-2.5 py-2 sm:py-1 rounded-xl border border-slate-200 text-xs">
             <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value as any)}
-              className="bg-transparent font-semibold text-slate-700 focus:outline-none cursor-pointer text-xs"
+              className="w-full bg-transparent font-semibold text-slate-700 focus:outline-none cursor-pointer text-xs"
             >
               <option value="all">All Statuses</option>
               <option value="pending">⏳ Pending &amp; Active</option>
@@ -1624,44 +1734,46 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                 setStatusFilter('all');
                 setUserFilter('all');
               }}
-              className="px-2.5 py-1 text-xs text-sky-700 hover:text-sky-900 font-semibold cursor-pointer"
+              className="col-span-2 sm:col-span-1 px-2.5 py-1 text-xs text-sky-700 hover:text-sky-900 font-semibold cursor-pointer text-center"
             >
-              Reset
+              Reset Filters
             </button>
           )}
         </div>
       </div>
 
       {/* Month / Week / Day Navigation Header */}
-      <div className="bg-white p-3.5 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div className="flex items-center gap-1">
+      <div className="bg-white p-3 sm:p-3.5 rounded-2xl border border-slate-200 shadow-xs flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+          <div className="flex items-center gap-1 shrink-0">
             <button
               onClick={prevPeriod}
               className="p-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 transition active:scale-95 cursor-pointer"
+              aria-label="Previous period"
             >
               <ChevronLeft className="w-4 h-4" />
             </button>
             <button
               onClick={nextPeriod}
               className="p-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 transition active:scale-95 cursor-pointer"
+              aria-label="Next period"
             >
               <ChevronRight className="w-4 h-4" />
             </button>
           </div>
 
-          <div>
-            <h2 className="text-base sm:text-lg font-bold text-slate-900 capitalize">
+          <div className="min-w-0">
+            <h2 className="text-sm sm:text-lg font-bold text-slate-900 capitalize truncate">
               {calendarView === 'month' && monthName}
-              {calendarView === 'week' && `Week of ${daysInWeek[0]?.dateStr} to ${daysInWeek[6]?.dateStr}`}
-              {calendarView === 'day' && currentDate.toLocaleDateString('default', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })}
-              {calendarView === 'agenda' && `Schedule Overview (${monthName})`}
+              {calendarView === 'week' && `Week of ${daysInWeek[0]?.dateStr}`}
+              {calendarView === 'day' && currentDate.toLocaleDateString('default', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}
+              {calendarView === 'agenda' && `Agenda (${monthName})`}
             </h2>
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
-          <div className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 bg-slate-100/90 text-slate-600 rounded-xl text-[11px] font-medium border border-slate-200">
+        <div className="flex items-center gap-2 shrink-0">
+          <div className="hidden md:flex items-center gap-1.5 px-2.5 py-1 bg-slate-100/90 text-slate-600 rounded-xl text-[11px] font-medium border border-slate-200">
             <GripVertical className="w-3.5 h-3.5 text-sky-600" />
             <span>Drag tasks to reschedule</span>
           </div>
@@ -1669,7 +1781,8 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
             onClick={goToToday}
             className="px-3 py-1.5 text-xs font-bold bg-sky-50 hover:bg-sky-100 text-sky-800 rounded-xl border border-sky-200 transition active:scale-95 cursor-pointer"
           >
-            Today ({todayStr})
+            <span>Today</span>
+            <span className="hidden sm:inline"> ({todayStr})</span>
           </button>
         </div>
       </div>
@@ -1677,8 +1790,14 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
       {/* VIEW: Month View */}
       {calendarView === 'month' && (
         <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
+          {/* Mobile Quick Tip Banner */}
+          <div className="sm:hidden px-3.5 py-2 bg-slate-50 border-b border-slate-200 flex items-center justify-between text-[11px] text-slate-600">
+            <span>Tap any date to inspect or update tasks &amp; status</span>
+            <span className="font-mono font-bold text-sky-700">{metrics.total} items</span>
+          </div>
+
           {/* Day Names Header */}
-          <div className="grid grid-cols-7 border-b border-slate-200 bg-slate-50 text-center py-2.5 text-xs font-bold text-slate-500 uppercase tracking-wider">
+          <div className="grid grid-cols-7 border-b border-slate-200 bg-slate-50 text-center py-2 sm:py-2.5 text-[10px] sm:text-xs font-bold text-slate-500 uppercase tracking-wider">
             <span>Sun</span>
             <span>Mon</span>
             <span>Tue</span>
@@ -1689,8 +1808,8 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
           </div>
 
           {/* Month Day Cells */}
-          <div className="grid grid-cols-7 auto-rows-fr divide-x divide-y divide-slate-100 min-h-[580px]">
-            {daysInMonth.map((cell, idx) => {
+          <div className="grid grid-cols-7 auto-rows-fr divide-x divide-y divide-slate-100 min-h-[370px] sm:min-h-[580px]">
+            {daysInMonth.map((cell) => {
               const cellEvents = eventsByDate[cell.dateStr] || [];
               const isToday = cell.dateStr === todayStr;
               const isSelected = selectedDate === cell.dateStr;
@@ -1706,7 +1825,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                   onDragOver={(e) => handleCellDragOver(e, cell.dateStr)}
                   onDragLeave={(e) => handleCellDragLeave(e, cell.dateStr)}
                   onDrop={(e) => handleCellDrop(e, cell.dateStr)}
-                  className={`p-1.5 sm:p-2 min-h-[110px] flex flex-col justify-between transition cursor-pointer group relative ${
+                  className={`p-1 sm:p-2 min-h-[68px] sm:min-h-[110px] flex flex-col justify-between transition cursor-pointer group relative ${
                     isOverTarget
                       ? 'bg-sky-100/90 ring-2 ring-sky-600 shadow-inner z-10 border-sky-400'
                       : draggingTaskId !== null
@@ -1716,9 +1835,9 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                     !cell.isCurrentMonth
                       ? 'bg-slate-50/50 text-slate-300'
                       : isSelected
-                      ? 'bg-sky-50/70 ring-2 ring-sky-600 inset-0'
+                      ? 'bg-sky-50/80 ring-2 ring-sky-600 inset-0 z-10'
                       : hasRejectedEvent
-                      ? 'bg-rose-50/40 hover:bg-rose-50/70'
+                      ? 'bg-rose-50/45 hover:bg-rose-50/70'
                       : isToday
                       ? 'bg-amber-50/30'
                       : 'bg-white hover:bg-slate-50/70'
@@ -1726,7 +1845,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                 >
                   <div className="flex items-center justify-between mb-1">
                     <span
-                      className={`text-xs font-semibold px-2 py-0.5 rounded-lg ${
+                      className={`text-[11px] sm:text-xs font-semibold px-1.5 sm:px-2 py-0.5 rounded-md sm:rounded-lg ${
                         isToday
                           ? 'bg-sky-700 text-white font-bold shadow-xs'
                           : cell.isCurrentMonth
@@ -1738,14 +1857,14 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                     </span>
 
                     {cellEvents.length > 0 && (
-                      <span className="text-[10px] px-1.5 py-0.5 bg-slate-100 text-slate-600 font-bold rounded-md">
+                      <span className="text-[9px] sm:text-[10px] px-1 sm:px-1.5 py-0.2 bg-slate-100 text-slate-700 font-bold rounded-md">
                         {cellEvents.length}
                       </span>
                     )}
                   </div>
 
                   {/* Event Pills */}
-                  <div className="space-y-1 overflow-y-auto max-h-24">
+                  <div className="space-y-1 overflow-y-auto max-h-16 sm:max-h-24 no-scrollbar">
                     {cellEvents.slice(0, 3).map((ev) => {
                       const isCompleted = ev.isCompleted;
                       const isRejected = !isCompleted && (ev.applicationStatus === 'Rejected' || /^Rejected\s*-/i.test(ev.title || ''));
@@ -1755,6 +1874,11 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                       const isDraggable = !!((ev.taskId || ev.applicationId) && !isCompleted);
                       const isBeingDragged = !!(ev.taskId && draggingTaskId === ev.taskId);
 
+                      // Clean short label for tiny mobile cells so it stays legible
+                      const mobileShortLabel = ev.clientName
+                        ? ev.clientName.split(' ')[0]
+                        : ev.title.replace(/^(Pending Collection|Delivery|Rejected|Upcoming Client)\s*-\s*/i, '');
+
                       return (
                         <div
                           key={ev.id}
@@ -1762,13 +1886,13 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                           onDragStart={(e) => isDraggable && handleDragStart(e, ev)}
                           onDragEnd={handleDragEnd}
                           onClick={(e) => {
-                            if (ev.rawBooking) {
+                            if (ev.rawBooking && window.innerWidth >= 640) {
                               e.stopPropagation();
                               setSelectedHotelBooking(ev.rawBooking);
                             }
                           }}
                           title={ev.rawBooking ? 'Click to view hotel booking details' : isDraggable ? 'Drag onto any day to reschedule' : undefined}
-                          className={`text-[11px] p-1.5 rounded-lg border text-left transition flex items-start gap-1 shadow-2xs group/pill select-none ${
+                          className={`text-[9px] sm:text-[11px] px-1 py-0.5 sm:p-1.5 rounded sm:rounded-lg border text-left transition flex items-center sm:items-start gap-1 shadow-2xs group/pill select-none ${
                             isBeingDragged
                               ? 'opacity-25 scale-95 border-dashed border-sky-500 bg-sky-100'
                               : ev.rawBooking
@@ -1780,7 +1904,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                             isCompleted
                               ? 'bg-slate-100 border-slate-200 text-slate-400 line-through'
                               : isRejected
-                              ? 'bg-rose-100/85 border-rose-300 border-l-4 border-l-rose-500 text-rose-900 font-semibold'
+                              ? 'bg-rose-100/85 border-rose-300 border-l-2 sm:border-l-4 border-l-rose-500 text-rose-900 font-semibold'
                               : isHotel
                               ? 'bg-teal-50 border-teal-300 text-teal-950 font-semibold'
                               : isFollowUp
@@ -1795,7 +1919,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                           }`}
                         >
                           {isDraggable && (
-                            <GripVertical className="w-3 h-3 text-slate-400 group-hover/pill:text-sky-600 mt-0.5 shrink-0 opacity-0 group-hover/pill:opacity-100 transition" />
+                            <GripVertical className="hidden sm:block w-3 h-3 text-slate-400 group-hover/pill:text-sky-600 mt-0.5 shrink-0 opacity-0 group-hover/pill:opacity-100 transition" />
                           )}
 
                           {ev.taskId ? (
@@ -1805,7 +1929,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                                 e.stopPropagation();
                                 if (ev.taskId) onToggleTask(ev.taskId);
                               }}
-                              className="mt-0.5 shrink-0 cursor-pointer"
+                              className="hidden sm:inline-flex mt-0.5 shrink-0 cursor-pointer"
                               title={isCompleted ? 'Mark as Pending' : 'Mark as Completed'}
                             >
                               {isCompleted ? (
@@ -1821,7 +1945,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                                 e.stopPropagation();
                                 if (ev.rawBooking) handleToggleHotelBooking(ev.rawBooking);
                               }}
-                              className="mt-0.5 shrink-0 cursor-pointer"
+                              className="hidden sm:inline-flex mt-0.5 shrink-0 cursor-pointer"
                               title={isCompleted ? 'Mark as Confirmed' : 'Mark as Checked Out (Completed)'}
                             >
                               {isCompleted ? (
@@ -1837,7 +1961,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                                 e.stopPropagation();
                                 if (ev.rawApp && onToggleApplicationDelivery) onToggleApplicationDelivery(ev.rawApp);
                               }}
-                              className="mt-0.5 shrink-0 cursor-pointer text-amber-500 hover:text-amber-600"
+                              className="hidden sm:inline-flex mt-0.5 shrink-0 cursor-pointer text-amber-500 hover:text-amber-600"
                               title={isCompleted ? 'Returned' : 'Mark as Returned'}
                             >
                               {isCompleted ? (
@@ -1847,19 +1971,25 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                               )}
                             </button>
                           ) : (
-                            <span className="mt-0.5 text-xs">
+                            <span className="hidden sm:inline mt-0.5 text-xs">
                               {isDelivery ? '📦' : '🏨'}
                             </span>
                           )}
 
-                          <span className="truncate flex-1 font-medium">{ev.title}</span>
+                          {/* Mobile compact label vs Desktop full title */}
+                          <span className="sm:hidden truncate flex-1 font-semibold leading-tight">
+                            {mobileShortLabel}
+                          </span>
+                          <span className="hidden sm:inline truncate flex-1 font-medium">
+                            {ev.title}
+                          </span>
                         </div>
                       );
                     })}
 
                     {cellEvents.length > 3 && (
-                      <div className="text-[10px] text-slate-500 font-semibold text-center py-0.5">
-                        +{cellEvents.length - 3} more items
+                      <div className="text-[9px] sm:text-[10px] text-slate-500 font-semibold text-center py-0.5">
+                        +{cellEvents.length - 3} more
                       </div>
                     )}
                   </div>
@@ -1876,7 +2006,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                       e.stopPropagation();
                       onOpenNewTask(cell.dateStr);
                     }}
-                    className="opacity-0 group-hover:opacity-100 text-[10px] text-sky-700 font-semibold self-center py-0.5 hover:underline transition cursor-pointer"
+                    className="hidden sm:block opacity-0 group-hover:opacity-100 text-[10px] text-sky-700 font-semibold self-center py-0.5 hover:underline transition cursor-pointer"
                   >
                     + Add Task
                   </button>
@@ -1891,7 +2021,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
       {calendarView === 'week' && (
         <div className="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
           <div className="grid grid-cols-1 sm:grid-cols-7 divide-y sm:divide-y-0 sm:divide-x divide-slate-200">
-            {daysInWeek.map((col, idx) => {
+            {daysInWeek.map((col) => {
               const colEvents = eventsByDate[col.dateStr] || [];
               const isToday = col.isToday;
               const isOverTarget = dragOverDate === col.dateStr;
@@ -1902,7 +2032,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                   onDragOver={(e) => handleCellDragOver(e, col.dateStr)}
                   onDragLeave={(e) => handleCellDragLeave(e, col.dateStr)}
                   onDrop={(e) => handleCellDrop(e, col.dateStr)}
-                  className={`p-3 min-h-[400px] flex flex-col transition relative ${
+                  className={`p-3 min-h-[220px] sm:min-h-[400px] flex flex-col transition relative ${
                     isOverTarget
                       ? 'bg-sky-100/90 ring-2 ring-sky-600 shadow-inner z-10 border-sky-400'
                       : draggingTaskId !== null
@@ -1912,10 +2042,10 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                       : 'bg-white'
                   }`}
                 >
-                  <div className="text-center pb-2.5 border-b border-slate-100 mb-3">
+                  <div className="flex sm:flex-col items-center justify-between sm:justify-center text-center pb-2.5 border-b border-slate-100 mb-3">
                     <div className="text-xs font-semibold text-slate-500 uppercase">{col.dayName}</div>
                     <div
-                      className={`text-lg font-bold inline-flex items-center justify-center w-8 h-8 rounded-full mt-1 ${
+                      className={`text-sm sm:text-lg font-bold inline-flex items-center justify-center w-7 h-7 sm:w-8 sm:h-8 rounded-full sm:mt-1 ${
                         isToday ? 'bg-sky-700 text-white' : 'text-slate-900'
                       }`}
                     >
@@ -1932,7 +2062,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
 
                   <div className="space-y-2 flex-1 overflow-y-auto">
                     {colEvents.length === 0 ? (
-                      <div className="text-center py-8 text-[11px] text-slate-400">No events</div>
+                      <div className="text-center py-6 sm:py-8 text-[11px] text-slate-400">No events</div>
                     ) : (
                       colEvents.map((ev) => {
                         const isDraggable = !!((ev.taskId || ev.applicationId) && !ev.isCompleted);
@@ -1966,7 +2096,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                           >
                             <div className="flex items-start gap-1.5">
                               {isDraggable && (
-                                <GripVertical className="w-3.5 h-3.5 text-slate-400 group-hover/weekpill:text-sky-600 mt-0.5 shrink-0 opacity-40 group-hover/weekpill:opacity-100 transition" />
+                                <GripVertical className="hidden sm:block w-3.5 h-3.5 text-slate-400 group-hover/weekpill:text-sky-600 mt-0.5 shrink-0 opacity-40 group-hover/weekpill:opacity-100 transition" />
                               )}
 
                               {ev.taskId ? (
@@ -2038,19 +2168,19 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
 
       {/* VIEW: Day View */}
       {calendarView === 'day' && (
-        <div className="bg-white rounded-2xl border border-slate-200 shadow-xs p-6 space-y-6">
-          <div className="flex items-center justify-between pb-4 border-b border-slate-200">
+        <div className="bg-white rounded-2xl border border-slate-200 shadow-xs p-4 sm:p-6 space-y-5 sm:space-y-6">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-4 border-b border-slate-200">
             <div>
-              <h3 className="font-bold text-lg text-slate-900">
+              <h3 className="font-bold text-base sm:text-lg text-slate-900">
                 {currentDate.toLocaleDateString('default', { weekday: 'long', month: 'long', day: 'numeric', year: 'numeric' })}
               </h3>
               <p className="text-xs text-slate-500">
-                {(eventsByDate[currentDate.toISOString().split('T')[0]] || []).length} scheduled operations for this day
+                {(eventsByDate[formatLocalDate(currentDate)] || []).length} scheduled operations for this day
               </p>
             </div>
             <button
-              onClick={() => onOpenNewTask(currentDate.toISOString().split('T')[0])}
-              className="px-4 py-2 bg-sky-700 hover:bg-sky-800 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-xs cursor-pointer"
+              onClick={() => onOpenNewTask(formatLocalDate(currentDate))}
+              className="px-4 py-2 bg-sky-700 hover:bg-sky-800 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 shadow-xs cursor-pointer self-start sm:self-auto"
             >
               <Plus className="w-4 h-4" />
               <span>Add Task Today</span>
@@ -2058,27 +2188,27 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
           </div>
 
           <div className="space-y-3">
-            {(eventsByDate[currentDate.toISOString().split('T')[0]] || []).length === 0 ? (
+            {(eventsByDate[formatLocalDate(currentDate)] || []).length === 0 ? (
               <div className="p-12 text-center text-slate-400 text-xs">
                 No tasks or passport deliveries scheduled for this day. Click &quot;Add Task Today&quot; to create one.
               </div>
             ) : (
-              (eventsByDate[currentDate.toISOString().split('T')[0]] || []).map((ev) => {
+              (eventsByDate[formatLocalDate(currentDate)] || []).map((ev) => {
                 const isRejected = !ev.isCompleted && (ev.applicationStatus === 'Rejected' || /^Rejected\s*-/i.test(ev.title || ''));
                 return (
                 <div
                   key={ev.id}
-                  className={`p-4 border rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 transition shadow-2xs ${
+                  className={`p-3.5 sm:p-4 border rounded-2xl flex flex-col sm:flex-row sm:items-center justify-between gap-3 transition shadow-2xs ${
                     isRejected
                       ? 'bg-rose-50/75 border-rose-300 border-l-4 border-l-rose-500 hover:bg-rose-50'
                       : 'bg-slate-50 border-slate-200 hover:bg-white hover:border-sky-300'
                   }`}
                 >
-                  <div className="flex items-center gap-3">
+                  <div className="flex items-start sm:items-center gap-3">
                     {ev.taskId ? (
                       <button
                         onClick={() => ev.taskId && onToggleTask(ev.taskId)}
-                        className="text-slate-400 hover:text-emerald-600 transition cursor-pointer"
+                        className="mt-0.5 sm:mt-0 text-slate-400 hover:text-emerald-600 transition cursor-pointer shrink-0"
                         title={ev.isCompleted ? 'Mark as Pending' : 'Mark as Completed'}
                       >
                         {ev.isCompleted ? (
@@ -2090,7 +2220,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                     ) : ev.rawBooking ? (
                       <button
                         onClick={() => ev.rawBooking && handleToggleHotelBooking(ev.rawBooking)}
-                        className="text-teal-500 hover:text-teal-700 transition cursor-pointer"
+                        className="mt-0.5 sm:mt-0 text-teal-500 hover:text-teal-700 transition cursor-pointer shrink-0"
                         title={ev.isCompleted ? 'Mark as Confirmed' : 'Mark as Checked Out (Completed)'}
                       >
                         {ev.isCompleted ? (
@@ -2102,7 +2232,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                     ) : ev.rawApp ? (
                       <button
                         onClick={() => ev.rawApp && onToggleApplicationDelivery && onToggleApplicationDelivery(ev.rawApp)}
-                        className="text-amber-500 hover:text-amber-600 transition cursor-pointer"
+                        className="mt-0.5 sm:mt-0 text-amber-500 hover:text-amber-600 transition cursor-pointer shrink-0"
                         title={ev.isCompleted ? 'Returned' : 'Mark as Returned'}
                       >
                         {ev.isCompleted ? (
@@ -2118,10 +2248,10 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                         photoUrl={ev.clientPhotoUrl}
                         size="md"
                         allowPreview={true}
-                        className="shadow-xs"
+                        className="shadow-xs shrink-0"
                       />
                     )}
-                    <div>
+                    <div className="min-w-0">
                       <div className={`font-bold text-sm ${ev.isCompleted ? 'line-through text-slate-400' : 'text-slate-900'}`}>
                         {ev.title}
                       </div>
@@ -2129,7 +2259,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-2 flex-wrap justify-end">
+                  <div className="pt-2.5 sm:pt-0 border-t border-slate-200/70 sm:border-t-0 flex items-center gap-2 flex-wrap justify-between sm:justify-end">
                     {renderQuickStatusControls(ev, 'light')}
                     {ev.passportNumber && (
                       <button
@@ -2261,7 +2391,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                       )}
 
                       <div>
-                        <div className="flex items-center gap-2">
+                        <div className="flex items-center gap-2 flex-wrap">
                           <span
                             className={`font-semibold text-sm ${
                               ev.isCompleted ? 'line-through text-slate-400' : 'text-slate-900'
@@ -2304,7 +2434,7 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-2 self-end sm:self-auto flex-wrap justify-end">
+                    <div className="w-full sm:w-auto pt-2.5 sm:pt-0 border-t border-slate-100 sm:border-t-0 flex items-center gap-2 self-end sm:self-auto flex-wrap justify-between sm:justify-end">
                       {renderQuickStatusControls(ev, 'light')}
                       {priorityBadge && (
                         <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full border ${priorityBadge.bg}`}>
@@ -2363,36 +2493,85 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
       )}
 
       {/* ======================================================== */}
-      {/* 📅 SELECTED DAY QUICK INSPECTOR MODAL / DRAWER */}
+      {/* 📅 SELECTED DAY QUICK INSPECTOR MODAL / MOBILE SHEET */}
       {/* ======================================================== */}
       {selectedDate && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-xs animate-in fade-in duration-150 cursor-pointer"
+          className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-slate-950/60 backdrop-blur-xs animate-in fade-in duration-150 cursor-pointer"
           onClick={() => setSelectedDate(null)}
         >
           <div
-            className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-lg w-full max-h-[85vh] flex flex-col overflow-hidden animate-in zoom-in-95 duration-150 cursor-default"
+            className="bg-white rounded-t-3xl sm:rounded-2xl shadow-2xl border border-slate-200 max-w-lg w-full max-h-[88vh] sm:max-h-[85vh] flex flex-col overflow-hidden animate-in slide-in-from-bottom-4 sm:zoom-in-95 duration-150 cursor-default"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="px-5 py-4 bg-gradient-to-r from-slate-900 via-sky-950 to-slate-900 text-white flex items-center justify-between shrink-0">
-              <div className="flex items-center gap-2.5">
-                <CalendarIcon className="w-5 h-5 text-sky-400" />
-                <div>
-                  <h3 className="font-bold text-sm text-white">Schedule for {selectedDate}</h3>
+            {/* Mobile Drag Pill Handle */}
+            <div className="sm:hidden pt-2 pb-1 bg-slate-900 flex justify-center">
+              <div className="w-10 h-1 rounded-full bg-slate-700" />
+            </div>
+
+            <div className="px-4 sm:px-5 py-3.5 sm:py-4 bg-gradient-to-r from-slate-900 via-sky-950 to-slate-900 text-white flex items-center justify-between gap-2 shrink-0">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="w-8 h-8 rounded-xl bg-sky-500/20 border border-sky-400/30 flex items-center justify-center shrink-0">
+                  <CalendarIcon className="w-4 h-4 text-sky-400" />
+                </div>
+                <div className="min-w-0">
+                  <h3 className="font-bold text-sm text-white truncate">
+                    Schedule for {selectedDate}
+                  </h3>
                   <p className="text-[11px] text-slate-300">
                     {selectedDayEvents.length} scheduled item(s) on this date
                   </p>
                 </div>
               </div>
-              <button
-                onClick={() => setSelectedDate(null)}
-                className="text-slate-400 hover:text-white p-1 rounded-lg transition cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
+
+              <div className="flex items-center gap-1 shrink-0">
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const prevDate = shiftDateString(selectedDate, -1);
+                    setSelectedDate(prevDate);
+                    const [py, pm, pd] = prevDate.split('-').map(Number);
+                    if (py && pm && (py !== currentDate.getFullYear() || pm - 1 !== currentDate.getMonth())) {
+                      setCurrentDate(new Date(py, pm - 1, pd || 1));
+                    }
+                  }}
+                  className="p-1.5 text-slate-300 hover:text-white hover:bg-white/10 rounded-lg transition cursor-pointer active:scale-95"
+                  title="Previous Day"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    const nextDate = shiftDateString(selectedDate, 1);
+                    setSelectedDate(nextDate);
+                    const [ny, nm, nd] = nextDate.split('-').map(Number);
+                    if (ny && nm && (ny !== currentDate.getFullYear() || nm - 1 !== currentDate.getMonth())) {
+                      setCurrentDate(new Date(ny, nm - 1, nd || 1));
+                    }
+                  }}
+                  className="p-1.5 text-slate-300 hover:text-white hover:bg-white/10 rounded-lg transition cursor-pointer active:scale-95"
+                  title="Next Day"
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setSelectedDate(null);
+                  }}
+                  className="text-slate-400 hover:text-white p-1.5 rounded-lg transition cursor-pointer ml-1"
+                  aria-label="Close schedule drawer"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
             </div>
 
-            <div className="p-5 flex-1 overflow-y-auto space-y-3">
+            <div className="p-4 sm:p-5 flex-1 overflow-y-auto space-y-3">
               {selectedDayEvents.length === 0 ? (
                 <div className="p-8 text-center text-slate-400 text-xs">
                   No tasks or deliveries scheduled on {selectedDate}.
@@ -2403,17 +2582,22 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                   return (
                   <div
                     key={ev.id}
-                    className={`p-3 border rounded-xl flex items-start justify-between gap-3 ${
+                    className={`p-3.5 border rounded-2xl flex flex-col gap-3 shadow-2xs transition ${
                       isRejected
                         ? 'bg-rose-50/80 border-rose-300 border-l-4 border-l-rose-500'
-                        : 'bg-slate-50 border-slate-200'
+                        : 'bg-slate-50/90 border-slate-200/90 hover:border-slate-300'
                     }`}
                   >
-                    <div className="flex items-start gap-2.5">
+                    {/* Top Section: Checkbox, Avatar, Title, Subtitle, Quick Status Controls */}
+                    <div className="flex items-start gap-2.5 min-w-0">
                       {ev.taskId ? (
                         <button
-                          onClick={() => ev.taskId && onToggleTask(ev.taskId)}
-                          className="mt-1 shrink-0 cursor-pointer"
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (ev.taskId) onToggleTask(ev.taskId);
+                          }}
+                          className="mt-0.5 shrink-0 cursor-pointer"
                           title={ev.isCompleted ? 'Mark as Pending' : 'Mark as Completed'}
                         >
                           {ev.isCompleted ? (
@@ -2424,14 +2608,34 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                         </button>
                       ) : ev.rawBooking ? (
                         <button
-                          onClick={() => ev.rawBooking && handleToggleHotelBooking(ev.rawBooking)}
-                          className="mt-1 shrink-0 cursor-pointer"
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (ev.rawBooking) handleToggleHotelBooking(ev.rawBooking);
+                          }}
+                          className="mt-0.5 shrink-0 cursor-pointer"
                           title={ev.isCompleted ? 'Mark as Confirmed' : 'Mark as Checked Out (Completed)'}
                         >
                           {ev.isCompleted ? (
                             <CheckSquare className="w-4 h-4 text-teal-600" />
                           ) : (
                             <Square className="w-4 h-4 text-teal-500 hover:text-teal-700" />
+                          )}
+                        </button>
+                      ) : ev.rawApp ? (
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (ev.rawApp && onToggleApplicationDelivery) onToggleApplicationDelivery(ev.rawApp);
+                          }}
+                          className="mt-0.5 shrink-0 cursor-pointer text-amber-500 hover:text-amber-600"
+                          title={ev.isCompleted ? 'Returned' : 'Mark as Returned'}
+                        >
+                          {ev.isCompleted ? (
+                            <CheckSquare className="w-4 h-4 text-amber-500" />
+                          ) : (
+                            <Square className="w-4 h-4 text-slate-400 hover:text-amber-500" />
                           )}
                         </button>
                       ) : null}
@@ -2444,42 +2648,47 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                           className="shrink-0 cursor-pointer shadow-xs"
                         />
                       )}
-                      <div>
-                        <div className={`font-semibold text-xs ${ev.isCompleted ? 'line-through text-slate-400' : 'text-slate-900'}`}>
+                      <div className="min-w-0 flex-1">
+                        <div className={`font-bold text-xs sm:text-sm leading-snug ${ev.isCompleted ? 'line-through text-slate-400' : 'text-slate-900'}`}>
                           {ev.title}
                         </div>
-                        {ev.subtitle && <div className="text-[11px] text-slate-500 mt-0.5">{ev.subtitle}</div>}
+                        {ev.subtitle && (
+                          <div className="text-[11px] text-slate-500 mt-0.5 leading-relaxed">
+                            {ev.subtitle}
+                          </div>
+                        )}
                         {ev.comment && (
-                          <div className="text-[11px] text-amber-900 italic mt-1 bg-amber-50/80 p-1.5 rounded-lg border border-amber-200/70">
+                          <div className="text-[11px] text-amber-900 italic mt-1.5 bg-amber-50/80 p-2 rounded-lg border border-amber-200/70">
                             Note: {ev.comment}
                           </div>
                         )}
-                        <div className="mt-2">
+                        <div className="mt-2.5">
                           {renderQuickStatusControls(ev, 'compact')}
                         </div>
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-1.5 shrink-0">
+                    {/* Bottom Action Bar: Passport Copy + Client / Hotel Actions (div:nth-of-type(2)) */}
+                    <div className="pt-2.5 border-t border-slate-200/80 flex items-center justify-between gap-2 flex-wrap">
                       {ev.passportNumber && (
                         <button
                           type="button"
                           onClick={(e) => handleCopyPassport(e, ev.passportNumber!, `modal-${ev.id}`)}
                           title={`Copy Passport Number: ${ev.passportNumber}`}
-                          className={`px-2 py-1 rounded-lg text-[10px] font-bold border transition flex items-center gap-1 cursor-pointer active:scale-95 ${
+                          className={`px-3 py-1.5 rounded-xl text-xs font-bold border transition flex items-center gap-1.5 cursor-pointer active:scale-95 ${
                             copiedEventId === `modal-${ev.id}`
                               ? 'bg-emerald-600 text-white border-emerald-600 shadow-2xs'
-                              : 'bg-white border-slate-200 text-slate-700 hover:bg-sky-50 hover:text-sky-700 hover:border-sky-200'
+                              : 'bg-white border-slate-200 text-slate-700 hover:bg-sky-50 hover:text-sky-700 hover:border-sky-200 shadow-2xs'
                           }`}
                         >
                           {copiedEventId === `modal-${ev.id}` ? (
                             <>
-                              <Check className="w-3 h-3" />
+                              <Check className="w-3.5 h-3.5" />
                               <span>Copied!</span>
                             </>
                           ) : (
                             <>
-                              <Copy className="w-3 h-3 text-sky-600" />
+                              <Copy className="w-3.5 h-3.5 text-sky-600" />
                               <span className="font-mono">{ev.passportNumber}</span>
                             </>
                           )}
@@ -2487,24 +2696,47 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                       )}
                       {ev.rawBooking && (
                         <button
-                          onClick={() => {
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
                             setSelectedDate(null);
                             if (ev.rawBooking) setSelectedHotelBooking(ev.rawBooking);
                           }}
-                          className="px-2 py-1 bg-white border border-teal-200 text-teal-800 hover:bg-teal-50 rounded-lg text-[10px] font-bold cursor-pointer"
+                          className="px-3 py-1.5 bg-teal-50 border border-teal-200 text-teal-800 hover:bg-teal-100 rounded-xl text-xs font-bold cursor-pointer transition active:scale-95"
                         >
-                          Hotel
+                          Hotel Details
                         </button>
                       )}
-                      {ev.clientId && (
+                      {(ev.clientId || ev.clientName || ev.passportNumber) && (
                         <button
-                          onClick={() => {
-                            setSelectedDate(null);
-                            if (ev.clientId) onOpenClient(ev.clientId);
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            const targetClientId =
+                              ev.clientId ||
+                              (ev.passportNumber
+                                ? clients.find(
+                                    (c) =>
+                                      (c.passport_number || '').trim().toUpperCase() ===
+                                      ev.passportNumber!.trim().toUpperCase()
+                                  )?.id
+                                : undefined) ||
+                              (ev.clientName
+                                ? clients.find(
+                                    (c) =>
+                                      (c.full_name || '').trim().toLowerCase() ===
+                                      ev.clientName!.trim().toLowerCase()
+                                  )?.id
+                                : undefined);
+                            if (targetClientId) {
+                              setSelectedDate(null);
+                              onOpenClient(targetClientId);
+                            }
                           }}
-                          className="px-2 py-1 bg-white border border-slate-200 text-sky-700 hover:bg-sky-50 rounded-lg text-[10px] font-bold cursor-pointer"
+                          className="ml-auto px-3.5 py-1.5 bg-sky-700 hover:bg-sky-800 text-white border border-sky-700 rounded-xl text-xs font-bold flex items-center gap-1 shadow-2xs transition active:scale-95 cursor-pointer"
                         >
-                          Client
+                          <span>Client Profile</span>
+                          <ChevronRight className="w-3.5 h-3.5" />
                         </button>
                       )}
                     </div>
@@ -2514,21 +2746,21 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
               )}
             </div>
 
-            <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between">
+            <div className="p-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between gap-2">
               <button
                 onClick={() => {
                   const target = selectedDate;
                   setSelectedDate(null);
                   onOpenNewTask(target);
                 }}
-                className="px-4 py-2 bg-sky-700 hover:bg-sky-800 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-xs transition cursor-pointer"
+                className="flex-1 sm:flex-initial justify-center px-4 py-2.5 sm:py-2 bg-sky-700 hover:bg-sky-800 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-xs transition cursor-pointer"
               >
                 <Plus className="w-4 h-4" />
                 <span>Add Task on {selectedDate}</span>
               </button>
               <button
                 onClick={() => setSelectedDate(null)}
-                className="px-3 py-2 text-xs font-semibold text-slate-600 hover:text-slate-800 cursor-pointer"
+                className="px-4 py-2.5 sm:py-2 text-xs font-semibold text-slate-600 hover:text-slate-900 bg-white border border-slate-200 rounded-xl cursor-pointer"
               >
                 Close
               </button>

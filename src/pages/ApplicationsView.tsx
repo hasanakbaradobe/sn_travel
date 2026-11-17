@@ -14,6 +14,8 @@ import {
   Trash2,
   AlertTriangle,
   Layers,
+  Copy,
+  Check,
 } from 'lucide-react';
 import { VisaApplication, ALL_APPLICATION_STATUSES, VisaType } from '../types';
 import { STATUS_CONFIG } from '../utils/status';
@@ -59,6 +61,43 @@ export const ApplicationsView: React.FC<ApplicationsViewProps> = ({
   const [appToDelete, setAppToDelete] = useState<VisaApplication | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [copiedPassportAppId, setCopiedPassportAppId] = useState<number | null>(null);
+
+  const handleCopyPassport = async (e: React.MouseEvent, appId: number, passportNumber?: string) => {
+    e.stopPropagation();
+    e.preventDefault();
+    const clean = (passportNumber || '').trim();
+    if (!clean) return;
+    try {
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(clean);
+      } else {
+        const textArea = document.createElement('textarea');
+        textArea.value = clean;
+        textArea.style.position = 'fixed';
+        textArea.style.left = '-9999px';
+        document.body.appendChild(textArea);
+        textArea.focus();
+        textArea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textArea);
+      }
+    } catch {
+      const textArea = document.createElement('textarea');
+      textArea.value = clean;
+      textArea.style.position = 'fixed';
+      textArea.style.left = '-9999px';
+      document.body.appendChild(textArea);
+      textArea.focus();
+      textArea.select();
+      document.execCommand('copy');
+      document.body.removeChild(textArea);
+    }
+    setCopiedPassportAppId(appId);
+    setTimeout(() => {
+      setCopiedPassportAppId((prev) => (prev === appId ? null : prev));
+    }, 1800);
+  };
 
   const handleDeleteApplication = async () => {
     if (!appToDelete) return;
@@ -299,9 +338,182 @@ export const ApplicationsView: React.FC<ApplicationsViewProps> = ({
         </div>
       )}
 
-      {/* Applications Table */}
+      {/* Applications Container */}
       <div className="bg-white rounded-xl border border-slate-200 shadow-xs overflow-hidden">
-        <div className="overflow-x-auto">
+        {/* Mobile Card List (< 768px) */}
+        <div className="md:hidden divide-y divide-slate-100">
+          {paginatedApps.length > 0 && (
+            <div className="px-4 py-2.5 bg-slate-50/90 border-b border-slate-200 flex items-center justify-between text-xs">
+              <label className="flex items-center gap-2 font-semibold text-slate-600 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={isAllSelected}
+                  onChange={handleToggleSelectAll}
+                  className="w-4 h-4 text-sky-600 rounded border-slate-300 focus:ring-sky-500 cursor-pointer"
+                />
+                <span>Select page ({paginatedApps.length})</span>
+              </label>
+              {selectedAppIds.length > 0 && (
+                <span className="text-[11px] font-bold text-sky-700">
+                  {selectedAppIds.length} selected
+                </span>
+              )}
+            </div>
+          )}
+
+          {loading && applications.length === 0 ? (
+            <div className="py-12 px-4 text-center text-xs text-slate-400">
+              Loading applications...
+            </div>
+          ) : filteredApps.length === 0 ? (
+            <div className="py-12 px-4 text-center text-xs text-slate-400">
+              {selectedStatus === 'ACTIVE'
+                ? 'No active visa applications in progress.'
+                : selectedStatus === 'Returned'
+                ? 'No returned/completed applications found.'
+                : 'No visa applications found.'}
+            </div>
+          ) : (
+            paginatedApps.map((app) => {
+              const statusConf = STATUS_CONFIG[app.status];
+              const isSelected = selectedAppIds.includes(app.id);
+
+              return (
+                <div
+                  key={app.id}
+                  className={`p-4 space-y-3 transition ${
+                    isSelected ? 'bg-sky-50/60' : 'hover:bg-slate-50/70'
+                  }`}
+                >
+                  {/* Top Row: Checkbox, App ID, Status Badge */}
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2.5">
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => handleToggleSelectRow(app.id)}
+                        className="w-4 h-4 text-sky-600 rounded border-slate-300 focus:ring-sky-500 cursor-pointer"
+                      />
+                      <span className="font-mono font-bold text-xs px-2 py-0.5 rounded bg-slate-100 text-slate-700">
+                        {app.application_id}
+                      </span>
+                    </div>
+
+                    <span
+                      className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full border text-[11px] font-semibold ${statusConf.bgClass} ${statusConf.textClass} ${statusConf.borderClass}`}
+                    >
+                      <span className={`w-1.5 h-1.5 rounded-full ${statusConf.dotClass}`} />
+                      {app.status}
+                    </span>
+                  </div>
+
+                  {/* Client Row */}
+                  <div
+                    onClick={() => onOpenClient(app.client_id)}
+                    className="flex items-center gap-3 cursor-pointer"
+                  >
+                    <ClientAvatar
+                      name={app.client_name || 'Client'}
+                      photoUrl={app.client_photo_url}
+                      size="table"
+                      allowPreview={true}
+                      className="shadow-xs ring-2 ring-slate-200/80 shrink-0"
+                    />
+                    <div className="min-w-0 flex-1">
+                      <div className="font-bold text-sm text-slate-900 truncate">
+                        {app.client_name}
+                      </div>
+                      <div className="flex items-center gap-1.5 text-[11px] text-slate-500 mt-0.5 flex-wrap">
+                        <span className="font-mono text-slate-600 font-semibold">
+                          {app.passport_number}
+                        </span>
+                        {app.passport_number && (
+                          <button
+                            type="button"
+                            onClick={(e) => handleCopyPassport(e, app.id, app.passport_number)}
+                            className={`p-1 rounded transition cursor-pointer ${
+                              copiedPassportAppId === app.id
+                                ? 'text-emerald-600 bg-emerald-50'
+                                : 'text-slate-400 hover:text-sky-700 hover:bg-slate-100'
+                            }`}
+                            title="Copy Passport Number"
+                          >
+                            {copiedPassportAppId === app.id ? (
+                              <Check className="w-3.5 h-3.5" />
+                            ) : (
+                              <Copy className="w-3.5 h-3.5" />
+                            )}
+                          </button>
+                        )}
+                        {app.country && (
+                          <>
+                            <span>•</span>
+                            <span>{app.country}</span>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Visa Type & Delivery Date */}
+                  <div className="grid grid-cols-2 gap-2 p-2.5 rounded-xl bg-slate-50 border border-slate-100 text-xs">
+                    <div>
+                      <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-400 block">
+                        Visa Category
+                      </span>
+                      <span className="font-semibold text-slate-800 truncate block mt-0.5">
+                        {app.visa_type_name || 'China Visa'}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] font-semibold uppercase tracking-wider text-slate-400 block">
+                        Delivery Date
+                      </span>
+                      {app.delivery_date ? (
+                        <span className="inline-flex items-center gap-1 text-emerald-800 font-semibold mt-0.5">
+                          <Calendar className="w-3 h-3 text-emerald-600" />
+                          {String(app.delivery_date).slice(0, 10)}
+                        </span>
+                      ) : (
+                        <span className="text-slate-400 block mt-0.5">—</span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Action Buttons */}
+                  <div className="flex items-center justify-between gap-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={() => onOpenStatusModal(app.id)}
+                      className="flex-1 py-2 px-3 bg-sky-700 hover:bg-sky-800 text-white rounded-xl text-xs font-bold shadow-2xs transition active:scale-95 text-center cursor-pointer"
+                    >
+                      Update Status
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => onOpenClient(app.client_id)}
+                      className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold flex items-center gap-1 transition cursor-pointer"
+                    >
+                      <span>Profile</span>
+                      <ChevronRight className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setAppToDelete(app)}
+                      className="p-2 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition cursor-pointer"
+                      title="Delete Application"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        {/* Desktop Table View (>= 768px) */}
+        <div className="hidden md:block overflow-x-auto">
           <table className="w-full text-left text-xs">
             <thead className="bg-slate-50 border-b border-slate-200 text-slate-500 font-semibold uppercase tracking-wider">
               <tr>
@@ -400,7 +612,27 @@ export const ApplicationsView: React.FC<ApplicationsViewProps> = ({
 
                       {/* Passport */}
                       <td className="py-3.5 px-4 font-mono font-medium text-slate-700 whitespace-nowrap">
-                        {app.passport_number}
+                        <div className="flex items-center gap-1.5">
+                          <span>{app.passport_number}</span>
+                          {app.passport_number && (
+                            <button
+                              type="button"
+                              onClick={(e) => handleCopyPassport(e, app.id, app.passport_number)}
+                              className={`p-1 rounded-md transition cursor-pointer ${
+                                copiedPassportAppId === app.id
+                                  ? 'text-emerald-600 bg-emerald-50'
+                                  : 'text-slate-400 hover:text-sky-700 hover:bg-slate-100'
+                              }`}
+                              title="Copy Passport Number"
+                            >
+                              {copiedPassportAppId === app.id ? (
+                                <Check className="w-3.5 h-3.5" />
+                              ) : (
+                                <Copy className="w-3.5 h-3.5" />
+                              )}
+                            </button>
+                          )}
+                        </div>
                       </td>
 
                       {/* Visa Type */}

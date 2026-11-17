@@ -2587,7 +2587,7 @@ export const dbService = {
     const clientName = client?.full_name || 'Client';
 
     // Delivery / Upcoming date business logic
-    if (newStatus === 'Online Review Completed' || newStatus === 'Pending Collection') {
+    if (newStatus === 'Online Review Completed' || newStatus === 'Pending Collection' || newStatus === 'Rejected') {
       if (deliveryDate) {
         app.delivery_date = deliveryDate;
       }
@@ -2906,9 +2906,13 @@ export const dbService = {
       ? `Rejected - ${clientName}`
       : `Delivery - ${clientName}`;
     const taskDesc = `Scheduled passport/visa collection/delivery for ${clientName} (${app.application_id}). Status: ${app.status}.`;
-    const existingTask = store.tasks.find(
-      t => t.application_id === app.id && t.is_delivery_task === 1
-    );
+    const existingTask =
+      store.tasks.find(t => t.application_id === app.id && t.is_delivery_task === 1) ||
+      store.tasks.find(
+        t =>
+          t.client_id === app.client_id &&
+          (t.is_delivery_task === 1 || /^(Delivery|Pending Collection|Rejected)\s*-/i.test(t.title || ''))
+      );
 
     const validAssignedUserId = app.assigned_user_id && store.users.some(u => u.id === app.assigned_user_id)
       ? app.assigned_user_id
@@ -2918,6 +2922,8 @@ export const dbService = {
       existingTask.title = taskTitle;
       existingTask.description = taskDesc;
       existingTask.due_date = app.delivery_date;
+      existingTask.application_id = app.id;
+      existingTask.is_delivery_task = 1;
       if (app.status !== 'Returned' && existingTask.status === 'Completed') {
         existingTask.status = 'Pending';
         existingTask.completed_at = null;
@@ -2927,10 +2933,10 @@ export const dbService = {
         existingTask.assigned_user_id = validAssignedUserId;
       }
       runMySQLWrite(async (activePool) => {
-        await ensureClientAndAppInMySQL(activePool, app.client_id, app.id);
+        const { validAppId } = await ensureClientAndAppInMySQL(activePool, app.client_id, app.id);
         await activePool.query(
-          'UPDATE tasks SET title = ?, description = ?, due_date = ?, status = ?, completed_at = ?, assigned_user_id = COALESCE(?, assigned_user_id), updated_at = NOW() WHERE id = ?',
-          [taskTitle, taskDesc, app.delivery_date, existingTask.status, existingTask.completed_at ? new Date(existingTask.completed_at) : null, validAssignedUserId, existingTask.id]
+          'UPDATE tasks SET title = ?, description = ?, due_date = ?, application_id = COALESCE(?, application_id), is_delivery_task = 1, status = ?, completed_at = ?, assigned_user_id = COALESCE(?, assigned_user_id), updated_at = NOW() WHERE id = ?',
+          [taskTitle, taskDesc, app.delivery_date, validAppId, existingTask.status, existingTask.completed_at ? new Date(existingTask.completed_at) : null, validAssignedUserId, existingTask.id]
         );
       });
       this.logActivity(userId, 'UPDATE_TASK', 'TASK', existingTask.id, `Updated task "${existingTask.title}" scheduled on ${app.delivery_date}`);
@@ -3020,10 +3026,21 @@ export const dbService = {
 
     return list.map(t => {
       const client = t.client_id ? clientById.get(t.client_id) : null;
-      const app = t.application_id ? appById.get(t.application_id) : null;
+      const isDeliveryLike = t.is_delivery_task === 1 || /^(Delivery|Pending Collection|Rejected)\s*-/i.test(t.title || '');
+      const app =
+        (t.application_id ? appById.get(t.application_id) : null) ||
+        (isDeliveryLike && t.client_id
+          ? store.visa_applications.find(
+              a =>
+                a.client_id === t.client_id &&
+                (a.status === 'Pending Collection' ||
+                  a.status === 'Online Review Completed' ||
+                  a.status === 'Rejected')
+            ) || store.visa_applications.find(a => a.client_id === t.client_id)
+          : null);
       const user = t.assigned_user_id ? userById.get(t.assigned_user_id) : null;
       let resolvedTitle = t.title;
-      if ((t.is_delivery_task === 1 || /^(Delivery|Pending Collection|Rejected)\s*-/i.test(t.title || '')) && app) {
+      if (isDeliveryLike && app) {
         const cName = client?.full_name || t.title.replace(/^(Delivery|Pending Collection|Rejected)\s*-\s*/i, '').trim() || 'Client';
         if (app.status === 'Pending Collection') {
           resolvedTitle = `Pending Collection - ${cName}`;
@@ -3036,6 +3053,7 @@ export const dbService = {
       return {
         ...t,
         title: resolvedTitle,
+        application_id: app?.id || t.application_id || null,
         client_name: client?.full_name || null,
         client_code: client?.client_id || null,
         passport_number: client?.passport_number || null,
@@ -3049,10 +3067,21 @@ export const dbService = {
     const t = store.tasks.find(item => Number(item.id) === Number(id));
     if (!t) return null;
     const client = t.client_id ? store.clients.find(c => c.id === t.client_id) : null;
-    const app = t.application_id ? store.visa_applications.find(a => a.id === t.application_id) : null;
+    const isDeliveryLike = t.is_delivery_task === 1 || /^(Delivery|Pending Collection|Rejected)\s*-/i.test(t.title || '');
+    const app =
+      (t.application_id ? store.visa_applications.find(a => a.id === t.application_id) : null) ||
+      (isDeliveryLike && t.client_id
+        ? store.visa_applications.find(
+            a =>
+              a.client_id === t.client_id &&
+              (a.status === 'Pending Collection' ||
+                a.status === 'Online Review Completed' ||
+                a.status === 'Rejected')
+          ) || store.visa_applications.find(a => a.client_id === t.client_id)
+        : null);
     const user = t.assigned_user_id ? store.users.find(u => u.id === t.assigned_user_id) : null;
     let resolvedTitle = t.title;
-    if ((t.is_delivery_task === 1 || /^(Delivery|Pending Collection|Rejected)\s*-/i.test(t.title || '')) && app) {
+    if (isDeliveryLike && app) {
       const cName = client?.full_name || t.title.replace(/^(Delivery|Pending Collection|Rejected)\s*-\s*/i, '').trim() || 'Client';
       if (app.status === 'Pending Collection') {
         resolvedTitle = `Pending Collection - ${cName}`;
@@ -3065,6 +3094,7 @@ export const dbService = {
     return {
       ...t,
       title: resolvedTitle,
+      application_id: app?.id || t.application_id || null,
       client_name: client?.full_name || null,
       client_code: client?.client_id || null,
       passport_number: client?.passport_number || null,

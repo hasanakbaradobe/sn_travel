@@ -842,6 +842,7 @@ export default function App() {
           userRole={currentUser?.role}
           mobileOpen={mobileSidebarOpen}
           onCloseMobile={() => setMobileSidebarOpen(false)}
+          onOpenMobile={() => setMobileSidebarOpen(true)}
           todayTasksCount={metrics?.today_tasks || 0}
           attentionAppsCount={metrics?.apps_requiring_attention?.length || 0}
           activeHotelsCount={hotelBookings.filter(b => b.status === 'Confirmed' || b.status === 'Checked In').length}
@@ -870,7 +871,7 @@ export default function App() {
             onOpenCommandPalette={() => setCommandPaletteOpen(true)}
           />
 
-          <main className="flex-1 pb-16">
+          <main className="flex-1 pb-24 lg:pb-16">
             <React.Suspense fallback={<ViewLoadingSkeleton />}>
               {/* Dashboard View */}
             {currentTab === 'dashboard' && (

@@ -332,136 +332,257 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({
             </button>
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead>
-                <tr className="bg-slate-50/80 border-b border-slate-200 text-slate-500 font-bold uppercase tracking-wider text-[10px]">
-                  <th className="py-3 px-4">Invoice #</th>
-                  <th className="py-3 px-4">Customer</th>
-                  <th className="py-3 px-4">Dates</th>
-                  <th className="py-3 px-4 text-right">Total Amount</th>
-                  <th className="py-3 px-4 text-right">Paid</th>
-                  <th className="py-3 px-4 text-right">Balance</th>
-                  <th className="py-3 px-4 text-center">Status</th>
-                  <th className="py-3 px-4 text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-100">
-                {filteredInvoices.map(inv => (
-                  <tr
-                    key={inv.id}
-                    className="hover:bg-slate-50/70 transition group cursor-pointer"
-                    onClick={() => {
-                      setSelectedInvoice(inv);
-                      setDetailModalOpen(true);
-                    }}
-                  >
-                    {/* Invoice Number */}
-                    <td className="py-3.5 px-4 font-mono font-bold text-sky-800">
+          <>
+            {/* Mobile Card List (< 768px) */}
+            <div className="md:hidden divide-y divide-slate-100">
+              {filteredInvoices.map((inv) => (
+                <div
+                  key={inv.id}
+                  onClick={() => {
+                    setSelectedInvoice(inv);
+                    setDetailModalOpen(true);
+                  }}
+                  className="p-4 space-y-3 hover:bg-slate-50/80 transition cursor-pointer"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-mono font-bold text-xs text-sky-800 bg-sky-50 px-2.5 py-1 rounded-lg border border-sky-200/70">
                       {inv.invoice_number}
-                    </td>
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-[11px] text-slate-500 font-medium">{inv.issue_date}</span>
+                      {getStatusBadge(inv.status)}
+                    </div>
+                  </div>
 
-                    {/* Customer */}
-                    <td className="py-3.5 px-4">
-                      <div className="flex items-center gap-2.5">
-                        <ClientAvatar
-                          name={inv.client_name || 'Customer'}
-                          photoUrl={inv.client_photo_url}
-                          size="sm"
-                        />
-                        <div>
-                          <span
-                            className="font-bold text-slate-900 group-hover:text-sky-700 transition block"
-                            onClick={e => {
-                              if (onSelectClient) {
-                                e.stopPropagation();
-                                onSelectClient(inv.client_id);
-                              }
-                            }}
-                          >
-                            {inv.client_name}
-                          </span>
-                          <span className="text-[10px] text-slate-400 font-mono">
-                            {inv.client_passport} · {inv.client_country}
-                          </span>
-                        </div>
+                  <div className="flex items-center gap-2.5">
+                    <ClientAvatar
+                      name={inv.client_name || 'Customer'}
+                      photoUrl={inv.client_photo_url}
+                      size="sm"
+                    />
+                    <div className="min-w-0">
+                      <div
+                        onClick={(e) => {
+                          if (onSelectClient) {
+                            e.stopPropagation();
+                            onSelectClient(inv.client_id);
+                          }
+                        }}
+                        className="font-bold text-sm text-slate-900 truncate"
+                      >
+                        {inv.client_name}
                       </div>
-                    </td>
+                      <div className="text-[11px] text-slate-400 font-mono truncate">
+                        {inv.client_passport} · {inv.client_country}
+                      </div>
+                    </div>
+                  </div>
 
-                    {/* Issue Date */}
-                    <td className="py-3.5 px-4 text-slate-600">
-                      <span className="block text-[11px] font-medium text-slate-800">
-                        {inv.issue_date}
+                  <div className="grid grid-cols-3 gap-2 p-2.5 rounded-xl bg-slate-50 border border-slate-100 text-xs">
+                    <div>
+                      <span className="text-[10px] font-semibold uppercase text-slate-400 block">
+                        Total
                       </span>
-                    </td>
-
-                    {/* Total Amount */}
-                    <td className="py-3.5 px-4 text-right font-mono font-bold text-slate-900 text-xs">
-                      {formatCurrency(inv.currency)} {Number(inv.total_amount).toFixed(2)}
-                    </td>
-
-                    {/* Paid Amount */}
-                    <td className="py-3.5 px-4 text-right font-mono text-emerald-700 font-semibold text-xs">
-                      {formatCurrency(inv.currency)} {Number(inv.paid_amount).toFixed(2)}
-                    </td>
-
-                    {/* Balance Due */}
-                    <td className="py-3.5 px-4 text-right font-mono font-bold text-xs">
-                      <span className={inv.balance_due > 0 ? 'text-amber-800' : 'text-slate-400'}>
+                      <span className="font-mono font-bold text-slate-900">
+                        {formatCurrency(inv.currency)} {Number(inv.total_amount).toFixed(2)}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] font-semibold uppercase text-emerald-600 block">
+                        Paid
+                      </span>
+                      <span className="font-mono font-semibold text-emerald-700">
+                        {formatCurrency(inv.currency)} {Number(inv.paid_amount).toFixed(2)}
+                      </span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] font-semibold uppercase text-amber-600 block">
+                        Balance
+                      </span>
+                      <span
+                        className={`font-mono font-bold ${
+                          inv.balance_due > 0 ? 'text-amber-800' : 'text-slate-400'
+                        }`}
+                      >
                         {formatCurrency(inv.currency)} {Number(inv.balance_due).toFixed(2)}
                       </span>
-                    </td>
+                    </div>
+                  </div>
 
-                    {/* Status Badge */}
-                    <td className="py-3.5 px-4 text-center">
-                      {getStatusBadge(inv.status)}
-                    </td>
+                  <div
+                    className="flex items-center justify-end gap-2 pt-1"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedInvoice(inv);
+                        setDetailModalOpen(true);
+                      }}
+                      className="flex-1 py-1.5 px-3 bg-sky-50 hover:bg-sky-100 text-sky-800 border border-sky-200 rounded-xl text-xs font-bold flex items-center justify-center gap-1.5 transition"
+                    >
+                      <Eye className="w-3.5 h-3.5" />
+                      <span>View / Print</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setInvoiceToEdit(inv);
+                        setCreateModalOpen(true);
+                      }}
+                      className="py-1.5 px-3 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-semibold flex items-center gap-1 transition"
+                    >
+                      <Edit2 className="w-3.5 h-3.5" />
+                      <span>Edit</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setInvoiceToDelete(inv);
+                        setDeleteModalOpen(true);
+                      }}
+                      className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition"
+                      title="Delete Invoice"
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
 
-                    {/* Actions */}
-                    <td className="py-3.5 px-4 text-right" onClick={e => e.stopPropagation()}>
-                      <div className="flex items-center justify-end gap-1">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setSelectedInvoice(inv);
-                            setDetailModalOpen(true);
-                          }}
-                          title="View / Print Invoice"
-                          className="p-1.5 text-slate-500 hover:text-sky-700 hover:bg-sky-50 rounded-lg transition"
-                        >
-                          <Eye className="w-4 h-4" />
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setInvoiceToEdit(inv);
-                            setCreateModalOpen(true);
-                          }}
-                          title="Edit Invoice"
-                          className="p-1.5 text-slate-500 hover:text-sky-700 hover:bg-sky-50 rounded-lg transition"
-                        >
-                          <Edit2 className="w-4 h-4" />
-                        </button>
-
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setInvoiceToDelete(inv);
-                            setDeleteModalOpen(true);
-                          }}
-                          title="Delete Invoice"
-                          className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition"
-                        >
-                          <Trash2 className="w-4 h-4" />
-                        </button>
-                      </div>
-                    </td>
+            {/* Desktop Table View (>= 768px) */}
+            <div className="hidden md:block overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead>
+                  <tr className="bg-slate-50/80 border-b border-slate-200 text-slate-500 font-bold uppercase tracking-wider text-[10px]">
+                    <th className="py-3 px-4">Invoice #</th>
+                    <th className="py-3 px-4">Customer</th>
+                    <th className="py-3 px-4">Dates</th>
+                    <th className="py-3 px-4 text-right">Total Amount</th>
+                    <th className="py-3 px-4 text-right">Paid</th>
+                    <th className="py-3 px-4 text-right">Balance</th>
+                    <th className="py-3 px-4 text-center">Status</th>
+                    <th className="py-3 px-4 text-right">Actions</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {filteredInvoices.map(inv => (
+                    <tr
+                      key={inv.id}
+                      className="hover:bg-slate-50/70 transition group cursor-pointer"
+                      onClick={() => {
+                        setSelectedInvoice(inv);
+                        setDetailModalOpen(true);
+                      }}
+                    >
+                      {/* Invoice Number */}
+                      <td className="py-3.5 px-4 font-mono font-bold text-sky-800">
+                        {inv.invoice_number}
+                      </td>
+
+                      {/* Customer */}
+                      <td className="py-3.5 px-4">
+                        <div className="flex items-center gap-2.5">
+                          <ClientAvatar
+                            name={inv.client_name || 'Customer'}
+                            photoUrl={inv.client_photo_url}
+                            size="sm"
+                          />
+                          <div>
+                            <span
+                              className="font-bold text-slate-900 group-hover:text-sky-700 transition block"
+                              onClick={e => {
+                                if (onSelectClient) {
+                                  e.stopPropagation();
+                                  onSelectClient(inv.client_id);
+                                }
+                              }}
+                            >
+                              {inv.client_name}
+                            </span>
+                            <span className="text-[10px] text-slate-400 font-mono">
+                              {inv.client_passport} · {inv.client_country}
+                            </span>
+                          </div>
+                        </div>
+                      </td>
+
+                      {/* Issue Date */}
+                      <td className="py-3.5 px-4 text-slate-600">
+                        <span className="block text-[11px] font-medium text-slate-800">
+                          {inv.issue_date}
+                        </span>
+                      </td>
+
+                      {/* Total Amount */}
+                      <td className="py-3.5 px-4 text-right font-mono font-bold text-slate-900 text-xs">
+                        {formatCurrency(inv.currency)} {Number(inv.total_amount).toFixed(2)}
+                      </td>
+
+                      {/* Paid Amount */}
+                      <td className="py-3.5 px-4 text-right font-mono text-emerald-700 font-semibold text-xs">
+                        {formatCurrency(inv.currency)} {Number(inv.paid_amount).toFixed(2)}
+                      </td>
+
+                      {/* Balance Due */}
+                      <td className="py-3.5 px-4 text-right font-mono font-bold text-xs">
+                        <span className={inv.balance_due > 0 ? 'text-amber-800' : 'text-slate-400'}>
+                          {formatCurrency(inv.currency)} {Number(inv.balance_due).toFixed(2)}
+                        </span>
+                      </td>
+
+                      {/* Status Badge */}
+                      <td className="py-3.5 px-4 text-center">
+                        {getStatusBadge(inv.status)}
+                      </td>
+
+                      {/* Actions */}
+                      <td className="py-3.5 px-4 text-right" onClick={e => e.stopPropagation()}>
+                        <div className="flex items-center justify-end gap-1">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedInvoice(inv);
+                              setDetailModalOpen(true);
+                            }}
+                            title="View / Print Invoice"
+                            className="p-1.5 text-slate-500 hover:text-sky-700 hover:bg-sky-50 rounded-lg transition"
+                          >
+                            <Eye className="w-4 h-4" />
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setInvoiceToEdit(inv);
+                              setCreateModalOpen(true);
+                            }}
+                            title="Edit Invoice"
+                            className="p-1.5 text-slate-500 hover:text-sky-700 hover:bg-sky-50 rounded-lg transition"
+                          >
+                            <Edit2 className="w-4 h-4" />
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setInvoiceToDelete(inv);
+                              setDeleteModalOpen(true);
+                            }}
+                            title="Delete Invoice"
+                            className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
         )}
       </div>
 

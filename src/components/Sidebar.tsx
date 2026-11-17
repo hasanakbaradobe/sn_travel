@@ -14,6 +14,7 @@ import {
   Building2,
   MessageSquarePlus,
   Receipt,
+  MoreHorizontal,
 } from 'lucide-react';
 import { UserRole } from '../types';
 
@@ -25,6 +26,7 @@ interface SidebarProps {
   userRole?: UserRole;
   mobileOpen: boolean;
   onCloseMobile: () => void;
+  onOpenMobile?: () => void;
   todayTasksCount?: number;
   attentionAppsCount?: number;
   activeHotelsCount?: number;
@@ -37,12 +39,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
   userRole,
   mobileOpen,
   onCloseMobile,
+  onOpenMobile,
   todayTasksCount = 0,
   attentionAppsCount = 0,
   activeHotelsCount = 0,
   dueFollowUpsCount = 0,
 }) => {
   const canManagePublicWebsite = userRole === 'super_admin' || userRole === 'admin';
+  const moreBadgesCount = dueFollowUpsCount + todayTasksCount;
+  const isMoreTabActive = ['followups', 'invoices', 'tasks', 'public-website', 'settings'].includes(currentTab);
 
   const navItems: Array<{ id: NavTab; label: string; icon: React.ReactNode; badge?: number; badgeColor?: string }> = [
     {
@@ -106,6 +111,37 @@ export const Sidebar: React.FC<SidebarProps> = ({
       id: 'settings',
       label: 'Settings',
       icon: <Settings className="w-5 h-5" />,
+    },
+  ];
+
+  const mobileBottomItems: Array<{ id: NavTab; label: string; icon: React.ReactNode; badge?: number }> = [
+    {
+      id: 'dashboard',
+      label: 'Home',
+      icon: <LayoutDashboard className="w-5 h-5" />,
+    },
+    {
+      id: 'clients',
+      label: 'Clients',
+      icon: <Users className="w-5 h-5" />,
+    },
+    {
+      id: 'applications',
+      label: 'Visas',
+      icon: <FileCheck2 className="w-5 h-5" />,
+      badge: attentionAppsCount > 0 ? attentionAppsCount : undefined,
+    },
+    {
+      id: 'hotels',
+      label: 'Hotels',
+      icon: <Building2 className="w-5 h-5" />,
+      badge: activeHotelsCount > 0 ? activeHotelsCount : undefined,
+    },
+    {
+      id: 'calendar',
+      label: 'Calendar',
+      icon: <CalendarDays className="w-5 h-5" />,
+      badge: todayTasksCount > 0 ? todayTasksCount : undefined,
     },
   ];
 
@@ -227,6 +263,74 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </div>
         </div>
       )}
+
+      {/* Mobile Sticky Bottom Navigation Bar */}
+      <nav
+        aria-label="Mobile quick navigation"
+        className="lg:hidden fixed bottom-0 inset-x-0 z-40 bg-white/95 backdrop-blur-md border-t border-slate-200/90 shadow-[0_-4px_16px_rgba(15,23,42,0.06)] px-1 py-1"
+      >
+        <div className="grid grid-cols-6 gap-0.5 max-w-md mx-auto">
+          {mobileBottomItems.map((item) => {
+            const isActive = currentTab === item.id;
+            return (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => {
+                  onSelectTab(item.id);
+                  onCloseMobile();
+                }}
+                className={`relative flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition active:scale-95 cursor-pointer ${
+                  isActive
+                    ? 'text-sky-700 bg-sky-50/90 font-bold'
+                    : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50 font-medium'
+                }`}
+              >
+                <div className="relative">
+                  {item.icon}
+                  {item.badge !== undefined && (
+                    <span className="absolute -top-1.5 -right-2.5 min-w-[16px] h-4 px-1 rounded-full bg-amber-500 text-white text-[9px] font-bold flex items-center justify-center shadow-2xs">
+                      {item.badge > 99 ? '99+' : item.badge}
+                    </span>
+                  )}
+                </div>
+                <span className="text-[10px] leading-tight mt-1 truncate max-w-full">
+                  {item.label}
+                </span>
+              </button>
+            );
+          })}
+
+          {/* More Menu Drawer Trigger */}
+          <button
+            type="button"
+            onClick={() => {
+              if (mobileOpen) {
+                onCloseMobile();
+              } else if (onOpenMobile) {
+                onOpenMobile();
+              }
+            }}
+            className={`relative flex flex-col items-center justify-center py-1.5 px-1 rounded-xl transition active:scale-95 cursor-pointer ${
+              mobileOpen || isMoreTabActive
+                ? 'text-sky-700 bg-sky-50/90 font-bold'
+                : 'text-slate-500 hover:text-slate-900 hover:bg-slate-50 font-medium'
+            }`}
+          >
+            <div className="relative">
+              <MoreHorizontal className="w-5 h-5" />
+              {moreBadgesCount > 0 && (
+                <span className="absolute -top-1.5 -right-2.5 min-w-[16px] h-4 px-1 rounded-full bg-emerald-600 text-white text-[9px] font-bold flex items-center justify-center shadow-2xs">
+                  {moreBadgesCount > 99 ? '99+' : moreBadgesCount}
+                </span>
+              )}
+            </div>
+            <span className="text-[10px] leading-tight mt-1 truncate max-w-full">
+              More
+            </span>
+          </button>
+        </div>
+      </nav>
     </>
   );
 };
