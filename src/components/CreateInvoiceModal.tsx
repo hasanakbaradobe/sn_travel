@@ -70,6 +70,7 @@ export const CreateInvoiceModal: React.FC<CreateInvoiceModalProps> = ({
   const [discount, setDiscount] = useState<number>(0);
   const [paidAmount, setPaidAmount] = useState<number>(0);
   const [notes, setNotes] = useState('');
+  const [qtyColumnLabel, setQtyColumnLabel] = useState<'QTY' | 'NTS'>('QTY');
 
   // Line items
   const [items, setItems] = useState<LineItemDraft[]>([
@@ -137,8 +138,20 @@ export const CreateInvoiceModal: React.FC<CreateInvoiceModalProps> = ({
                 Number(((Number(it.quantity) || 1) * (Number(it.unit_price) || 0)).toFixed(2)),
             }))
           );
+          try {
+            const savedLabel = localStorage.getItem(`sn_invoice_qty_label_${invoiceToEdit.id}`);
+            if (savedLabel === 'QTY' || savedLabel === 'NTS') {
+              setQtyColumnLabel(savedLabel);
+            } else {
+              const hasHotel = invoiceToEdit.items.some(it => /hotel/i.test(it.description || ''));
+              setQtyColumnLabel(hasHotel ? 'NTS' : 'QTY');
+            }
+          } catch {
+            setQtyColumnLabel('QTY');
+          }
         } else {
           setItems([{ catalog_item_id: null, description: '', quantity: 1, unit_price: 0, total: 0 }]);
+          setQtyColumnLabel('QTY');
         }
       } else {
         setClientId(initialClientId || '');
@@ -151,6 +164,7 @@ export const CreateInvoiceModal: React.FC<CreateInvoiceModalProps> = ({
         setDiscount(0);
         setPaidAmount(0);
         setNotes(settings?.payment_notes || '');
+        setQtyColumnLabel('QTY');
         if (settings?.invoice_prefix && settings?.next_number) {
           setInvoiceNumber(`${settings.invoice_prefix}${settings.next_number}`);
         } else {
@@ -248,6 +262,9 @@ export const CreateInvoiceModal: React.FC<CreateInvoiceModalProps> = ({
   const handleQuickAddPreset = (preset: InvoiceCatalogItem) => {
     const price = Number(preset.default_unit_price) || 0;
     const desc = preset.name + (preset.description ? ` — ${preset.description}` : '');
+    if (/hotel/i.test(desc)) {
+      setQtyColumnLabel('NTS');
+    }
 
     if (items.length === 1 && !items[0].description.trim() && items[0].unit_price === 0) {
       setItems([
@@ -329,6 +346,12 @@ export const CreateInvoiceModal: React.FC<CreateInvoiceModalProps> = ({
       const savedInvoice = invoiceToEdit
         ? await api.updateInvoice(invoiceToEdit.id, payload)
         : await api.createInvoice(payload);
+
+      try {
+        localStorage.setItem(`sn_invoice_qty_label_${savedInvoice.id}`, qtyColumnLabel);
+      } catch {
+        // Ignore storage errors
+      }
 
       onInvoiceSaved(savedInvoice);
       onClose();
@@ -616,9 +639,21 @@ export const CreateInvoiceModal: React.FC<CreateInvoiceModalProps> = ({
 
             {/* Clean Line Items Table */}
             <div className="border border-slate-200 rounded-xl overflow-hidden divide-y divide-slate-200">
-              <div className="grid grid-cols-12 gap-2 bg-slate-50 px-3 py-2 text-[10px] font-bold text-slate-500 uppercase tracking-wider">
+              <div className="grid grid-cols-12 gap-2 bg-slate-50 px-3 py-2 text-[10px] font-bold text-slate-500 uppercase tracking-wider items-center">
                 <div className="col-span-6">Service Description</div>
-                <div className="col-span-2 text-center">Qty</div>
+                <div className="col-span-2 text-center">
+                  <button
+                    type="button"
+                    onClick={() => setQtyColumnLabel(prev => (prev === 'QTY' ? 'NTS' : 'QTY'))}
+                    title="Click to switch between QTY (Service) and NTS (Hotel Reservation Service)"
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-white border border-slate-200 text-sky-800 hover:bg-sky-50 hover:border-sky-300 font-bold text-[10px] transition cursor-pointer"
+                  >
+                    <span>{qtyColumnLabel}</span>
+                    <span className="text-[9px] text-slate-400 font-normal">
+                      ({qtyColumnLabel === 'QTY' ? 'Service' : 'Hotel'})
+                    </span>
+                  </button>
+                </div>
                 <div className="col-span-2 text-right">Price</div>
                 <div className="col-span-2 text-right">Total</div>
               </div>

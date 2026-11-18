@@ -49,6 +49,10 @@ export const InvoiceDetailModal: React.FC<InvoiceDetailModalProps> = ({
   const [pdfSuccess, setPdfSuccess] = useState(false);
   const [logoCandidateIdx, setLogoCandidateIdx] = useState(0);
   const [logoFailed, setLogoFailed] = useState(false);
+  const [previewScale, setPreviewScale] = useState(1);
+  const [previewHeight, setPreviewHeight] = useState<number | null>(null);
+  const [qtyColumnLabel, setQtyColumnLabel] = useState<'QTY' | 'NTS'>('QTY');
+  const previewViewportRef = useRef<HTMLDivElement>(null);
   const invoicePrintRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -62,6 +66,38 @@ export const InvoiceDetailModal: React.FC<InvoiceDetailModalProps> = ({
   }, [isOpen]);
 
   useEffect(() => {
+    if (!isOpen || !invoice) return;
+    try {
+      const saved = localStorage.getItem(`sn_invoice_qty_label_${invoice.id}`);
+      if (saved === 'QTY' || saved === 'NTS') {
+        setQtyColumnLabel(saved);
+        return;
+      }
+    } catch {
+      // Ignore storage errors
+    }
+    const hasHotelItem = (invoice.items || []).some(it =>
+      /hotel/i.test(it.description || '')
+    );
+    setQtyColumnLabel(hasHotelItem ? 'NTS' : 'QTY');
+  }, [isOpen, invoice]);
+
+  const handleSetQtyColumnLabel = (label: 'QTY' | 'NTS') => {
+    setQtyColumnLabel(label);
+    if (invoice?.id) {
+      try {
+        localStorage.setItem(`sn_invoice_qty_label_${invoice.id}`, label);
+      } catch {
+        // Ignore storage errors
+      }
+    }
+  };
+
+  const handleToggleQtyColumnLabel = () => {
+    handleSetQtyColumnLabel(qtyColumnLabel === 'QTY' ? 'NTS' : 'QTY');
+  };
+
+  useEffect(() => {
     if (!isOpen) return;
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') onClose();
@@ -69,6 +105,37 @@ export const InvoiceDetailModal: React.FC<InvoiceDetailModalProps> = ({
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen, onClose]);
+
+  // Measure viewport to scale the 794px A4 invoice preview proportionally on mobile screens
+  useEffect(() => {
+    if (!isOpen) return;
+    const updateScale = () => {
+      const viewportEl = previewViewportRef.current;
+      const sheetEl = invoicePrintRef.current;
+      if (!viewportEl || !sheetEl) return;
+      const availableWidth = viewportEl.clientWidth - 24;
+      const nextScale = availableWidth < 794 ? Math.max(0.32, availableWidth / 794) : 1;
+      setPreviewScale(nextScale);
+      setPreviewHeight(sheetEl.offsetHeight);
+    };
+
+    updateScale();
+    const timer = setTimeout(updateScale, 120);
+    window.addEventListener('resize', updateScale);
+
+    let ro: ResizeObserver | null = null;
+    if (typeof ResizeObserver !== 'undefined') {
+      ro = new ResizeObserver(updateScale);
+      if (previewViewportRef.current) ro.observe(previewViewportRef.current);
+      if (invoicePrintRef.current) ro.observe(invoicePrintRef.current);
+    }
+
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener('resize', updateScale);
+      if (ro) ro.disconnect();
+    };
+  }, [isOpen, invoice, settings, logoCandidateIdx, logoFailed]);
 
   if (!isOpen || !invoice) return null;
 
@@ -118,24 +185,32 @@ export const InvoiceDetailModal: React.FC<InvoiceDetailModalProps> = ({
       const sourceEl = invoicePrintRef.current;
 
       // Create an offscreen A4-proportioned container (794px = 210mm at 96 DPI)
-      // so the captured PDF always matches the full desktop website design 1:1
+      // with text-size-adjust locked to 100% so mobile browsers never inflate fonts or break lines
       offscreenHost = document.createElement('div');
       offscreenHost.style.position = 'fixed';
       offscreenHost.style.left = '-10000px';
       offscreenHost.style.top = '0';
       offscreenHost.style.width = '794px';
+      offscreenHost.style.minWidth = '794px';
+      offscreenHost.style.maxWidth = '794px';
       offscreenHost.style.backgroundColor = '#ffffff';
       offscreenHost.style.zIndex = '-9999';
       offscreenHost.style.pointerEvents = 'none';
+      offscreenHost.style.setProperty('-webkit-text-size-adjust', '100%');
+      offscreenHost.style.setProperty('text-size-adjust', '100%');
 
       const clone = sourceEl.cloneNode(true) as HTMLElement;
       clone.style.width = '794px';
+      clone.style.minWidth = '794px';
       clone.style.maxWidth = '794px';
       clone.style.margin = '0';
       clone.style.borderRadius = '0';
       clone.style.border = 'none';
       clone.style.boxShadow = 'none';
+      clone.style.transform = 'none';
       clone.style.backgroundColor = '#ffffff';
+      clone.style.setProperty('-webkit-text-size-adjust', '100%');
+      clone.style.setProperty('text-size-adjust', '100%');
 
       // Pre-inline all <img> elements as base64 data URLs so the snapshot renderer
       // never suffers from CORS tainting or missing external images
@@ -191,14 +266,41 @@ export const InvoiceDetailModal: React.FC<InvoiceDetailModalProps> = ({
       if (document.fonts?.ready) {
         await document.fonts.ready;
       }
-      await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+      await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
 
       // Render the exact DOM node at 3x scale for crisp Retina-grade typography & icons
       let renderedCanvas: HTMLCanvasElement | null = null;
       try {
         renderedCanvas = await domToCanvas(clone, {
+          width: 794,
           scale: 3,
           backgroundColor: '#ffffff',
+          onCloneEachNode: (node) => {
+            if (node instanceof HTMLElement) {
+              node.style.setProperty('-webkit-text-size-adjust', '100%');
+              node.style.setProperty('text-size-adjust', '100%');
+              node.style.setProperty('font-kerning', 'normal');
+              if (node !== clone) {
+                const tag = node.tagName.toLowerCase();
+                if (
+                  tag === 'span' ||
+                  tag === 'strong' ||
+                  tag === 'h1' ||
+                  tag === 'h2' ||
+                  tag === 'h3' ||
+                  tag === 'p' ||
+                  tag === 'pre'
+                ) {
+                  // Prevent modern-screenshot from locking subpixel widths on text nodes
+                  // which can cause mobile SVG foreignObject font rendering to wrap mid-word
+                  node.style.removeProperty('width');
+                  node.style.removeProperty('inline-size');
+                  node.style.removeProperty('height');
+                  node.style.removeProperty('block-size');
+                }
+              }
+            }
+          },
         });
       } catch (domErr) {
         console.warn('modern-screenshot fallback to html2canvas-pro:', domErr);
@@ -212,7 +314,7 @@ export const InvoiceDetailModal: React.FC<InvoiceDetailModalProps> = ({
           backgroundColor: '#ffffff',
           logging: false,
           width: 794,
-          windowWidth: 1024,
+          windowWidth: 1200,
         });
       }
 
@@ -317,26 +419,29 @@ export const InvoiceDetailModal: React.FC<InvoiceDetailModalProps> = ({
     switch (status) {
       case 'Paid':
         return (
-          <span className="inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider px-3 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200">
-            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> Paid in Full
+          <span className="inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider px-3 py-1 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200 whitespace-nowrap">
+            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+            <span>Paid in Full</span>
           </span>
         );
       case 'Partial':
         return (
-          <span className="inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider px-3 py-1 rounded-full bg-sky-50 text-[#0284C7] border border-sky-200">
-            <span className="w-1.5 h-1.5 rounded-full bg-[#0284C7]" /> Partial Payment
+          <span className="inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider px-3 py-1 rounded-full bg-sky-50 text-[#0284C7] border border-sky-200 whitespace-nowrap">
+            <span className="w-1.5 h-1.5 rounded-full bg-[#0284C7] shrink-0" />
+            <span>Partial Payment</span>
           </span>
         );
       case 'Pending':
         return (
-          <span className="inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider px-3 py-1 rounded-full bg-amber-50 text-amber-700 border border-amber-200">
-            <span className="w-1.5 h-1.5 rounded-full bg-[#F59E0B]" /> Payment Pending
+          <span className="inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider px-3 py-1 rounded-full bg-amber-50 text-amber-700 border border-amber-200 whitespace-nowrap">
+            <span className="w-1.5 h-1.5 rounded-full bg-[#F59E0B] shrink-0" />
+            <span>Payment Pending</span>
           </span>
         );
       case 'Cancelled':
         return (
-          <span className="inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider px-3 py-1 rounded-full bg-slate-100 text-slate-600 border border-slate-200">
-            Cancelled
+          <span className="inline-flex items-center gap-1.5 text-[11px] font-bold uppercase tracking-wider px-3 py-1 rounded-full bg-slate-100 text-slate-600 border border-slate-200 whitespace-nowrap">
+            <span>Cancelled</span>
           </span>
         );
     }
@@ -344,11 +449,16 @@ export const InvoiceDetailModal: React.FC<InvoiceDetailModalProps> = ({
 
   return (
     <div
-      className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-6 animate-in fade-in duration-200"
+      className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-2 sm:p-6 animate-in fade-in duration-200"
       onClick={onClose}
     >
       {/* Print-specific style tag: ensures only the invoice printable section is printed with exact subtle theme colors */}
       <style>{`
+        #printable-invoice-container, #printable-invoice-container * {
+          -webkit-text-size-adjust: 100% !important;
+          -moz-text-size-adjust: 100% !important;
+          text-size-adjust: 100% !important;
+        }
         @media print {
           @page {
             size: A4;
@@ -374,9 +484,11 @@ export const InvoiceDetailModal: React.FC<InvoiceDetailModalProps> = ({
             position: fixed !important;
             left: 0 !important;
             top: 0 !important;
-            width: 100% !important;
-            max-width: 100% !important;
+            width: 794px !important;
+            min-width: 794px !important;
+            max-width: 794px !important;
             margin: 0 !important;
+            transform: none !important;
             box-shadow: none !important;
             border: none !important;
             background: #ffffff !important;
@@ -389,31 +501,62 @@ export const InvoiceDetailModal: React.FC<InvoiceDetailModalProps> = ({
       `}</style>
 
       <div
-        className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-4xl max-h-[92vh] flex flex-col overflow-hidden"
+        className="bg-white rounded-2xl shadow-2xl border border-slate-200 w-full max-w-4xl max-h-[94vh] flex flex-col overflow-hidden"
         onClick={e => e.stopPropagation()}
       >
         {/* Modal Top Bar (Hidden on print) */}
-        <div className="no-print px-6 py-3.5 bg-[#0B2A5B] text-white flex flex-wrap items-center justify-between gap-2 shrink-0">
-          <div className="flex items-center gap-2.5">
-            <div className="w-7 h-7 rounded-lg bg-white/10 flex items-center justify-center">
+        <div className="no-print px-4 sm:px-6 py-3.5 bg-[#0B2A5B] text-white flex flex-wrap items-center justify-between gap-2 shrink-0">
+          <div className="flex items-center gap-2 sm:gap-2.5 min-w-0">
+            <div className="w-7 h-7 rounded-lg bg-white/10 flex items-center justify-center shrink-0">
               <FileText className="w-4 h-4 text-[#38BDF8]" />
             </div>
-            <span className="text-sm font-bold tracking-wide">
+            <span className="text-xs sm:text-sm font-bold tracking-wide truncate">
               Invoice #{invoice.invoice_number}
             </span>
-            <span className="text-xs text-white/30">|</span>
-            <span className="text-xs text-sky-100 font-medium">
+            <span className="text-xs text-white/30 hidden sm:inline">|</span>
+            <span className="text-xs text-sky-100 font-medium truncate hidden sm:inline">
               {invoice.client_name}
             </span>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1.5 sm:gap-2 flex-wrap">
+            {/* Switch between QTY (Service) & NTS (Hotel Reservation Service) */}
+            <div
+              className="inline-flex items-center bg-white/10 border border-white/15 rounded-lg p-0.5 text-[11px] font-bold"
+              title="Switch 3rd column header between QTY (Service) and NTS (Hotel Reservation Service)"
+            >
+              <button
+                type="button"
+                onClick={() => handleSetQtyColumnLabel('QTY')}
+                className={`px-2 py-1 rounded-md transition cursor-pointer ${
+                  qtyColumnLabel === 'QTY'
+                    ? 'bg-[#38BDF8] text-[#0B2A5B] shadow-2xs'
+                    : 'text-white/75 hover:text-white'
+                }`}
+                title="QTY (Service)"
+              >
+                QTY
+              </button>
+              <button
+                type="button"
+                onClick={() => handleSetQtyColumnLabel('NTS')}
+                className={`px-2 py-1 rounded-md transition cursor-pointer ${
+                  qtyColumnLabel === 'NTS'
+                    ? 'bg-[#38BDF8] text-[#0B2A5B] shadow-2xs'
+                    : 'text-white/75 hover:text-white'
+                }`}
+                title="NTS (Hotel Reservation Service)"
+              >
+                NTS
+              </button>
+            </div>
+
             {invoice.status !== 'Paid' && (
               <button
                 type="button"
                 onClick={handleQuickMarkPaid}
                 disabled={markingPaid}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-emerald-900 bg-emerald-300 hover:bg-emerald-200 rounded-lg transition cursor-pointer"
+                className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-bold text-emerald-900 bg-emerald-300 hover:bg-emerald-200 rounded-lg transition cursor-pointer"
               >
                 <CheckCircle2 className="w-3.5 h-3.5" />
                 <span>Mark Paid</span>
@@ -427,7 +570,7 @@ export const InvoiceDetailModal: React.FC<InvoiceDetailModalProps> = ({
                   onClose();
                   onEditInvoice(invoice);
                 }}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-white/90 hover:text-white bg-white/10 hover:bg-white/20 rounded-lg transition border border-white/15 cursor-pointer"
+                className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-semibold text-white/90 hover:text-white bg-white/10 hover:bg-white/20 rounded-lg transition border border-white/15 cursor-pointer"
               >
                 <Edit2 className="w-3.5 h-3.5" />
                 <span>Edit</span>
@@ -441,10 +584,10 @@ export const InvoiceDetailModal: React.FC<InvoiceDetailModalProps> = ({
                   onClose();
                   onDeleteInvoice(invoice.id);
                 }}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-rose-200 hover:text-white bg-white/10 hover:bg-rose-600 rounded-lg transition border border-white/15 cursor-pointer"
+                className="inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 text-xs font-semibold text-rose-200 hover:text-white bg-white/10 hover:bg-rose-600 rounded-lg transition border border-white/15 cursor-pointer"
               >
                 <Trash2 className="w-3.5 h-3.5" />
-                <span>Delete</span>
+                <span className="hidden sm:inline">Delete</span>
               </button>
             )}
 
@@ -452,7 +595,7 @@ export const InvoiceDetailModal: React.FC<InvoiceDetailModalProps> = ({
               type="button"
               onClick={handlePrint}
               disabled={printingPdf}
-              className={`inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-bold text-white rounded-lg transition shadow-xs cursor-pointer ${
+              className={`inline-flex items-center gap-1.5 px-3 sm:px-3.5 py-1.5 text-xs font-bold text-white rounded-lg transition shadow-xs cursor-pointer ${
                 pdfSuccess
                   ? 'bg-emerald-600 hover:bg-emerald-700'
                   : 'bg-[#0284C7] hover:bg-sky-500 disabled:opacity-60'
@@ -479,404 +622,444 @@ export const InvoiceDetailModal: React.FC<InvoiceDetailModalProps> = ({
             <button
               type="button"
               onClick={onClose}
-              className="p-1.5 text-white/70 hover:text-white hover:bg-white/10 rounded-lg transition ml-1 cursor-pointer"
+              className="p-1.5 text-white/70 hover:text-white hover:bg-white/10 rounded-lg transition ml-0.5 cursor-pointer"
             >
               <X className="w-5 h-5" />
             </button>
           </div>
         </div>
 
-        {/* Printable Invoice Sheet */}
-        <div className="flex-1 overflow-y-auto p-4 sm:p-8 bg-slate-100/70">
+        {/* Printable Invoice Sheet Viewport (Scales 794px A4 Sheet cleanly on Mobile, 1:1 on Desktop) */}
+        <div
+          ref={previewViewportRef}
+          className="flex-1 overflow-y-auto overflow-x-hidden p-3 sm:p-8 bg-slate-100/70 flex justify-center items-start"
+        >
           <div
-            id="printable-invoice-container"
-            ref={invoicePrintRef}
-            className="bg-white rounded-2xl shadow-sm border border-slate-200/90 max-w-3xl mx-auto overflow-hidden text-slate-800"
+            style={{
+              width: previewScale < 1 ? `${Math.round(794 * previewScale)}px` : '794px',
+              height:
+                previewScale < 1 && previewHeight
+                  ? `${Math.ceil(previewHeight * previewScale)}px`
+                  : 'auto',
+            }}
+            className="relative shrink-0"
           >
-            {/* Subtle Minimal Tri-Tone Brand Accent Bar (Logo Palette: Aviation Navy, Sky Blue, Golden Amber) */}
-            <div className="h-1.5 w-full flex">
-              <div className="h-full w-[62%] bg-[#0B2A5B]" />
-              <div className="h-full w-[24%] bg-[#0284C7]" />
-              <div className="h-full w-[14%] bg-[#F59E0B]" />
-            </div>
-
-            <div className="p-7 sm:p-11 space-y-8">
-              {/* Header: Company Branding & Invoice Metadata */}
-              <div className="flex flex-col sm:flex-row justify-between items-start gap-6 pb-7 border-b border-slate-200/80">
-                {/* Left: Logo & Agency Details */}
-                <div className="space-y-3.5 max-w-md">
-                  <div className="flex items-center gap-3.5">
-                    {currentLogoSrc ? (
-                      <img
-                        src={currentLogoSrc}
-                        crossOrigin="anonymous"
-                        alt={settings?.company_name || 'Agency Logo'}
-                        className="h-16 w-auto max-w-[160px] object-contain shrink-0"
-                        onError={() => {
-                          if (logoCandidateIdx + 1 < logoCandidates.length) {
-                            setLogoCandidateIdx(prev => prev + 1);
-                          } else {
-                            setLogoFailed(true);
-                          }
-                        }}
-                      />
-                    ) : (
-                      <div className="w-14 h-14 rounded-2xl bg-[#0B2A5B] text-white flex items-center justify-center font-black text-xl shrink-0 shadow-xs">
-                        SN
-                      </div>
-                    )}
-
-                    <div>
-                      <h1 className="text-xl font-black tracking-tight text-[#0B2A5B]">
-                        {settings?.company_name || 'SN Travels Agency'}
-                      </h1>
-                      {settings?.company_tagline && (
-                        <p className="text-xs text-[#0284C7] font-semibold mt-0.5">
-                          {settings.company_tagline}
-                        </p>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="text-xs text-slate-500 space-y-1.5 pt-0.5 leading-relaxed">
-                    {settings?.address && (
-                      <p className="flex items-start gap-2">
-                        <MapPin className="w-3.5 h-3.5 text-[#0284C7] shrink-0 mt-0.5" />
-                        <span className="break-words">{settings.address}</span>
-                      </p>
-                    )}
-                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-                      {settings?.phone && (
-                        <span className="flex items-center gap-1.5">
-                          <Phone className="w-3.5 h-3.5 text-[#0284C7]" />
-                          <span>{settings.phone}</span>
-                        </span>
-                      )}
-                      {settings?.email && (
-                        <span className="flex items-center gap-1.5">
-                          <Mail className="w-3.5 h-3.5 text-[#0284C7]" />
-                          <span>{settings.email}</span>
-                        </span>
-                      )}
-                      {settings?.website && (
-                        <span className="flex items-center gap-1.5">
-                          <Globe className="w-3.5 h-3.5 text-[#0284C7]" />
-                          <span>{settings.website}</span>
-                        </span>
-                      )}
-                    </div>
-                  </div>
+            <div
+              style={{
+                width: '794px',
+                minWidth: '794px',
+                maxWidth: '794px',
+                transform: previewScale < 1 ? `scale(${previewScale})` : 'none',
+                transformOrigin: 'top left',
+              }}
+            >
+              <div
+                id="printable-invoice-container"
+                ref={invoicePrintRef}
+                style={{
+                  width: '794px',
+                  minWidth: '794px',
+                  maxWidth: '794px',
+                  WebkitTextSizeAdjust: '100%',
+                  textSizeAdjust: '100%',
+                }}
+                className="bg-white rounded-2xl shadow-sm border border-slate-200/90 overflow-hidden text-slate-800"
+              >
+                {/* Subtle Minimal Tri-Tone Brand Accent Bar (Logo Palette: Aviation Navy, Sky Blue, Golden Amber) */}
+                <div className="h-1.5 w-full flex">
+                  <div className="h-full w-[62%] bg-[#0B2A5B]" />
+                  <div className="h-full w-[24%] bg-[#0284C7]" />
+                  <div className="h-full w-[14%] bg-[#F59E0B]" />
                 </div>
 
-                {/* Right: Invoice Title, Number Badge, Status & Dates */}
-                <div className="w-full sm:w-auto text-left sm:text-right space-y-2.5 shrink-0">
-                  <div className="space-y-1.5">
-                    <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-[#0284C7] block">
-                      Official Billing Statement
-                    </span>
-                    <h2 className="text-3xl font-black tracking-tight text-[#0B2A5B] leading-none">
-                      INVOICE
-                    </h2>
-                    <div className="pt-0.5">
-                      <span className="inline-block font-mono text-xs font-bold text-[#0B2A5B] bg-[#F0F7FF] border border-[#BAE6FD] px-2.5 py-1 rounded-md">
-                        #{invoice.invoice_number}
-                      </span>
-                    </div>
-                  </div>
-
-                  <div className="pt-1">{getStatusBadge(invoice.status)}</div>
-
-                  <div className="text-xs space-y-1 pt-1.5 text-slate-600">
-                    <div className="flex sm:justify-end items-center gap-2.5">
-                      <span className="text-slate-400">Issued:</span>
-                      <span className="font-semibold text-slate-800">{invoice.issue_date}</span>
-                    </div>
-                    {invoice.payment_method && (
-                      <div className="flex sm:justify-end items-center gap-2.5">
-                        <span className="text-slate-400">Method:</span>
-                        <span className="font-semibold text-[#0B2A5B]">{invoice.payment_method}</span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              {/* Billed To Customer Card (Minimal soft surface with Aviation Navy left border & Golden Amber dot) */}
-              <div className="relative bg-[#F8FAFC] border border-slate-200/80 border-l-4 border-l-[#0B2A5B] rounded-xl p-5">
-                <div className="flex items-center gap-2 mb-2.5">
-                  <span className="w-2 h-2 rounded-full bg-[#F59E0B]" />
-                  <span className="text-[10px] font-bold text-[#0B2A5B] uppercase tracking-widest">
-                    Billed To Customer
-                  </span>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
-                  <div className="space-y-1.5 min-w-0">
-                    <h3 className="text-base font-bold text-slate-900 break-words">
-                      {invoice.client_name}
-                    </h3>
-                    <div className="flex flex-wrap items-center gap-2 pt-0.5">
-                      {invoice.client_code && (
-                        <span className="inline-flex items-center gap-1 text-[11px] font-mono bg-white border border-slate-200 text-slate-600 px-2 py-0.5 rounded-md">
-                          Ref: <strong className="text-[#0B2A5B]">{invoice.client_code}</strong>
-                        </span>
-                      )}
-                      {invoice.client_passport && (
-                        <span className="inline-flex items-center gap-1 text-[11px] font-mono bg-white border border-slate-200 text-slate-600 px-2 py-0.5 rounded-md">
-                          Passport: <strong className="text-[#0B2A5B]">{invoice.client_passport}</strong>
-                        </span>
-                      )}
-                      {invoice.client_country && (
-                        <span className="text-[11px] text-slate-500 font-medium">
-                          • {invoice.client_country}
-                        </span>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="space-y-1.5 text-slate-600 sm:text-right flex flex-col sm:items-end justify-center min-w-0">
-                    {invoice.client_phone && (
-                      <p className="flex items-center gap-1.5">
-                        <Phone className="w-3.5 h-3.5 text-[#0284C7] shrink-0" />
-                        <span>{invoice.client_phone}</span>
-                      </p>
-                    )}
-                    {invoice.client_email && (
-                      <p className="flex items-center gap-1.5">
-                        <Mail className="w-3.5 h-3.5 text-[#0284C7] shrink-0" />
-                        <span className="break-all">{invoice.client_email}</span>
-                      </p>
-                    )}
-                    {invoice.client_address && (
-                      <p className="flex items-start gap-1.5 sm:justify-end">
-                        <MapPin className="w-3.5 h-3.5 text-[#0284C7] shrink-0 mt-0.5" />
-                        <span className="text-left sm:text-right break-words">{invoice.client_address}</span>
-                      </p>
-                    )}
-                  </div>
-                </div>
-              </div>
-
-              {/* Itemized Line Items Table */}
-              <div className="overflow-hidden rounded-xl border border-slate-200/80">
-                <table className="w-full table-fixed text-left text-xs">
-                  <thead>
-                    <tr className="bg-[#F0F7FF] border-b border-[#BAE6FD] text-[#0B2A5B] font-bold uppercase tracking-wider text-[10.5px]">
-                      <th className="py-3 px-3.5 w-12">#</th>
-                      <th className="py-3 px-3.5">Service / Description</th>
-                      <th className="py-3 px-3.5 text-center w-16">Qty</th>
-                      <th className="py-3 px-3.5 text-right w-28">Unit Price</th>
-                      <th className="py-3 px-3.5 text-right w-32">Amount</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    {invoice.items && invoice.items.length > 0 ? (
-                      invoice.items.map((it, idx) => (
-                        <tr
-                          key={it.id || idx}
-                          className="hover:bg-[#F8FAFC] transition-colors"
-                        >
-                          <td className="py-3.5 px-3.5 align-top">
-                            <span className="inline-flex items-center justify-center w-6 h-6 rounded-md bg-[#F0F7FF] text-[#0284C7] font-mono text-[11px] font-bold">
-                              {String(idx + 1).padStart(2, '0')}
-                            </span>
-                          </td>
-                          <td className="py-3.5 px-3.5 align-top break-words [overflow-wrap:anywhere]">
-                            <span className="font-semibold text-slate-900 block leading-relaxed whitespace-pre-wrap break-words [overflow-wrap:anywhere]">
-                              {it.description}
-                            </span>
-                          </td>
-                          <td className="py-3.5 px-3.5 align-top text-center font-semibold text-slate-700 whitespace-nowrap">
-                            {it.quantity}
-                          </td>
-                          <td className="py-3.5 px-3.5 align-top text-right font-mono text-slate-600 whitespace-nowrap">
-                            {displayCurrency} {Number(it.unit_price).toFixed(2)}
-                          </td>
-                          <td className="py-3.5 px-3.5 align-top text-right font-mono font-bold text-[#0B2A5B] whitespace-nowrap">
-                            {displayCurrency} {Number(it.total).toFixed(2)}
-                          </td>
-                        </tr>
-                      ))
-                    ) : (
-                      <tr>
-                        <td colSpan={5} className="py-6 text-center text-slate-400">
-                          No itemized services listed.
-                        </td>
-                      </tr>
-                    )}
-                  </tbody>
-                </table>
-              </div>
-
-              {/* Summary & Totals Calculation */}
-              <div className="flex flex-col sm:flex-row justify-between items-start gap-8 pt-1">
-                {/* Left: Payment Instructions & Bank Details */}
-                <div className="w-full sm:flex-1 min-w-0 space-y-3.5">
-                  {settings?.bank_details && (
-                    <div className="bg-[#F8FAFC] border border-slate-200/80 rounded-xl p-4 space-y-1.5 text-xs">
-                      <div className="flex items-center gap-2">
-                        <span className="w-1.5 h-1.5 rounded-full bg-[#0284C7]" />
-                        <span className="text-[10px] font-bold text-[#0B2A5B] uppercase tracking-wider">
-                          Bank Transfer Details
-                        </span>
-                      </div>
-                      <pre className="font-mono text-[11px] text-slate-700 whitespace-pre-wrap break-words leading-relaxed pl-3.5">
-                        {settings.bank_details}
-                      </pre>
-                    </div>
-                  )}
-
-                  {invoice.notes && (
-                    <div className="text-xs text-slate-600 space-y-1 px-1">
-                      <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
-                        Special Notes / Instructions
-                      </span>
-                      <p className="whitespace-pre-wrap break-words leading-relaxed text-slate-700">
-                        {invoice.notes}
-                      </p>
-                    </div>
-                  )}
-                </div>
-
-                {/* Right: Financial Totals Box */}
-                <div className="w-full sm:w-80 shrink-0 space-y-2 text-xs">
-                  <div className="flex justify-between items-center py-1.5 px-3 text-slate-600">
-                    <span>Subtotal</span>
-                    <span className="font-mono font-semibold text-slate-900">
-                      {displayCurrency} {Number(invoice.subtotal).toFixed(2)}
-                    </span>
-                  </div>
-
-                  {invoice.discount > 0 && (
-                    <div className="flex justify-between items-center py-1.5 px-3 text-emerald-700">
-                      <span>Discount</span>
-                      <span className="font-mono font-semibold">
-                        - {displayCurrency} {Number(invoice.discount).toFixed(2)}
-                      </span>
-                    </div>
-                  )}
-
-                  {invoice.tax_rate > 0 && (
-                    <div className="flex justify-between items-center py-1.5 px-3 text-slate-600">
-                      <span>Tax ({invoice.tax_rate}%)</span>
-                      <span className="font-mono text-slate-800">
-                        {displayCurrency} {Number(invoice.tax_amount).toFixed(2)}
-                      </span>
-                    </div>
-                  )}
-
-                  {/* Highlighted Total Amount Pill Box */}
-                  <div className="flex justify-between items-center py-3 px-4 rounded-xl bg-[#F0F7FF] border border-[#BAE6FD] text-[#0B2A5B]">
-                    <span className="text-xs font-extrabold uppercase tracking-wider">
-                      Total Amount
-                    </span>
-                    <span className="font-mono text-base font-black">
-                      {displayCurrency} {Number(invoice.total_amount).toFixed(2)}
-                    </span>
-                  </div>
-
-                  <div className="flex justify-between items-center py-1.5 px-3 text-emerald-700 font-semibold">
-                    <span>Amount Paid</span>
-                    <span className="font-mono">
-                      {displayCurrency} {Number(invoice.paid_amount).toFixed(2)}
-                    </span>
-                  </div>
-
-                  <div className="flex justify-between items-center py-2 px-3 rounded-lg bg-slate-50 border border-slate-200/70 text-sm font-bold">
-                    <span className={invoice.balance_due > 0 ? 'text-amber-700' : 'text-emerald-700'}>
-                      Balance Due
-                    </span>
-                    <span
-                      className={`font-mono ${
-                        invoice.balance_due > 0 ? 'text-amber-700' : 'text-emerald-700'
-                      }`}
-                    >
-                      {displayCurrency} {Number(invoice.balance_due).toFixed(2)}
-                    </span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Terms and Conditions (Left) & Authorized Signature Block (Right) */}
-              {(settings?.terms_and_conditions || (settings?.signature_enabled ?? 1) === 1) && (
-                <div className="pt-6 border-t border-slate-200/80 flex flex-col sm:flex-row justify-between items-start sm:items-end gap-8">
-                  {/* Left: Terms & Conditions */}
-                  <div className="flex-1 min-w-0 text-[10.5px] text-slate-500 space-y-1.5">
-                    {settings?.terms_and_conditions && (
-                      <>
-                        <span className="font-bold text-[#0B2A5B] uppercase tracking-wider block text-[10px]">
-                          Terms &amp; Conditions
-                        </span>
-                        <p className="whitespace-pre-wrap break-words leading-relaxed">
-                          {settings.terms_and_conditions}
-                        </p>
-                      </>
-                    )}
-                  </div>
-
-                  {/* Right: Signature Block (Line + Signatory Name + Designation) */}
-                  {(settings?.signature_enabled ?? 1) === 1 && (
-                    <div className="w-52 sm:w-56 shrink-0 text-center flex flex-col items-center self-end sm:self-auto">
-                      {/* Area above signature line */}
-                      <div className="h-11 flex items-end justify-center pb-1 w-full">
-                        {settings?.signature_style === 'image' && settings?.signature_image_url ? (
+                {/* Fixed Desktop A4 Layout — Never collapses on mobile viewports */}
+                <div className="p-11 space-y-8">
+                  {/* Header: Company Branding & Invoice Metadata */}
+                  <div className="flex flex-row justify-between items-start gap-6 pb-7 border-b border-slate-200/80">
+                    {/* Left: Logo & Agency Details */}
+                    <div className="space-y-3.5 max-w-[440px] flex-1 min-w-0">
+                      <div className="flex items-center gap-3.5">
+                        {currentLogoSrc ? (
                           <img
-                            src={getInvoiceLogoCandidates(settings.signature_image_url)[0] || settings.signature_image_url}
-                            data-raw-url={settings.signature_image_url}
+                            src={currentLogoSrc}
                             crossOrigin="anonymous"
-                            alt={settings?.signature_name || 'Authorized Signature'}
-                            className="max-h-10 max-w-[170px] object-contain"
-                          />
-                        ) : (settings?.signature_style || 'script') === 'script' ? (
-                          <span
-                            className="text-xl text-[#0B2A5B] italic font-serif select-none tracking-wide"
-                            style={{
-                              fontFamily: "'Brush Script MT', 'Segoe Script', 'Snell Roundhand', 'Apple Chancery', cursive",
+                            alt={settings?.company_name || 'Agency Logo'}
+                            className="h-16 w-auto max-w-[160px] object-contain shrink-0"
+                            onError={() => {
+                              if (logoCandidateIdx + 1 < logoCandidates.length) {
+                                setLogoCandidateIdx(prev => prev + 1);
+                              } else {
+                                setLogoFailed(true);
+                              }
                             }}
-                          >
-                            {(settings?.signature_name ?? 'Sarah Nadeem').trim() || 'Authorized Signatory'}
-                          </span>
-                        ) : null}
-                      </div>
-
-                      {/* Signature Horizontal Line & Controlled Text Below */}
-                      <div className="w-full border-t-[1.5px] border-slate-800 pt-1.5">
-                        {(settings?.signature_name ?? 'Sarah Nadeem').trim() && (
-                          <div className="text-xs font-bold text-slate-900 leading-tight">
-                            {(settings?.signature_name ?? 'Sarah Nadeem').trim()}
+                          />
+                        ) : (
+                          <div className="w-14 h-14 rounded-2xl bg-[#0B2A5B] text-white flex items-center justify-center font-black text-xl shrink-0 shadow-xs">
+                            SN
                           </div>
                         )}
-                        {(settings?.signature_designation ?? 'Managing Director').trim() && (() => {
-                          const rawDesig = (settings?.signature_designation ?? 'Managing Director').trim();
-                          const formattedDesig =
-                            rawDesig.startsWith('(') && rawDesig.endsWith(')')
-                              ? rawDesig
-                              : `(${rawDesig})`;
-                          return (
-                            <div className="text-[11px] font-medium text-slate-600 mt-0.5 leading-tight">
-                              {formattedDesig}
-                            </div>
-                          );
-                        })()}
+
+                        <div className="min-w-0">
+                          <h1 className="text-xl font-black tracking-tight text-[#0B2A5B] leading-snug">
+                            {settings?.company_name || 'SN Travels Agency'}
+                          </h1>
+                          {settings?.company_tagline && (
+                            <p className="text-xs text-[#0284C7] font-semibold mt-0.5 leading-snug">
+                              {settings.company_tagline}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="text-xs text-slate-500 space-y-1.5 pt-0.5 leading-relaxed">
+                        {settings?.address && (
+                          <p className="flex items-start gap-2">
+                            <MapPin className="w-3.5 h-3.5 text-[#0284C7] shrink-0 mt-0.5" />
+                            <span className="break-words">{settings.address}</span>
+                          </p>
+                        )}
+                        <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
+                          {settings?.phone && (
+                            <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+                              <Phone className="w-3.5 h-3.5 text-[#0284C7] shrink-0" />
+                              <span>{settings.phone}</span>
+                            </span>
+                          )}
+                          {settings?.email && (
+                            <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+                              <Mail className="w-3.5 h-3.5 text-[#0284C7] shrink-0" />
+                              <span>{settings.email}</span>
+                            </span>
+                          )}
+                          {settings?.website && (
+                            <span className="inline-flex items-center gap-1.5 whitespace-nowrap">
+                              <Globe className="w-3.5 h-3.5 text-[#0284C7] shrink-0" />
+                              <span>{settings.website}</span>
+                            </span>
+                          )}
+                        </div>
                       </div>
                     </div>
-                  )}
-                </div>
-              )}
 
-              <div className="pt-4 border-t border-slate-100 flex flex-col items-center gap-2 text-center">
-                <div className="flex items-center gap-1.5">
-                  <span className="w-1.5 h-1.5 rounded-full bg-[#0B2A5B]" />
-                  <span className="w-1.5 h-1.5 rounded-full bg-[#0284C7]" />
-                  <span className="w-1.5 h-1.5 rounded-full bg-[#F59E0B]" />
+                    {/* Right: Invoice Title, Number Badge, Status & Dates */}
+                    <div className="w-auto text-right space-y-2.5 shrink-0">
+                      <div className="space-y-1.5">
+                        <span className="text-[10px] font-bold uppercase tracking-[0.2em] text-[#0284C7] block whitespace-nowrap">
+                          Official Billing Statement
+                        </span>
+                        <h2 className="text-3xl font-black tracking-tight text-[#0B2A5B] leading-none whitespace-nowrap">
+                          INVOICE
+                        </h2>
+                        <div className="pt-0.5">
+                          <span className="inline-block font-mono text-xs font-bold text-[#0B2A5B] bg-[#F0F7FF] border border-[#BAE6FD] px-2.5 py-1 rounded-md whitespace-nowrap">
+                            #{invoice.invoice_number}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="pt-1 flex justify-end">{getStatusBadge(invoice.status)}</div>
+
+                      <div className="text-xs space-y-1 pt-1.5 text-slate-600">
+                        <div className="flex justify-end items-center gap-2.5 whitespace-nowrap">
+                          <span className="text-slate-400">Issued:</span>
+                          <span className="font-semibold text-slate-800">{invoice.issue_date}</span>
+                        </div>
+                        {invoice.payment_method && (
+                          <div className="flex justify-end items-center gap-2.5 whitespace-nowrap">
+                            <span className="text-slate-400">Method:</span>
+                            <span className="font-semibold text-[#0B2A5B]">{invoice.payment_method}</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Billed To Customer Card (Minimal soft surface with Aviation Navy left border & Golden Amber dot) */}
+                  <div className="relative bg-[#F8FAFC] border border-slate-200/80 border-l-4 border-l-[#0B2A5B] rounded-xl p-5">
+                    <div className="flex items-center gap-2 mb-2.5">
+                      <span className="w-2 h-2 rounded-full bg-[#F59E0B] shrink-0" />
+                      <span className="text-[10px] font-bold text-[#0B2A5B] uppercase tracking-widest whitespace-nowrap">
+                        Billed To Customer
+                      </span>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-6 text-xs items-start">
+                      <div className="space-y-1.5 min-w-0">
+                        <h3 className="text-base font-bold text-slate-900 break-words leading-snug">
+                          {invoice.client_name}
+                        </h3>
+                        <div className="flex flex-wrap items-center gap-2 pt-0.5">
+                          {invoice.client_code && (
+                            <span className="inline-flex items-center gap-1 text-[11px] font-mono bg-white border border-slate-200 text-slate-600 px-2 py-0.5 rounded-md whitespace-nowrap">
+                              <span>Ref:</span>
+                              <strong className="text-[#0B2A5B]">{invoice.client_code}</strong>
+                            </span>
+                          )}
+                          {invoice.client_passport && (
+                            <span className="inline-flex items-center gap-1 text-[11px] font-mono bg-white border border-slate-200 text-slate-600 px-2 py-0.5 rounded-md whitespace-nowrap">
+                              <span>Passport:</span>
+                              <strong className="text-[#0B2A5B]">{invoice.client_passport}</strong>
+                            </span>
+                          )}
+                          {invoice.client_country && (
+                            <span className="text-[11px] text-slate-500 font-medium whitespace-nowrap">
+                              • {invoice.client_country}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="space-y-1.5 text-slate-600 text-right flex flex-col items-end justify-center min-w-0">
+                        {invoice.client_phone && (
+                          <p className="inline-flex items-center gap-1.5 whitespace-nowrap">
+                            <Phone className="w-3.5 h-3.5 text-[#0284C7] shrink-0" />
+                            <span>{invoice.client_phone}</span>
+                          </p>
+                        )}
+                        {invoice.client_email && (
+                          <p className="inline-flex items-center gap-1.5">
+                            <Mail className="w-3.5 h-3.5 text-[#0284C7] shrink-0" />
+                            <span className="break-all">{invoice.client_email}</span>
+                          </p>
+                        )}
+                        {invoice.client_address && (
+                          <p className="flex items-start gap-1.5 justify-end">
+                            <MapPin className="w-3.5 h-3.5 text-[#0284C7] shrink-0 mt-0.5" />
+                            <span className="text-right break-words">{invoice.client_address}</span>
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Itemized Line Items Table */}
+                  <div className="overflow-hidden rounded-xl border border-slate-200/80">
+                    <table className="w-full table-fixed text-left text-xs">
+                      <thead>
+                        <tr className="bg-[#F0F7FF] border-b border-[#BAE6FD] text-[#0B2A5B] font-bold uppercase tracking-wider text-[10.5px]">
+                          <th className="py-3 px-3.5 w-12 whitespace-nowrap">#</th>
+                          <th className="py-3 px-3.5">Service / Description</th>
+                          <th
+                            onClick={handleToggleQtyColumnLabel}
+                            title="Click to switch between QTY (Service) and NTS (Hotel Reservation Service)"
+                            className="py-3 px-3.5 text-center w-16 whitespace-nowrap cursor-pointer select-none hover:bg-[#E0F2FE] transition-colors"
+                          >
+                            {qtyColumnLabel}
+                          </th>
+                          <th className="py-3 px-3.5 text-right w-32 whitespace-nowrap">Unit Price</th>
+                          <th className="py-3 px-3.5 text-right w-36 whitespace-nowrap">Amount</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100">
+                        {invoice.items && invoice.items.length > 0 ? (
+                          invoice.items.map((it, idx) => (
+                            <tr
+                              key={it.id || idx}
+                              className="hover:bg-[#F8FAFC] transition-colors"
+                            >
+                              <td className="py-3.5 px-3.5 align-top whitespace-nowrap">
+                                <span className="inline-flex items-center justify-center w-6 h-6 rounded-md bg-[#F0F7FF] text-[#0284C7] font-mono text-[11px] font-bold">
+                                  {String(idx + 1).padStart(2, '0')}
+                                </span>
+                              </td>
+                              <td className="py-3.5 px-3.5 align-top break-words">
+                                <span className="font-semibold text-slate-900 block leading-relaxed whitespace-pre-wrap break-words">
+                                  {it.description}
+                                </span>
+                              </td>
+                              <td className="py-3.5 px-3.5 align-top text-center font-semibold text-slate-700 whitespace-nowrap">
+                                {it.quantity}
+                              </td>
+                              <td className="py-3.5 px-3.5 align-top text-right font-mono text-slate-600 whitespace-nowrap">
+                                {displayCurrency} {Number(it.unit_price).toFixed(2)}
+                              </td>
+                              <td className="py-3.5 px-3.5 align-top text-right font-mono font-bold text-[#0B2A5B] whitespace-nowrap">
+                                {displayCurrency} {Number(it.total).toFixed(2)}
+                              </td>
+                            </tr>
+                          ))
+                        ) : (
+                          <tr>
+                            <td colSpan={5} className="py-6 text-center text-slate-400">
+                              No itemized services listed.
+                            </td>
+                          </tr>
+                        )}
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Summary & Totals Calculation */}
+                  <div className="flex flex-row justify-between items-start gap-8 pt-1">
+                    {/* Left: Payment Instructions & Bank Details */}
+                    <div className="flex-1 min-w-0 space-y-3.5">
+                      {settings?.bank_details && (
+                        <div className="bg-[#F8FAFC] border border-slate-200/80 rounded-xl p-4 space-y-1.5 text-xs">
+                          <div className="flex items-center gap-2">
+                            <span className="w-1.5 h-1.5 rounded-full bg-[#0284C7] shrink-0" />
+                            <span className="text-[10px] font-bold text-[#0B2A5B] uppercase tracking-wider whitespace-nowrap">
+                              Bank Transfer Details
+                            </span>
+                          </div>
+                          <pre className="font-mono text-[11px] text-slate-700 whitespace-pre-wrap break-words leading-relaxed pl-3.5">
+                            {settings.bank_details}
+                          </pre>
+                        </div>
+                      )}
+
+                      {invoice.notes && (
+                        <div className="text-xs text-slate-600 space-y-1 px-1">
+                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block whitespace-nowrap">
+                            Special Notes / Instructions
+                          </span>
+                          <p className="whitespace-pre-wrap break-words leading-relaxed text-slate-700">
+                            {invoice.notes}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Right: Financial Totals Box */}
+                    <div className="w-80 shrink-0 space-y-2 text-xs">
+                      <div className="flex justify-between items-center py-1.5 px-3 text-slate-600">
+                        <span className="whitespace-nowrap">Subtotal</span>
+                        <span className="font-mono font-semibold text-slate-900 whitespace-nowrap">
+                          {displayCurrency} {Number(invoice.subtotal).toFixed(2)}
+                        </span>
+                      </div>
+
+                      {invoice.discount > 0 && (
+                        <div className="flex justify-between items-center py-1.5 px-3 text-emerald-700">
+                          <span className="whitespace-nowrap">Discount</span>
+                          <span className="font-mono font-semibold whitespace-nowrap">
+                            - {displayCurrency} {Number(invoice.discount).toFixed(2)}
+                          </span>
+                        </div>
+                      )}
+
+                      {invoice.tax_rate > 0 && (
+                        <div className="flex justify-between items-center py-1.5 px-3 text-slate-600">
+                          <span className="whitespace-nowrap">Tax ({invoice.tax_rate}%)</span>
+                          <span className="font-mono text-slate-800 whitespace-nowrap">
+                            {displayCurrency} {Number(invoice.tax_amount).toFixed(2)}
+                          </span>
+                        </div>
+                      )}
+
+                      {/* Highlighted Total Amount Pill Box */}
+                      <div className="flex justify-between items-center py-3 px-4 rounded-xl bg-[#F0F7FF] border border-[#BAE6FD] text-[#0B2A5B]">
+                        <span className="text-xs font-extrabold uppercase tracking-wider whitespace-nowrap">
+                          Total Amount
+                        </span>
+                        <span className="font-mono text-base font-black whitespace-nowrap">
+                          {displayCurrency} {Number(invoice.total_amount).toFixed(2)}
+                        </span>
+                      </div>
+
+                      <div className="flex justify-between items-center py-1.5 px-3 text-emerald-700 font-semibold">
+                        <span className="whitespace-nowrap">Amount Paid</span>
+                        <span className="font-mono whitespace-nowrap">
+                          {displayCurrency} {Number(invoice.paid_amount).toFixed(2)}
+                        </span>
+                      </div>
+
+                      <div className="flex justify-between items-center py-2 px-3 rounded-lg bg-slate-50 border border-slate-200/70 text-sm font-bold">
+                        <span className={`whitespace-nowrap ${invoice.balance_due > 0 ? 'text-amber-700' : 'text-emerald-700'}`}>
+                          Balance Due
+                        </span>
+                        <span
+                          className={`font-mono whitespace-nowrap ${
+                            invoice.balance_due > 0 ? 'text-amber-700' : 'text-emerald-700'
+                          }`}
+                        >
+                          {displayCurrency} {Number(invoice.balance_due).toFixed(2)}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Terms and Conditions (Left) & Authorized Signature Block (Right) */}
+                  {(settings?.terms_and_conditions || (settings?.signature_enabled ?? 1) === 1) && (
+                    <div className="pt-6 border-t border-slate-200/80 flex flex-row justify-between items-end gap-8">
+                      {/* Left: Terms & Conditions */}
+                      <div className="flex-1 min-w-0 text-[10.5px] text-slate-500 space-y-1.5">
+                        {settings?.terms_and_conditions && (
+                          <>
+                            <span className="font-bold text-[#0B2A5B] uppercase tracking-wider block text-[10px] whitespace-nowrap">
+                              Terms &amp; Conditions
+                            </span>
+                            <p className="whitespace-pre-wrap break-words leading-relaxed">
+                              {settings.terms_and_conditions}
+                            </p>
+                          </>
+                        )}
+                      </div>
+
+                      {/* Right: Signature Block (Line + Signatory Name + Designation) */}
+                      {(settings?.signature_enabled ?? 1) === 1 && (
+                        <div className="w-56 shrink-0 text-center flex flex-col items-center">
+                          {/* Area above signature line */}
+                          <div className="h-11 flex items-end justify-center pb-1 w-full">
+                            {settings?.signature_style === 'image' && settings?.signature_image_url ? (
+                              <img
+                                src={getInvoiceLogoCandidates(settings.signature_image_url)[0] || settings.signature_image_url}
+                                data-raw-url={settings.signature_image_url}
+                                crossOrigin="anonymous"
+                                alt={settings?.signature_name || 'Authorized Signature'}
+                                className="max-h-10 max-w-[170px] object-contain"
+                              />
+                            ) : (settings?.signature_style || 'script') === 'script' ? (
+                              <span
+                                className="text-xl text-[#0B2A5B] italic font-serif select-none tracking-wide whitespace-nowrap"
+                                style={{
+                                  fontFamily: "'Brush Script MT', 'Segoe Script', 'Snell Roundhand', 'Apple Chancery', cursive",
+                                }}
+                              >
+                                {(settings?.signature_name ?? 'Sarah Nadeem').trim() || 'Authorized Signatory'}
+                              </span>
+                            ) : null}
+                          </div>
+
+                          {/* Signature Horizontal Line & Controlled Text Below */}
+                          <div className="w-full border-t-[1.5px] border-slate-800 pt-1.5">
+                            {(settings?.signature_name ?? 'Sarah Nadeem').trim() && (
+                              <div className="text-xs font-bold text-slate-900 leading-tight whitespace-nowrap">
+                                {(settings?.signature_name ?? 'Sarah Nadeem').trim()}
+                              </div>
+                            )}
+                            {(settings?.signature_designation ?? 'Managing Director').trim() && (() => {
+                              const rawDesig = (settings?.signature_designation ?? 'Managing Director').trim();
+                              const formattedDesig =
+                                rawDesig.startsWith('(') && rawDesig.endsWith(')')
+                                  ? rawDesig
+                                  : `(${rawDesig})`;
+                              return (
+                                <div className="text-[11px] font-medium text-slate-600 mt-0.5 leading-tight whitespace-nowrap">
+                                  {formattedDesig}
+                                </div>
+                              );
+                            })()}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  <div className="pt-4 border-t border-slate-100 flex flex-col items-center gap-2 text-center">
+                    <div className="flex items-center gap-1.5">
+                      <span className="w-1.5 h-1.5 rounded-full bg-[#0B2A5B]" />
+                      <span className="w-1.5 h-1.5 rounded-full bg-[#0284C7]" />
+                      <span className="w-1.5 h-1.5 rounded-full bg-[#F59E0B]" />
+                    </div>
+                    <p className="text-[11px] text-slate-400 font-medium whitespace-nowrap">
+                      Thank you for trusting{' '}
+                      <span className="text-[#0B2A5B] font-semibold">
+                        {settings?.company_name || 'SN Travels Agency'}
+                      </span>{' '}
+                      with your China visa and travel arrangements.
+                    </p>
+                  </div>
                 </div>
-                <p className="text-[11px] text-slate-400 font-medium">
-                  Thank you for trusting{' '}
-                  <span className="text-[#0B2A5B] font-semibold">
-                    {settings?.company_name || 'SN Travels Agency'}
-                  </span>{' '}
-                  with your China visa and travel arrangements.
-                </p>
               </div>
             </div>
           </div>
