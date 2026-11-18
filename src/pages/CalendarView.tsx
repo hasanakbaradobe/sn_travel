@@ -784,6 +784,24 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
         ? localAppStatusOverrides[linkedApp.id] || linkedApp.status
         : undefined;
 
+      const isUpcomingTask = /^Upcoming Client\s*-/i.test(t.title || '');
+      const isPrepOrReviewAppStatus =
+        effectiveAppStatus === 'Need to Prepare' ||
+        effectiveAppStatus === 'Prepared' ||
+        effectiveAppStatus === 'Under Review' ||
+        effectiveAppStatus === 'File Missing' ||
+        effectiveAppStatus === 'Modify';
+
+      // Exclude "Upcoming Client - ..." tasks if the application is no longer in 'Upcoming' status
+      if (isUpcomingTask && effectiveAppStatus && effectiveAppStatus !== 'Upcoming') {
+        return;
+      }
+
+      // Exclude auto-created delivery/upcoming tasks when application is in Need to Prepare / Prepared / Under Review / File Missing / Modify
+      if ((isDelivery || isUpcomingTask) && isPrepOrReviewAppStatus) {
+        return;
+      }
+
       let displayTitle = t.title;
       if (isDelivery || /^(Delivery|Pending Collection|Rejected)\s*-/i.test(t.title || '')) {
         const resolvedClientName =
@@ -832,9 +850,18 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
 
     applications.forEach((app) => {
       if (app.delivery_date && !existingDeliveryAppIds.has(app.id)) {
+        const effectiveStatus = localAppStatusOverrides[app.id] || app.status;
+        if (
+          effectiveStatus === 'Need to Prepare' ||
+          effectiveStatus === 'Prepared' ||
+          effectiveStatus === 'Under Review' ||
+          effectiveStatus === 'File Missing' ||
+          effectiveStatus === 'Modify'
+        ) {
+          return;
+        }
         const photo = app.client_photo_url || (app.client_id ? clientPhotoMap.get(app.client_id) : null);
         const passportNum = app.passport_number || (app.client_id ? clientPassportMap.get(app.client_id) : undefined);
-        const effectiveStatus = localAppStatusOverrides[app.id] || app.status;
         const isUpcomingApp = effectiveStatus === 'Upcoming';
         list.push({
           id: `app-delivery-${app.id}`,

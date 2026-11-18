@@ -1887,6 +1887,8 @@ export const dbService = {
       }
     }
 
+    this.cleanupStaleUpcomingTasks();
+
     const nextTaskByClient = new Map<number, Task>();
     for (const t of store.tasks) {
       if (t.client_id && t.status === 'Pending') {
@@ -2003,6 +2005,8 @@ export const dbService = {
           assigned_user_name: assigned?.name || null,
         };
       });
+
+    this.cleanupStaleUpcomingTasks();
 
     // Tasks
     const tasks = store.tasks
@@ -2366,6 +2370,7 @@ export const dbService = {
 
   // Applications
   getApplications(filters?: { status?: string; visa_type_id?: number; staff_id?: number; search?: string }) {
+    this.cleanupStaleUpcomingTasks();
     let list = [...store.visa_applications];
 
     const clientById = new Map<number, Client>();
@@ -2586,6 +2591,13 @@ export const dbService = {
     const client = store.clients.find(c => c.id === app.client_id);
     const clientName = client?.full_name || 'Client';
 
+    const isPreparationOrReviewStatus =
+      newStatus === 'Need to Prepare' ||
+      newStatus === 'Prepared' ||
+      newStatus === 'Under Review' ||
+      newStatus === 'File Missing' ||
+      newStatus === 'Modify';
+
     // Delivery / Upcoming date business logic
     if (newStatus === 'Online Review Completed' || newStatus === 'Pending Collection' || newStatus === 'Rejected') {
       if (deliveryDate) {
@@ -2595,6 +2607,48 @@ export const dbService = {
       if (deliveryDate !== undefined) {
         app.delivery_date = deliveryDate || null;
       }
+    } else if (isPreparationOrReviewStatus) {
+      app.delivery_date = null;
+    }
+
+    // Remove any "Upcoming Client - ..." task if status is no longer Upcoming or if Upcoming date was cleared,
+    // and remove any auto-scheduled delivery/upcoming tasks when moving to Need to Prepare / Prepared / Under Review / File Missing / Modify
+    if (newStatus !== 'Upcoming' || !app.delivery_date) {
+      const removedTaskIds: number[] = [];
+      store.tasks = store.tasks.filter(t => {
+        const isUpcomingTask = /^Upcoming Client\s*-/i.test(t.title || '');
+        const isLinkedAppOrClient =
+          t.application_id === id ||
+          (t.client_id === app.client_id && (t.application_id === null || t.application_id === id));
+        if (isUpcomingTask && isLinkedAppOrClient) {
+          removedTaskIds.push(t.id);
+          return false;
+        }
+        if (isPreparationOrReviewStatus && t.is_delivery_task === 1 && isLinkedAppOrClient) {
+          removedTaskIds.push(t.id);
+          return false;
+        }
+        return true;
+      });
+
+      runMySQLWrite(async (activePool) => {
+        await activePool.query(
+          `DELETE FROM tasks WHERE (application_id = ? OR client_id = ?) AND title LIKE 'Upcoming Client%'`,
+          [id, app.client_id]
+        ).catch(() => {});
+        if (isPreparationOrReviewStatus) {
+          await activePool.query(
+            `DELETE FROM tasks WHERE application_id = ? AND is_delivery_task = 1`,
+            [id]
+          ).catch(() => {});
+        }
+        if (removedTaskIds.length > 0) {
+          await activePool.query(
+            `DELETE FROM tasks WHERE id IN (${removedTaskIds.map(() => '?').join(',')})`,
+            removedTaskIds
+          ).catch(() => {});
+        }
+      });
     }
 
     const histId = nextEntityId('application_status_history', store.application_status_history);
@@ -2803,10 +2857,65 @@ export const dbService = {
     const statusChanged = data.status !== undefined && data.status !== oldStatus;
     const deliveryDateChanged = data.delivery_date !== undefined && app.delivery_date !== oldDeliveryDate;
 
+    const isPreparationOrReviewStatus =
+      app.status === 'Need to Prepare' ||
+      app.status === 'Prepared' ||
+      app.status === 'Under Review' ||
+      app.status === 'File Missing' ||
+      app.status === 'Modify';
+
+    if (isPreparationOrReviewStatus) {
+      app.delivery_date = null;
+    }
+
+    if (app.status !== 'Upcoming' || !app.delivery_date) {
+      const removedTaskIds: number[] = [];
+      store.tasks = store.tasks.filter(t => {
+        const isUpcomingTask = /^Upcoming Client\s*-/i.test(t.title || '');
+        const isLinkedAppOrClient =
+          t.application_id === id ||
+          (t.client_id === app.client_id && (t.application_id === null || t.application_id === id));
+        if (isUpcomingTask && isLinkedAppOrClient) {
+          removedTaskIds.push(t.id);
+          return false;
+        }
+        if (isPreparationOrReviewStatus && t.is_delivery_task === 1 && isLinkedAppOrClient) {
+          removedTaskIds.push(t.id);
+          return false;
+        }
+        return true;
+      });
+
+      if (removedTaskIds.length > 0 || statusChanged) {
+        runMySQLWrite(async (activePool) => {
+          await activePool.query(
+            `DELETE FROM tasks WHERE (application_id = ? OR client_id = ?) AND title LIKE 'Upcoming Client%'`,
+            [id, app.client_id]
+          ).catch(() => {});
+          if (isPreparationOrReviewStatus) {
+            await activePool.query(
+              `DELETE FROM tasks WHERE application_id = ? AND is_delivery_task = 1`,
+              [id]
+            ).catch(() => {});
+          }
+          if (removedTaskIds.length > 0) {
+            await activePool.query(
+              `DELETE FROM tasks WHERE id IN (${removedTaskIds.map(() => '?').join(',')})`,
+              removedTaskIds
+            ).catch(() => {});
+          }
+        });
+      }
+    }
+
     if (app.delivery_date && (statusChanged || deliveryDateChanged)) {
       if (app.status === 'Upcoming') {
         await this.syncUpcomingTask(app, clientName, userId);
-      } else if (app.status !== 'Returned') {
+      } else if (
+        app.status === 'Online Review Completed' ||
+        app.status === 'Pending Collection' ||
+        app.status === 'Rejected'
+      ) {
         await this.syncDeliveryTask(app, clientName, userId);
       }
     }
@@ -3006,8 +3115,70 @@ export const dbService = {
     return true;
   },
 
+  cleanupStaleUpcomingTasks() {
+    let storeModified = false;
+    const clearedAppIds: number[] = [];
+    const removedTaskIds: number[] = [];
+
+    const appById = new Map<number, VisaApplication>();
+    const appsByClientId = new Map<number, VisaApplication[]>();
+    for (const a of store.visa_applications) {
+      const isPrepOrReview =
+        a.status === 'Need to Prepare' ||
+        a.status === 'Prepared' ||
+        a.status === 'Under Review' ||
+        a.status === 'File Missing' ||
+        a.status === 'Modify';
+      if (isPrepOrReview && a.delivery_date) {
+        a.delivery_date = null;
+        clearedAppIds.push(a.id);
+        storeModified = true;
+      }
+      appById.set(a.id, a);
+      const list = appsByClientId.get(a.client_id) || [];
+      list.push(a);
+      appsByClientId.set(a.client_id, list);
+    }
+
+    store.tasks = store.tasks.filter(t => {
+      const isUpcomingTask = /^Upcoming Client\s*-/i.test(t.title || '');
+      if (!isUpcomingTask) return true;
+
+      const linkedApp =
+        (t.application_id ? appById.get(t.application_id) : undefined) ||
+        (t.client_id ? (appsByClientId.get(t.client_id) || [])[0] : undefined);
+
+      // Keep only if there is a linked application that is still 'Upcoming' and has a delivery_date
+      if (linkedApp && (linkedApp.status !== 'Upcoming' || !linkedApp.delivery_date)) {
+        removedTaskIds.push(t.id);
+        storeModified = true;
+        return false;
+      }
+      return true;
+    });
+
+    if (storeModified) {
+      saveStore(store);
+      runMySQLWrite(async (activePool) => {
+        if (clearedAppIds.length > 0) {
+          await activePool.query(
+            `UPDATE visa_applications SET delivery_date = NULL WHERE id IN (${clearedAppIds.map(() => '?').join(',')})`,
+            clearedAppIds
+          ).catch(() => {});
+        }
+        if (removedTaskIds.length > 0) {
+          await activePool.query(
+            `DELETE FROM tasks WHERE id IN (${removedTaskIds.map(() => '?').join(',')})`,
+            removedTaskIds
+          ).catch(() => {});
+        }
+      });
+    }
+  },
+
   // Tasks
   getTasks(filters?: { status?: string; priority?: string; user_id?: number; client_id?: number; due_date?: string }) {
+    this.cleanupStaleUpcomingTasks();
     let list = [...store.tasks];
     if (filters?.status) list = list.filter(t => t.status === filters.status);
     if (filters?.priority) list = list.filter(t => t.priority === filters.priority);

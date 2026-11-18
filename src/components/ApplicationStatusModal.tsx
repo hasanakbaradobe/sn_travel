@@ -56,6 +56,12 @@ export const ApplicationStatusModal: React.FC<ApplicationStatusModalProps> = ({
   if (!isOpen || !application) return null;
 
   const isDateRequiredStatus = currentStatus === 'Online Review Completed' || currentStatus === 'Pending Collection';
+  const isPrepOrReviewStatus =
+    currentStatus === 'Need to Prepare' ||
+    currentStatus === 'Prepared' ||
+    currentStatus === 'Under Review' ||
+    currentStatus === 'File Missing' ||
+    currentStatus === 'Modify';
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -75,10 +81,16 @@ export const ApplicationStatusModal: React.FC<ApplicationStatusModalProps> = ({
   const performSave = async () => {
     setSubmitting(true);
     try {
+      const effectiveDeliveryDate = isPrepOrReviewStatus
+        ? null
+        : currentStatus === 'Upcoming' || isDateRequiredStatus || currentStatus === 'Rejected'
+        ? deliveryDate || null
+        : deliveryDate || null;
+
       await api.updateApplicationStatus(
         application.id,
         currentStatus,
-        deliveryDate || null,
+        effectiveDeliveryDate,
         notes || undefined
       );
 
@@ -223,6 +235,15 @@ export const ApplicationStatusModal: React.FC<ApplicationStatusModalProps> = ({
                 onChange={(e) => setDeliveryDate(e.target.value)}
                 className="w-full px-3 py-2 bg-white border border-sky-300 rounded-lg text-sm text-slate-900 focus:outline-none focus:ring-2 focus:ring-sky-500"
               />
+            </div>
+          ) : isPrepOrReviewStatus && application.delivery_date ? (
+            <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-xs text-amber-900 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Clock className="w-4 h-4 text-amber-600 shrink-0" />
+                <span>
+                  Changing status to <strong>{currentStatus}</strong> will automatically remove the scheduled Upcoming entry from Calendar &amp; Tasks.
+                </span>
+              </div>
             </div>
           ) : application.delivery_date ? (
             <div className="p-3 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-600 flex items-center justify-between">
