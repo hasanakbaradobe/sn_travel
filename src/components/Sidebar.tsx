@@ -17,6 +17,7 @@ import {
   MoreHorizontal,
 } from 'lucide-react';
 import { UserRole } from '../types';
+import { PWAInstallButton } from './PWAInstallButton';
 
 export type NavTab = 'dashboard' | 'clients' | 'applications' | 'hotels' | 'followups' | 'invoices' | 'calendar' | 'tasks' | 'public-website' | 'settings' | '404';
 
@@ -222,6 +223,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
       {/* Bottom Brand / Website info */}
       <div className="p-4 border-t border-slate-800 bg-slate-950/40">
+        <PWAInstallButton variant="sidebar" />
         <div className="flex items-center justify-between text-xs text-slate-400 mb-2">
           <span className="flex items-center gap-1.5">
             <Globe className="w-3.5 h-3.5 text-sky-400" />

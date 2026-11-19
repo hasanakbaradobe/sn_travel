@@ -11,6 +11,7 @@ import {
   KeyRound,
 } from 'lucide-react';
 import { User, DatabaseStatus } from '../types';
+import { PWAInstallButton, OfflineIndicator } from './PWAInstallButton';
 
 interface HeaderProps {
   currentUser: User | null;
@@ -133,6 +134,9 @@ export const Header: React.FC<HeaderProps> = ({
 
       {/* Right: Quick Create Client + User Role Menu */}
       <div className="flex items-center gap-1.5 sm:gap-2.5 shrink-0">
+        <PWAInstallButton variant="header" />
+        <OfflineIndicator />
+
         {/* Scan Passport Action (Visible on Mobile & Desktop) */}
         {onOpenPassportScanner && (
           <button
