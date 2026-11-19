@@ -195,65 +195,110 @@ class ApiService {
     }
 
     const { skipCache, cacheTtl, suppressAuthError, ...fetchOptions } = options;
+    const method = (fetchOptions.method || 'GET').toUpperCase();
+    const isIdempotentGet = method === 'GET';
+    const maxAttempts = isIdempotentGet ? 2 : 1;
+    const isLongOperation =
+      endpoint.startsWith('/scan-passport') ||
+      endpoint.startsWith('/db/sync') ||
+      endpoint.startsWith('/db/restore');
+    const timeoutMs = isLongOperation ? 60000 : 20000;
 
-    const response = await fetch(`${API_BASE}${endpoint}`, {
-      cache: 'no-store',
-      credentials: 'same-origin',
-      ...fetchOptions,
-      headers,
-    });
+    let lastError: any = null;
 
-    const contentType = response.headers.get('content-type') || '';
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const controller = !fetchOptions.signal ? new AbortController() : null;
+      const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
 
-    if (!response.ok) {
-      let errorMessage = 'An error occurred';
-      let errorData: any = null;
       try {
-        if (contentType.includes('application/json')) {
-          errorData = await response.json();
-          errorMessage = errorData.error || errorData.message || errorMessage;
-        } else {
-          const rawText = await response.text();
-          errorMessage = rawText.slice(0, 200) || response.statusText || errorMessage;
-        }
-      } catch (e) {
-        errorMessage = response.statusText || errorMessage;
-      }
-
-      // If unauthorized on any protected endpoint, clear session and inform listeners
-      if (
-        response.status === 401 &&
-        !suppressAuthError &&
-        endpoint !== '/auth/login' &&
-        endpoint !== '/scan-passport'
-      ) {
-        this.setCurrentUser(null);
-        this.authErrorListeners.forEach(cb => {
-          try { cb(); } catch {}
+        const response = await fetch(`${API_BASE}${endpoint}`, {
+          cache: 'no-store',
+          credentials: 'same-origin',
+          ...fetchOptions,
+          signal: fetchOptions.signal || controller?.signal,
+          headers,
         });
-      }
 
-      const error: any = new Error(errorMessage);
-      error.status = response.status;
-      error.data = errorData;
-      throw error;
+        if (timer) clearTimeout(timer);
+
+        const contentType = response.headers.get('content-type') || '';
+
+        if (!response.ok) {
+          // Retry once on transient gateway/server overload responses for GET requests
+          if (
+            isIdempotentGet &&
+            attempt < maxAttempts &&
+            (response.status === 502 || response.status === 503 || response.status === 504)
+          ) {
+            await new Promise((r) => setTimeout(r, 600));
+            continue;
+          }
+
+          let errorMessage = 'An error occurred';
+          let errorData: any = null;
+          try {
+            if (contentType.includes('application/json')) {
+              errorData = await response.json();
+              errorMessage = errorData.error || errorData.message || errorMessage;
+            } else {
+              const rawText = await response.text();
+              errorMessage = rawText.slice(0, 200) || response.statusText || errorMessage;
+            }
+          } catch {
+            errorMessage = response.statusText || errorMessage;
+          }
+
+          // If unauthorized on any protected endpoint, clear session and inform listeners
+          if (
+            response.status === 401 &&
+            !suppressAuthError &&
+            endpoint !== '/auth/login' &&
+            endpoint !== '/scan-passport'
+          ) {
+            this.setCurrentUser(null);
+            this.authErrorListeners.forEach(cb => {
+              try { cb(); } catch {}
+            });
+          }
+
+          const error: any = new Error(errorMessage);
+          error.status = response.status;
+          error.data = errorData;
+          throw error;
+        }
+
+        // Safety guard: ensure response is valid JSON before parsing
+        if (!contentType.includes('application/json')) {
+          const rawText = await response.text();
+          if (rawText.trim().startsWith('<')) {
+            throw new Error(`Server returned HTML instead of JSON for ${endpoint}. Please verify API routing.`);
+          }
+          try {
+            return JSON.parse(rawText) as T;
+          } catch {
+            throw new Error(`Expected JSON from ${endpoint}, but received: ${rawText.slice(0, 100)}`);
+          }
+        }
+
+        const data: T = await response.json();
+        return data;
+      } catch (err: any) {
+        if (timer) clearTimeout(timer);
+        lastError =
+          err?.name === 'AbortError'
+            ? new Error('Request timed out while waiting for server response. Please try again.')
+            : err;
+
+        // Retry once on transient network/timeout errors for GET requests
+        if (isIdempotentGet && attempt < maxAttempts && !err?.status) {
+          await new Promise((r) => setTimeout(r, 600));
+          continue;
+        }
+        throw lastError;
+      }
     }
 
-    // Safety guard: ensure response is valid JSON before parsing
-    if (!contentType.includes('application/json')) {
-      const rawText = await response.text();
-      if (rawText.trim().startsWith('<')) {
-        throw new Error(`Server returned HTML instead of JSON for ${endpoint}. Please verify API routing.`);
-      }
-      try {
-        return JSON.parse(rawText) as T;
-      } catch {
-        throw new Error(`Expected JSON from ${endpoint}, but received: ${rawText.slice(0, 100)}`);
-      }
-    }
-
-    const data: T = await response.json();
-    return data;
+    throw lastError || new Error('Request failed');
   }
 
   // Auth

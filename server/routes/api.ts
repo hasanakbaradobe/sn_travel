@@ -255,14 +255,23 @@ apiRouter.get('/events', (req: Request, res: Response) => {
   });
 });
 
-// Middleware: Disable client/proxy HTTP caching and trigger non-blocking background MySQL sync
-apiRouter.use((_req: Request, res: Response, next: NextFunction) => {
+// Invalidate API caches and notify connected browsers whenever a MySQL sync pulls fresh changes
+dbService.onSyncCompleted(() => {
+  broadcastDataChange('data_changed', { endpoint: '/db/sync' });
+});
+
+// Middleware: Disable client/proxy HTTP caching, ensure initial MySQL load completes on cold start,
+// and trigger non-blocking background MySQL sync for subsequent requests
+apiRouter.use(async (req: Request, res: Response, next: NextFunction) => {
   res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
   res.setHeader('Pragma', 'no-cache');
   res.setHeader('Expires', '0');
   res.setHeader('Surrogate-Control', 'no-store');
 
-  dbService.triggerBackgroundSync();
+  if (req.path !== '/health') {
+    await dbService.waitForInitialSync(8000);
+    dbService.triggerBackgroundSync();
+  }
   next();
 });
 

@@ -17,7 +17,7 @@ interface ApplicationStatusModalProps {
   isOpen: boolean;
   onClose: () => void;
   application: VisaApplication | null;
-  onStatusUpdated: () => void;
+  onStatusUpdated: (updatedApp?: VisaApplication) => void;
 }
 
 export const ApplicationStatusModal: React.FC<ApplicationStatusModalProps> = ({
@@ -47,7 +47,7 @@ export const ApplicationStatusModal: React.FC<ApplicationStatusModalProps> = ({
     if (application && isOpen) {
       setCurrentStatus(application.status);
       setDeliveryDate(application.delivery_date ? String(application.delivery_date).slice(0, 10) : '');
-      setNotes('');
+      setNotes(application.notes || '');
       setError(null);
       setShowReturnedWarning(false);
     }
@@ -87,14 +87,14 @@ export const ApplicationStatusModal: React.FC<ApplicationStatusModalProps> = ({
         ? deliveryDate || null
         : deliveryDate || null;
 
-      await api.updateApplicationStatus(
+      const updatedApp = await api.updateApplicationStatus(
         application.id,
         currentStatus,
         effectiveDeliveryDate,
-        notes || undefined
+        notes.trim()
       );
 
-      onStatusUpdated();
+      onStatusUpdated(updatedApp);
       onClose();
     } catch (err: any) {
       setError(err.message || 'Failed to update status');

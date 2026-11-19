@@ -22,10 +22,32 @@ let pool: mysql.Pool | null = null;
 let isConnectedToMySQL = false;
 let connectionError: string | null = null;
 let schemaInitialized = false;
+let hasCompletedInitialSync = false;
+let initialSyncPromise: Promise<void> | null = null;
+const syncCompletedListeners = new Set<() => void>();
 let lastProbeAttemptTime = 0;
 let lastPingMs: number | null = null;
 let inFlightProbePromise: Promise<boolean> | null = null;
-const PROBE_COOLDOWN_MS = 15000;
+const PROBE_COOLDOWN_MS = 10000;
+
+function isTransientMySQLError(err: any): boolean {
+  const code = String(err?.code || '');
+  const msg = String(err?.message || '').toLowerCase();
+  return (
+    code === 'PROTOCOL_CONNECTION_LOST' ||
+    code === 'ECONNRESET' ||
+    code === 'ETIMEDOUT' ||
+    code === 'EPIPE' ||
+    code === 'PROTOCOL_ENQUEUE_AFTER_FATAL_ERROR' ||
+    code === 'ER_SERVER_SHUTDOWN' ||
+    code === 'ER_TOO_MANY_USER_CONNECTIONS' ||
+    code === 'ER_CON_COUNT_ERROR' ||
+    msg.includes('connection lost') ||
+    msg.includes('closed state') ||
+    msg.includes('read econnreset') ||
+    msg.includes('timed out')
+  );
+}
 
 async function probeMySQLConnection(force = false): Promise<boolean> {
   if (!pool) return false;
@@ -40,8 +62,9 @@ async function probeMySQLConnection(force = false): Promise<boolean> {
   lastProbeAttemptTime = now;
   inFlightProbePromise = (async () => {
     const startMs = Date.now();
+    let conn: mysql.PoolConnection | null = null;
     try {
-      const conn = await pool!.getConnection();
+      conn = await pool!.getConnection();
       lastPingMs = Date.now() - startMs;
       isConnectedToMySQL = true;
       connectionError = null;
@@ -328,8 +351,6 @@ async function probeMySQLConnection(force = false): Promise<boolean> {
         schemaInitialized = true;
       }
 
-      conn.release();
-      void syncFromMySQL(true);
       return true;
     } catch (err: any) {
       isConnectedToMySQL = false;
@@ -337,16 +358,28 @@ async function probeMySQLConnection(force = false): Promise<boolean> {
       console.warn(`[Database] MySQL connection probe failed (${connectionError}). Using fast local store.`);
       return false;
     } finally {
+      if (conn) {
+        try {
+          conn.release();
+        } catch {}
+      }
       inFlightProbePromise = null;
     }
   })();
 
-  return inFlightProbePromise;
+  const connected = await inFlightProbePromise;
+  if (connected && !hasCompletedInitialSync) {
+    await syncFromMySQL(true);
+  }
+  return connected;
 }
 
 // Initialize MySQL pool if host and user are configured
 if (DB_HOST && DB_USER) {
   try {
+    const configuredLimit = parseInt(process.env.DB_CONNECTION_LIMIT || '8', 10);
+    const safeConnectionLimit = Number.isFinite(configuredLimit) && configuredLimit >= 2 ? Math.min(configuredLimit, 20) : 8;
+
     pool = mysql.createPool({
       host: DB_HOST,
       port: DB_PORT,
@@ -354,48 +387,63 @@ if (DB_HOST && DB_USER) {
       password: DB_PASSWORD,
       database: DB_NAME,
       waitForConnections: true,
-      connectionLimit: 25,
-      maxIdle: 15,
+      connectionLimit: safeConnectionLimit,
+      maxIdle: Math.min(6, safeConnectionLimit),
       idleTimeout: 60000,
       queueLimit: 0,
       enableKeepAlive: true,
-      keepAliveInitialDelay: 5000,
+      keepAliveInitialDelay: 10000,
       dateStrings: true,
-      connectTimeout: 4000,
+      connectTimeout: 10000,
       ssl: DB_SSL ? { rejectUnauthorized: false } : undefined,
     });
 
     (pool as any).on('error', (err: any) => {
       console.warn('[MySQL Pool Error]:', err?.message || err);
-      if (err?.code === 'PROTOCOL_CONNECTION_LOST' || err?.code === 'ECONNRESET') {
+      if (isTransientMySQLError(err)) {
         isConnectedToMySQL = false;
         connectionError = err.message;
       }
     });
 
-    // Periodic keep-alive heartbeat ping & background sync (every 30s)
+    // Periodic keep-alive heartbeat ping (every 45s)
     setInterval(async () => {
       if (pool && isConnectedToMySQL) {
         const t0 = Date.now();
         try {
-          await pool.query('/* keep-alive */ SELECT 1');
+          await pool.query({ sql: '/* keep-alive */ SELECT 1', timeout: 8000 });
           lastPingMs = Date.now() - t0;
         } catch (err: any) {
           console.warn('[MySQL KeepAlive] Ping failed, attempting probe:', err?.message || err);
+          isConnectedToMySQL = false;
           void probeMySQLConnection(true);
         }
       } else if (pool && !isConnectedToMySQL) {
         void probeMySQLConnection(false);
       }
-    }, 30000).unref();
+    }, 45000).unref();
 
-    void probeMySQLConnection(true);
+    // Kick off initial startup connection + sync and track it so first API requests wait for real MySQL data
+    initialSyncPromise = (async () => {
+      try {
+        const ok = await probeMySQLConnection(true);
+        if (ok && !hasCompletedInitialSync) {
+          await syncFromMySQL(true);
+        }
+      } catch (err: any) {
+        console.warn('[Database] Initial MySQL sync warning:', err?.message || err);
+      } finally {
+        hasCompletedInitialSync = true;
+      }
+    })();
   } catch (err: any) {
     isConnectedToMySQL = false;
+    hasCompletedInitialSync = true;
     connectionError = err.message;
     console.warn(`[Database] Failed to create MySQL pool (${err.message}). Using local store fallback.`);
   }
 } else {
+  hasCompletedInitialSync = true;
   console.log(`[Database] DB_HOST or DB_USER not provided in env. Active local database ready (MySQL schema available for phpMyAdmin).`);
 }
 
@@ -1355,10 +1403,47 @@ async function deleteClientFromMySQL(id: number, clientIdString?: string): Promi
 
 let lastSyncTime = 0;
 let lastLocalMutationTime = 0;
-const SYNC_CACHE_TTL_MS = 30000; // 30 seconds TTL for background MySQL syncs
+const SYNC_CACHE_TTL_MS = 60000; // 60 seconds TTL for routine background MySQL syncs
 let inFlightSyncPromise: Promise<void> | null = null;
 const pendingWritePromises = new Set<Promise<any>>();
 let writePipelineChain: Promise<any> = Promise.resolve();
+let lastUpcomingCleanupVersion = -1;
+
+function computeStoreFingerprint(s: StoreData): string {
+  const latest = (arr?: any[]) => {
+    if (!Array.isArray(arr) || arr.length === 0) return '0';
+    const first = arr[0];
+    const last = arr[arr.length - 1];
+    return `${arr.length}:${first?.id ?? ''}:${first?.updated_at ?? ''}:${last?.id ?? ''}:${last?.updated_at ?? ''}`;
+  };
+  return [
+    latest(s.users),
+    latest(s.clients),
+    latest(s.visa_applications),
+    latest(s.tasks),
+    latest(s.hotels),
+    latest(s.hotel_bookings),
+    latest(s.follow_ups),
+    latest(s.invoices),
+    latest(s.invoice_items),
+    latest(s.comments),
+    latest(s.settings),
+  ].join('|');
+}
+
+async function runWithConcurrency<T>(tasks: Array<() => Promise<T>>, concurrency: number): Promise<T[]> {
+  const results: T[] = new Array(tasks.length);
+  let nextIdx = 0;
+  const worker = async () => {
+    while (nextIdx < tasks.length) {
+      const idx = nextIdx++;
+      results[idx] = await tasks[idx]();
+    }
+  };
+  const workers = Array.from({ length: Math.min(concurrency, tasks.length) }, () => worker());
+  await Promise.all(workers);
+  return results;
+}
 
 async function ensureClientAndAppInMySQL(
   activePool: mysql.Pool,
@@ -1449,17 +1534,39 @@ async function ensureClientAndAppInMySQL(
 
 /**
  * Executes a MySQL write operation in a serialized non-blocking write-through pipeline.
- * In-memory relational store is already updated synchronously so API responses return in <1ms,
- * while MySQL queries execute in strict FIFO order on the connection pool in the background.
+ * Automatically reconnects and retries once on transient connection drops so writes are never silently lost.
  */
 function runMySQLWrite(task: (activePool: mysql.Pool) => Promise<any>): void {
   lastLocalMutationTime = Date.now();
-  if (!isConnectedToMySQL || !pool) return;
+  if (!pool) return;
   const activePool = pool;
   const p = writePipelineChain.then(async () => {
     try {
+      if (!isConnectedToMySQL) {
+        const reconnected = await probeMySQLConnection(true);
+        if (!reconnected) return;
+      }
       await task(activePool);
+      isConnectedToMySQL = true;
+      connectionError = null;
     } catch (err: any) {
+      if (isTransientMySQLError(err)) {
+        console.warn('[MySQL Write Pipeline] Transient error, reconnecting & retrying once:', err?.message || err);
+        isConnectedToMySQL = false;
+        connectionError = err?.message || String(err);
+        try {
+          const reconnected = await probeMySQLConnection(true);
+          if (reconnected) {
+            await task(activePool);
+            isConnectedToMySQL = true;
+            connectionError = null;
+            return;
+          }
+        } catch (retryErr: any) {
+          console.error('[MySQL Write Pipeline Retry Failed]:', retryErr?.message || retryErr);
+          return;
+        }
+      }
       console.error('[MySQL Write Pipeline Error]:', err?.message || err);
     }
   });
@@ -1478,7 +1585,7 @@ async function syncFromMySQL(force = false): Promise<void> {
   }
 
   const now = Date.now();
-  if (!force && (now - lastSyncTime < SYNC_CACHE_TTL_MS)) {
+  if (!force && hasCompletedInitialSync && (now - lastSyncTime < SYNC_CACHE_TTL_MS)) {
     return; // Serve cached in-memory store immediately
   }
 
@@ -1488,7 +1595,7 @@ async function syncFromMySQL(force = false): Promise<void> {
   }
 
   // Avoid clobbering very recent local mutations with a non-forced background sync
-  if (!force && (Date.now() - lastLocalMutationTime < 4000)) {
+  if (!force && (Date.now() - lastLocalMutationTime < 5000)) {
     return;
   }
 
@@ -1498,39 +1605,66 @@ async function syncFromMySQL(force = false): Promise<void> {
 
   inFlightSyncPromise = (async () => {
     const syncStart = Date.now();
+    const beforeFingerprint = computeStoreFingerprint(store);
+    let failedQueries = 0;
+
     const safeQuery = async (sql: string) => {
       try {
-        const [rows]: any = await pool!.query(sql);
+        const queryPromise = pool!.query({ sql, timeout: 12000 });
+        const timeoutPromise = new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error(`Query timed out after 12s: ${sql.slice(0, 60)}`)), 12500)
+        );
+        const [rows]: any = await Promise.race([queryPromise, timeoutPromise]);
         return rows;
       } catch (err: any) {
+        failedQueries += 1;
+        if (isTransientMySQLError(err)) {
+          isConnectedToMySQL = false;
+          connectionError = err?.message || String(err);
+        }
         console.warn(`[MySQL Table Sync Warning] (${sql}):`, err?.message || err);
         return null;
       }
     };
 
     try {
-      const [u, c, cl, cf, cfv, vt, va, ash, t, cm, al, h, hr, hb, s, fu, invS, invCat, inv, invItems] = await Promise.all([
-        safeQuery('SELECT * FROM users'),
-        safeQuery('SELECT * FROM countries ORDER BY display_order ASC, name ASC'),
-        safeQuery('SELECT * FROM clients ORDER BY id DESC'),
-        safeQuery('SELECT * FROM client_custom_fields ORDER BY display_order ASC'),
-        safeQuery('SELECT * FROM client_custom_field_values'),
-        safeQuery('SELECT * FROM visa_types'),
-        safeQuery('SELECT * FROM visa_applications'),
-        safeQuery('SELECT * FROM application_status_history'),
-        safeQuery('SELECT * FROM tasks'),
-        safeQuery('SELECT * FROM comments'),
-        safeQuery('SELECT * FROM activity_logs ORDER BY id DESC LIMIT 500'),
-        safeQuery('SELECT * FROM hotels'),
-        safeQuery('SELECT * FROM hotel_rooms'),
-        safeQuery('SELECT * FROM hotel_bookings'),
-        safeQuery('SELECT * FROM settings'),
-        safeQuery('SELECT * FROM follow_ups'),
-        safeQuery('SELECT * FROM invoice_settings LIMIT 1'),
-        safeQuery('SELECT * FROM invoice_catalog_items ORDER BY display_order ASC, id ASC'),
-        safeQuery('SELECT * FROM invoices ORDER BY id DESC'),
-        safeQuery('SELECT * FROM invoice_items'),
-      ]);
+      const queries = [
+        'SELECT * FROM users',
+        'SELECT * FROM countries ORDER BY display_order ASC, name ASC',
+        'SELECT * FROM clients ORDER BY id DESC',
+        'SELECT * FROM client_custom_fields ORDER BY display_order ASC',
+        'SELECT * FROM client_custom_field_values',
+        'SELECT * FROM visa_types',
+        'SELECT * FROM visa_applications',
+        'SELECT * FROM application_status_history',
+        'SELECT * FROM tasks',
+        'SELECT * FROM comments',
+        'SELECT * FROM activity_logs ORDER BY id DESC LIMIT 300',
+        'SELECT * FROM hotels',
+        'SELECT * FROM hotel_rooms',
+        'SELECT * FROM hotel_bookings',
+        'SELECT * FROM settings',
+        'SELECT * FROM follow_ups',
+        'SELECT * FROM invoice_settings LIMIT 1',
+        'SELECT * FROM invoice_catalog_items ORDER BY display_order ASC, id ASC',
+        'SELECT * FROM invoices ORDER BY id DESC',
+        'SELECT * FROM invoice_items',
+      ];
+
+      // Run in controlled batches of 4 concurrent queries to avoid exhausting shared MySQL max_user_connections
+      const [u, c, cl, cf, cfv, vt, va, ash, t, cm, al, h, hr, hb, s, fu, invS, invCat, inv, invItems] =
+        await runWithConcurrency(
+          queries.map((sql) => () => safeQuery(sql)),
+          4
+        );
+
+      // If every core query failed, keep existing in-memory store intact
+      if (failedQueries === queries.length) {
+        return;
+      }
+
+      isConnectedToMySQL = true;
+      connectionError = null;
 
       // If a local write occurred while the SELECT queries were in flight, abort overwriting memory unless forced
       if (!force && lastLocalMutationTime > syncStart) {
@@ -1658,8 +1792,20 @@ async function syncFromMySQL(force = false): Promise<void> {
         invoice_items: Math.max(...(store.invoice_items || []).map(x => x.id), 0) + 1,
       };
 
+      const wasInitial = !hasCompletedInitialSync;
+      hasCompletedInitialSync = true;
       lastSyncTime = Date.now();
-      saveStore(store);
+      const afterFingerprint = computeStoreFingerprint(store);
+
+      // Only persist, bump dataVersion, and notify clients when data actually changed (or on first sync / forced sync)
+      if (wasInitial || force || afterFingerprint !== beforeFingerprint) {
+        saveStore(store);
+        syncCompletedListeners.forEach((listener) => {
+          try {
+            listener();
+          } catch {}
+        });
+      }
     } catch (err: any) {
       console.warn('[Database] Sync from MySQL encountered an issue:', err.message);
     } finally {
@@ -1678,11 +1824,32 @@ export const dbService = {
   },
 
   /**
+   * Registers a callback fired whenever a MySQL sync pulls updated data so
+   * API caches can be invalidated and connected browsers refreshed via SSE.
+   */
+  onSyncCompleted(listener: () => void): () => void {
+    syncCompletedListeners.add(listener);
+    return () => syncCompletedListeners.delete(listener);
+  },
+
+  /**
+   * Awaits the initial startup MySQL sync (with a bounded timeout) so the first
+   * API requests after a cold boot never return empty/stale seed data.
+   */
+  async waitForInitialSync(timeoutMs = 8000): Promise<void> {
+    if (hasCompletedInitialSync || !initialSyncPromise) return;
+    await Promise.race([
+      initialSyncPromise,
+      new Promise<void>((resolve) => setTimeout(resolve, timeoutMs)),
+    ]);
+  },
+
+  /**
    * Triggers a non-blocking stale-while-revalidate MySQL sync in the background
    * so HTTP API requests return in <1ms from memory without waiting on network I/O.
    */
   triggerBackgroundSync() {
-    if (!pool) return;
+    if (!pool || !hasCompletedInitialSync) return;
     const now = Date.now();
     if (now - lastSyncTime >= SYNC_CACHE_TTL_MS && !inFlightSyncPromise) {
       void syncFromMySQL(false).catch(() => {});
@@ -2579,13 +2746,17 @@ export const dbService = {
     deliveryDate?: string | null,
     notes?: string,
     userId = 1,
-    skipSaveAndLog = false
+    skipSaveAndLog = false,
+    preserveAppNotes = false
   ) {
     const app = store.visa_applications.find(a => a.id === id);
     if (!app) return null;
 
     const oldStatus = app.status;
     app.status = newStatus;
+    if (!preserveAppNotes && notes !== undefined) {
+      app.notes = notes.trim() || null;
+    }
     app.updated_at = new Date().toISOString();
 
     const client = store.clients.find(c => c.id === app.client_id);
@@ -2652,7 +2823,8 @@ export const dbService = {
     }
 
     const histId = nextEntityId('application_status_history', store.application_status_history);
-    const historyNote = notes ? notes.trim() : `Status changed from ${oldStatus} to ${newStatus}`;
+    const trimmedNotes = notes !== undefined ? notes.trim() : '';
+    const historyNote = trimmedNotes ? trimmedNotes : `Status changed from ${oldStatus} to ${newStatus}`;
 
     // Record history
     store.application_status_history.push({
@@ -2666,16 +2838,17 @@ export const dbService = {
       created_at: new Date().toISOString(),
     });
 
+    const notesToPersist = app.notes ?? null;
     runMySQLWrite(async (activePool) => {
       await ensureClientAndAppInMySQL(activePool, app.client_id, id);
       await activePool.query(
-        'UPDATE visa_applications SET status = ?, delivery_date = ?, notes = COALESCE(?, notes), updated_at = NOW() WHERE id = ?',
-        [newStatus, app.delivery_date || null, notes ? notes.trim() : null, id]
+        'UPDATE visa_applications SET status = ?, delivery_date = ?, notes = ?, updated_at = NOW() WHERE id = ?',
+        [newStatus, app.delivery_date || null, notesToPersist, id]
       );
       await activePool.query(
         `INSERT INTO application_status_history (id, application_id, old_status, new_status, delivery_date, changed_by_user_id, notes, created_at)
          VALUES (?, ?, ?, ?, ?, ?, ?, NOW())
-         ON DUPLICATE KEY UPDATE new_status = VALUES(new_status)`,
+         ON DUPLICATE KEY UPDATE new_status = VALUES(new_status), notes = VALUES(notes)`,
         [histId, id, oldStatus, newStatus, app.delivery_date || null, userId, historyNote]
       );
       if (newStatus === 'Returned') {
@@ -2758,14 +2931,16 @@ export const dbService = {
     }
 
     let updatedCount = 0;
+    const trimmedBatchNotes = notes?.trim();
     for (const appId of applicationIds) {
       const updated = await this.updateApplicationStatus(
         appId,
         newStatus,
         deliveryDate,
-        notes ? `[Batch Update] ${notes}` : `Batch status update to ${newStatus}`,
+        trimmedBatchNotes ? trimmedBatchNotes : `Batch status update to ${newStatus}`,
         userId,
-        true
+        true,
+        !trimmedBatchNotes
       );
       if (updated) {
         updatedCount++;
@@ -3116,6 +3291,11 @@ export const dbService = {
   },
 
   cleanupStaleUpcomingTasks() {
+    if (lastUpcomingCleanupVersion === dataVersion) {
+      return;
+    }
+    lastUpcomingCleanupVersion = dataVersion;
+
     let storeModified = false;
     const clearedAppIds: number[] = [];
     const removedTaskIds: number[] = [];
@@ -3367,7 +3547,7 @@ export const dbService = {
       }
       if (appId) {
         try {
-          await this.updateApplicationStatus(appId, 'Returned', undefined, 'Collection task completed.', userId, true);
+          await this.updateApplicationStatus(appId, 'Returned', undefined, 'Collection task completed.', userId, true, true);
         } catch (err: any) {
           console.error('[MySQL] Error auto-updating application to Returned on task complete:', err.message);
         }
@@ -3390,7 +3570,7 @@ export const dbService = {
             : 'Pending Collection';
 
           try {
-            await this.updateApplicationStatus(appId, previousStatus, undefined, 'Reverted status from Returned because collection task was marked uncompleted.', userId, true);
+            await this.updateApplicationStatus(appId, previousStatus, undefined, 'Reverted status from Returned because collection task was marked uncompleted.', userId, true, true);
           } catch (err: any) {
             console.error('[MySQL] Error reverting application status on task uncomplete:', err.message);
           }

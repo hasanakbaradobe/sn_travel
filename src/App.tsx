@@ -149,15 +149,17 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [profileRefreshKey, setProfileRefreshKey] = useState(0);
   const inFlightRefreshRef = useRef<Promise<void> | null>(null);
+  const pendingRefreshQueuedRef = useRef<boolean>(false);
   const lastDataVersionRef = useRef<number>(-1);
 
-  // Load all primary data in a single unified bootstrap call (with in-flight deduplication)
+  // Load all primary data in a single unified bootstrap call (with queued re-run so updates are never dropped)
   const refreshAllData = async (silent: boolean = false) => {
     if (!api.getCurrentUser()) {
       return;
     }
 
     if (inFlightRefreshRef.current) {
+      pendingRefreshQueuedRef.current = true;
       return inFlightRefreshRef.current;
     }
 
@@ -222,6 +224,10 @@ export default function App() {
           setLoading(false);
         }
         inFlightRefreshRef.current = null;
+        if (pendingRefreshQueuedRef.current) {
+          pendingRefreshQueuedRef.current = false;
+          void refreshAllData(true);
+        }
       }
     })();
 
@@ -341,18 +347,31 @@ export default function App() {
   }, []);
 
   // Real-Time Server-Sent Events (SSE) Stream & Smart Visibility-Aware Polling
+  const currentUserId = currentUser?.id ?? null;
   useEffect(() => {
-    if (!currentUser) return;
+    if (!currentUserId) return;
 
     let eventSource: EventSource | null = null;
+    let sseConnected = false;
+    let lastPollAt = Date.now();
+
     try {
       const token = api.getToken();
       const sseUrl = token ? `/api/events?token=${encodeURIComponent(token)}` : '/api/events';
       eventSource = new EventSource(sseUrl);
+      eventSource.onopen = () => {
+        sseConnected = true;
+      };
+      eventSource.onerror = () => {
+        sseConnected = false;
+      };
       eventSource.onmessage = (event) => {
         try {
           const parsed = JSON.parse(event.data);
-          if (parsed && parsed.type === 'data_changed') {
+          if (parsed && parsed.type === 'connected') {
+            sseConnected = true;
+          } else if (parsed && parsed.type === 'data_changed') {
+            lastPollAt = Date.now();
             refreshAllData(true);
           }
         } catch {}
@@ -361,9 +380,13 @@ export default function App() {
       console.warn('[SSE] EventSource connection failed, falling back to polling:', e);
     }
 
-    // Smart background fallback poll (only runs when tab is active & visible to save CPU/DB bandwidth)
+    // Smart background fallback poll: every 45s when SSE is live, or every 15s if SSE is disconnected
     const interval = setInterval(() => {
-      if (document.visibilityState === 'visible') {
+      if (document.visibilityState !== 'visible') return;
+      const elapsed = Date.now() - lastPollAt;
+      const requiredInterval = sseConnected ? 45000 : 15000;
+      if (elapsed >= requiredInterval) {
+        lastPollAt = Date.now();
         refreshAllData(true);
       }
     }, 15000);
@@ -374,7 +397,7 @@ export default function App() {
       }
       clearInterval(interval);
     };
-  }, [currentUser]);
+  }, [currentUserId]);
 
   // Helper to parse browser pathname to active NavTab & Client ID
   const parsePathToTab = (pathname: string): { tab: NavTab; clientId?: number } => {
@@ -1099,7 +1122,17 @@ export default function App() {
         isOpen={statusModalOpen}
         onClose={() => setStatusModalOpen(false)}
         application={statusTargetApp}
-        onStatusUpdated={() => refreshAllData(true)}
+        onStatusUpdated={(updatedApp) => {
+          if (updatedApp) {
+            setApplications((prev) =>
+              prev.map((a) => (a.id === updatedApp.id ? { ...a, ...updatedApp } : a))
+            );
+            setStatusTargetApp((prev) =>
+              prev && prev.id === updatedApp.id ? { ...prev, ...updatedApp } : prev
+            );
+          }
+          refreshAllData(true);
+        }}
       />
 
       <NewTaskModal
