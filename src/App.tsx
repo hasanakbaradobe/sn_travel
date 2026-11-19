@@ -300,9 +300,19 @@ export default function App() {
     const verifySession = async () => {
       const savedUser = api.getCurrentUser();
       if (!savedUser) {
-        setAuthChecking(false);
-        await checkSecretGate();
-        return;
+        // Fallback: if browser shields cleared localStorage (e.g. Brave), check if HttpOnly session cookie is still valid
+        try {
+          const verified = await api.getMe({ suppressAuthError: true });
+          setCurrentUser(verified);
+          setSecretGateChecking(false);
+          setAuthChecking(false);
+          void refreshAllData();
+          return;
+        } catch {
+          setAuthChecking(false);
+          await checkSecretGate();
+          return;
+        }
       }
 
       setSecretGateChecking(false);
@@ -312,11 +322,15 @@ export default function App() {
       try {
         const verified = await api.getMe();
         setCurrentUser(verified);
-      } catch (e) {
-        // Invalid or expired token
-        api.setCurrentUser(null);
-        setCurrentUser(null);
-        await checkSecretGate();
+      } catch (e: any) {
+        // Only sign out if the server explicitly rejected the token (401 Unauthorized)
+        if (e?.status === 401) {
+          api.setCurrentUser(null);
+          setCurrentUser(null);
+          await checkSecretGate();
+        } else {
+          console.warn('[SN Travels] Transient error verifying session on refresh; keeping local session:', e);
+        }
       } finally {
         setAuthChecking(false);
       }

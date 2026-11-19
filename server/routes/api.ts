@@ -180,14 +180,43 @@ export function broadcastDataChange(eventType: string = 'data_changed', data?: a
   });
 }
 
+function getCookieToken(req: Request): string {
+  const cookieHeader = req.headers.cookie;
+  if (!cookieHeader) return '';
+  const parts = cookieHeader.split(';');
+  for (const part of parts) {
+    const idx = part.indexOf('=');
+    if (idx === -1) continue;
+    const key = part.slice(0, idx).trim();
+    if (key === 'sn_auth_token') {
+      try {
+        return decodeURIComponent(part.slice(idx + 1).trim());
+      } catch {
+        return part.slice(idx + 1).trim();
+      }
+    }
+  }
+  return '';
+}
+
+function buildAuthCookie(req: Request, value: string, maxAgeSeconds: number): string {
+  const isSecure =
+    req.secure ||
+    String(req.headers['x-forwarded-proto'] || '').toLowerCase().includes('https');
+  const base = `sn_auth_token=${encodeURIComponent(value)}; Path=/; HttpOnly; Max-Age=${maxAgeSeconds}`;
+  return isSecure ? `${base}; SameSite=None; Secure` : `${base}; SameSite=Lax`;
+}
+
 apiRouter.get('/events', (req: Request, res: Response) => {
-  // Require valid authenticated token via Authorization header or ?token= query parameter
+  // Require valid authenticated token via Authorization header, ?token= query parameter, or HttpOnly session cookie
   let token = '';
   const authHeader = req.headers.authorization;
   if (authHeader && authHeader.startsWith('Bearer ')) {
     token = authHeader.substring(7).trim();
   } else if (typeof req.query.token === 'string') {
     token = req.query.token.trim();
+  } else {
+    token = getCookieToken(req);
   }
 
   const payload = token ? verifyToken(token) : null;
@@ -265,12 +294,14 @@ apiRouter.get('/health', (_req: Request, res: Response) => {
  * Extracts and cryptographically verifies the current authenticated user from Bearer token
  */
 function getCurrentUser(req: Request) {
+  let token = '';
   const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return null;
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    token = authHeader.substring(7).trim();
+  } else {
+    token = getCookieToken(req);
   }
 
-  const token = authHeader.substring(7).trim();
   if (!token) return null;
 
   const payload = verifyToken(token);
@@ -441,6 +472,9 @@ apiRouter.post('/auth/login', (req: Request, res: Response) => {
     role: user.role,
   });
 
+  // Also set HttpOnly session cookie as a resilient fallback (e.g., Brave Shields / storage partitioning)
+  res.setHeader('Set-Cookie', buildAuthCookie(req, token, 24 * 60 * 60));
+
   return res.json({
     token,
     user: {
@@ -451,6 +485,11 @@ apiRouter.post('/auth/login', (req: Request, res: Response) => {
       last_login_at: user.last_login_at || new Date().toISOString(),
     },
   });
+});
+
+apiRouter.post('/auth/logout', (req: Request, res: Response) => {
+  res.setHeader('Set-Cookie', buildAuthCookie(req, '', 0));
+  return res.json({ success: true });
 });
 
 // Server-to-Server Protected Public Website Export Endpoint (Authenticated via PUBLIC_SITE_EXPORT_TOKEN)
@@ -466,7 +505,14 @@ apiRouter.use('/public-site/admin', publicSiteAdminRouter);
 
 apiRouter.get('/auth/me', (req: Request, res: Response) => {
   const user = (req as any).user;
+  const authHeader = req.headers.authorization;
+  const activeToken =
+    authHeader && authHeader.startsWith('Bearer ')
+      ? authHeader.substring(7).trim()
+      : getCookieToken(req);
+
   return res.json({
+    token: activeToken || undefined,
     user: {
       id: user.id,
       name: user.name,

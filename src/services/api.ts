@@ -50,6 +50,47 @@ const DEFAULT_CACHE_TTL_MS = 60 * 1000; // 1 minute default TTL
 interface CacheOptions extends RequestInit {
   skipCache?: boolean;
   cacheTtl?: number;
+  suppressAuthError?: boolean;
+}
+
+function safeReadStorage(key: string): string | null {
+  try {
+    const val = window.localStorage.getItem(key);
+    if (val) return val;
+  } catch {
+    // localStorage may be blocked by strict browser privacy shields (e.g. Brave)
+  }
+  try {
+    return window.sessionStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function safeWriteStorage(key: string, value: string): void {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    // ignore storage quota or shield blocks
+  }
+  try {
+    window.sessionStorage.setItem(key, value);
+  } catch {
+    // ignore
+  }
+}
+
+function safeRemoveStorage(key: string): void {
+  try {
+    window.localStorage.removeItem(key);
+  } catch {
+    // ignore
+  }
+  try {
+    window.sessionStorage.removeItem(key);
+  } catch {
+    // ignore
+  }
 }
 
 class ApiService {
@@ -58,16 +99,19 @@ class ApiService {
   private authErrorListeners: Array<() => void> = [];
 
   constructor() {
-    this.token = localStorage.getItem('sn_token');
-    const savedUser = localStorage.getItem('sn_user');
+    this.token = safeReadStorage('sn_token');
+    const savedUser = safeReadStorage('sn_user');
     if (savedUser && this.token) {
       try {
         this.currentUser = JSON.parse(savedUser);
-      } catch (e) {
+        // Mirror back into both storages so refreshes always find it
+        safeWriteStorage('sn_token', this.token);
+        safeWriteStorage('sn_user', savedUser);
+      } catch {
         this.currentUser = null;
         this.token = null;
-        localStorage.removeItem('sn_user');
-        localStorage.removeItem('sn_token');
+        safeRemoveStorage('sn_user');
+        safeRemoveStorage('sn_token');
       }
     } else {
       this.currentUser = null;
@@ -125,12 +169,14 @@ class ApiService {
     this.clearCache();
     if (user && token) {
       this.token = token;
-      localStorage.setItem('sn_user', JSON.stringify(user));
-      localStorage.setItem('sn_token', token);
-    } else if (!user) {
+      safeWriteStorage('sn_user', JSON.stringify(user));
+      safeWriteStorage('sn_token', token);
+    } else if (user) {
+      safeWriteStorage('sn_user', JSON.stringify(user));
+    } else {
       this.token = null;
-      localStorage.removeItem('sn_user');
-      localStorage.removeItem('sn_token');
+      safeRemoveStorage('sn_user');
+      safeRemoveStorage('sn_token');
     }
   }
 
@@ -148,10 +194,11 @@ class ApiService {
       headers['Authorization'] = `Bearer ${this.token}`;
     }
 
-    const { skipCache, cacheTtl, ...fetchOptions } = options;
+    const { skipCache, cacheTtl, suppressAuthError, ...fetchOptions } = options;
 
     const response = await fetch(`${API_BASE}${endpoint}`, {
       cache: 'no-store',
+      credentials: 'same-origin',
       ...fetchOptions,
       headers,
     });
@@ -174,7 +221,12 @@ class ApiService {
       }
 
       // If unauthorized on any protected endpoint, clear session and inform listeners
-      if (response.status === 401 && endpoint !== '/auth/login' && endpoint !== '/scan-passport') {
+      if (
+        response.status === 401 &&
+        !suppressAuthError &&
+        endpoint !== '/auth/login' &&
+        endpoint !== '/scan-passport'
+      ) {
         this.setCurrentUser(null);
         this.authErrorListeners.forEach(cb => {
           try { cb(); } catch {}
@@ -240,10 +292,16 @@ class ApiService {
     });
   }
 
-  async getMe(): Promise<User> {
-    const res = await this.request<{ user: User }>('/auth/me');
+  async getMe(options?: { suppressAuthError?: boolean }): Promise<User> {
+    const res = await this.request<{ user: User; token?: string }>('/auth/me', {
+      suppressAuthError: options?.suppressAuthError,
+    });
     this.currentUser = res.user;
-    localStorage.setItem('sn_user', JSON.stringify(res.user));
+    if (res.token && !this.token) {
+      this.token = res.token;
+      safeWriteStorage('sn_token', res.token);
+    }
+    safeWriteStorage('sn_user', JSON.stringify(res.user));
     return res.user;
   }
 
@@ -255,6 +313,14 @@ class ApiService {
   }
 
   async logout() {
+    try {
+      await fetch(`${API_BASE}/auth/logout`, {
+        method: 'POST',
+        credentials: 'same-origin',
+      });
+    } catch {
+      // ignore network error during logout
+    }
     this.setCurrentUser(null);
   }
 
