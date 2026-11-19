@@ -150,8 +150,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
       {/* Top Branding Section */}
       <div className="p-5 border-b border-slate-800 flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-sky-600 to-cyan-500 flex items-center justify-center text-white shadow-md shadow-sky-950/50">
-            <Plane className="w-5 h-5" />
+          <div className="w-10 h-10 rounded-xl bg-white p-1 flex items-center justify-center shadow-md shadow-sky-950/50 overflow-hidden shrink-0">
+            <img
+              src="https://lh3.googleusercontent.com/d/1wJCY1RJCq0hASsYGGRnScbXDOW9YdPsM"
+              alt="SN Travels Agency Logo"
+              className="w-full h-full object-contain"
+              referrerPolicy="no-referrer"
+            />
           </div>
           <div>
             <h1 className="font-bold text-base tracking-tight text-white leading-tight">
