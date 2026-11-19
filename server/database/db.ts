@@ -23,7 +23,9 @@ let isConnectedToMySQL = false;
 let connectionError: string | null = null;
 let schemaInitialized = false;
 let hasCompletedInitialSync = false;
+let hasCompletedSecondarySync = false;
 let initialSyncPromise: Promise<void> | null = null;
+let secondarySyncPromise: Promise<void> | null = null;
 const syncCompletedListeners = new Set<() => void>();
 let lastProbeAttemptTime = 0;
 let lastPingMs: number | null = null;
@@ -49,6 +51,10 @@ function isTransientMySQLError(err: any): boolean {
   );
 }
 
+/**
+ * Lightweight connection probe ONLY (no DDL / ALTER TABLE / INFORMATION_SCHEMA blocking).
+ * Schema verification and one-time migrations run asynchronously in ensureMySQLSchemaOnce().
+ */
 async function probeMySQLConnection(force = false): Promise<boolean> {
   if (!pool) return false;
   const now = Date.now();
@@ -62,19 +68,50 @@ async function probeMySQLConnection(force = false): Promise<boolean> {
   lastProbeAttemptTime = now;
   inFlightProbePromise = (async () => {
     const startMs = Date.now();
-    let conn: mysql.PoolConnection | null = null;
     try {
-      conn = await pool!.getConnection();
+      await pool!.query({ sql: '/* probe */ SELECT 1', timeout: 6000 });
       lastPingMs = Date.now() - startMs;
+      if (!isConnectedToMySQL) {
+        console.log(`[Database] Connected to MySQL database "${DB_NAME}" at ${DB_HOST}:${DB_PORT} (${lastPingMs}ms)`);
+      }
       isConnectedToMySQL = true;
       connectionError = null;
+      return true;
+    } catch (err: any) {
+      isConnectedToMySQL = false;
+      connectionError = err?.message || String(err);
+      console.warn(`[Database] MySQL connection probe failed (${connectionError}). Using fast local store.`);
+      return false;
+    } finally {
+      inFlightProbePromise = null;
+    }
+  })();
 
-      if (!schemaInitialized) {
-        console.log(`[Database] Connected to MySQL database "${DB_NAME}" at ${DB_HOST}:${DB_PORT} (${lastPingMs}ms)`);
+  return inFlightProbePromise;
+}
 
-        // 1. Ensure tables exist in parallel
-        await Promise.allSettled([
-          conn.query(`
+/**
+ * One-time background schema, index, and seed verifier.
+ * Skips immediately if settings already contain schema_migrations_v2 = '1' so restarts incur zero DDL overhead.
+ */
+async function ensureMySQLSchemaOnce(): Promise<void> {
+  if (!pool || !isConnectedToMySQL || schemaInitialized) return;
+
+  // Fast-path skip if schema_migrations_v2 was already loaded in Phase 1 settings
+  const alreadyMigrated = (store?.settings || []).some(
+    (s: any) => s.setting_key === 'schema_migrations_v2' && String(s.setting_value) === '1'
+  );
+  if (alreadyMigrated) {
+    schemaInitialized = true;
+    return;
+  }
+
+  let conn: mysql.PoolConnection | null = null;
+  try {
+    conn = await pool.getConnection();
+    // 1. Ensure newer tables exist
+    await Promise.allSettled([
+      conn.query(`
             CREATE TABLE IF NOT EXISTS follow_ups (
               id INT AUTO_INCREMENT PRIMARY KEY,
               client_id INT NOT NULL,
@@ -348,30 +385,22 @@ async function probeMySQLConnection(force = false): Promise<boolean> {
           console.warn('[MySQL] Initial seed check warning:', e.message);
         }
 
+        // Persist one-time migration marker so future restarts skip all DDL/INFORMATION_SCHEMA queries
+        await conn
+          .query(
+            "INSERT INTO settings (setting_key, setting_value) VALUES ('schema_migrations_v2', '1') ON DUPLICATE KEY UPDATE setting_value = '1'"
+          )
+          .catch(() => {});
         schemaInitialized = true;
-      }
-
-      return true;
-    } catch (err: any) {
-      isConnectedToMySQL = false;
-      connectionError = err?.message || String(err);
-      console.warn(`[Database] MySQL connection probe failed (${connectionError}). Using fast local store.`);
-      return false;
-    } finally {
-      if (conn) {
-        try {
-          conn.release();
-        } catch {}
-      }
-      inFlightProbePromise = null;
+  } catch (err: any) {
+    console.warn('[Database] Background schema check warning:', err?.message || err);
+  } finally {
+    if (conn) {
+      try {
+        conn.release();
+      } catch {}
     }
-  })();
-
-  const connected = await inFlightProbePromise;
-  if (connected && !hasCompletedInitialSync) {
-    await syncFromMySQL(true);
   }
-  return connected;
 }
 
 // Initialize MySQL pool if host and user are configured
@@ -394,7 +423,7 @@ if (DB_HOST && DB_USER) {
       enableKeepAlive: true,
       keepAliveInitialDelay: 10000,
       dateStrings: true,
-      connectTimeout: 10000,
+      connectTimeout: 8000,
       ssl: DB_SSL ? { rejectUnauthorized: false } : undefined,
     });
 
@@ -423,27 +452,44 @@ if (DB_HOST && DB_USER) {
       }
     }, 45000).unref();
 
-    // Kick off initial startup connection + sync and track it so first API requests wait for real MySQL data
+    // Fast Two-Phase Startup:
+    // Phase 1 loads only core workspace tables in parallel (~300-600ms) with ZERO DDL/ALTER overhead,
+    // immediately unblocking login/bootstrap with live MySQL data.
+    // Phase 2 loads secondary tables + one-time schema check in the background.
     initialSyncPromise = (async () => {
       try {
-        const ok = await probeMySQLConnection(true);
-        if (ok && !hasCompletedInitialSync) {
-          await syncFromMySQL(true);
-        }
+        await syncCoreFromMySQL();
       } catch (err: any) {
-        console.warn('[Database] Initial MySQL sync warning:', err?.message || err);
+        console.warn('[Database] Initial MySQL core sync warning:', err?.message || err);
       } finally {
         hasCompletedInitialSync = true;
+      }
+
+      if (isConnectedToMySQL) {
+        secondarySyncPromise = (async () => {
+          try {
+            await syncSecondaryFromMySQL();
+            await ensureMySQLSchemaOnce();
+          } catch (err: any) {
+            console.warn('[Database] Background secondary MySQL sync warning:', err?.message || err);
+          } finally {
+            hasCompletedSecondarySync = true;
+          }
+        })();
+      } else {
+        hasCompletedSecondarySync = true;
       }
     })();
   } catch (err: any) {
     isConnectedToMySQL = false;
     hasCompletedInitialSync = true;
+    hasCompletedSecondarySync = true;
     connectionError = err.message;
     console.warn(`[Database] Failed to create MySQL pool (${err.message}). Using local store fallback.`);
   }
 } else {
   hasCompletedInitialSync = true;
+  hasCompletedSecondarySync = true;
   console.log(`[Database] DB_HOST or DB_USER not provided in env. Active local database ready (MySQL schema available for phpMyAdmin).`);
 }
 
@@ -1577,6 +1623,265 @@ function runMySQLWrite(task: (activePool: mysql.Pool) => Promise<any>): void {
   });
 }
 
+function recalculateNextIds(): void {
+  store.nextIds = {
+    users: Math.max(...store.users.map(x => x.id), 0) + 1,
+    countries: Math.max(...store.countries.map(x => x.id), 0) + 1,
+    clients: Math.max(...store.clients.map(x => x.id), 0) + 1,
+    client_custom_fields: Math.max(...store.client_custom_fields.map(x => x.id), 0) + 1,
+    client_custom_field_values: Math.max(...store.client_custom_field_values.map(x => x.id || 0), 0) + 1,
+    visa_types: Math.max(...store.visa_types.map(x => x.id), 0) + 1,
+    visa_applications: Math.max(...store.visa_applications.map(x => x.id), 0) + 1,
+    application_status_history: Math.max(...store.application_status_history.map(x => x.id || 0), 0) + 1,
+    tasks: Math.max(...store.tasks.map(x => x.id), 0) + 1,
+    comments: Math.max(...store.comments.map(x => x.id || 0), 0) + 1,
+    activity_logs: Math.max(...store.activity_logs.map(x => x.id || 0), 0) + 1,
+    hotels: Math.max(...(store.hotels || []).map(x => x.id), 0) + 1,
+    hotel_rooms: Math.max(...(store.hotel_rooms || []).map(x => x.id), 0) + 1,
+    hotel_bookings: Math.max(...(store.hotel_bookings || []).map(x => x.id), 0) + 1,
+    follow_ups: Math.max(...(store.follow_ups || []).map(x => x.id), 0) + 1,
+    settings: Math.max(...(store.settings || []).map(x => x.id), 0) + 1,
+    invoice_catalog_items: Math.max(...(store.invoice_catalog_items || []).map(x => x.id), 0) + 1,
+    invoices: Math.max(...(store.invoices || []).map(x => x.id), 0) + 1,
+    invoice_items: Math.max(...(store.invoice_items || []).map(x => x.id), 0) + 1,
+  };
+}
+
+function applyCoreRowsToStore(rows: {
+  u: any;
+  c: any;
+  cl: any;
+  vt: any;
+  va: any;
+  t: any;
+  h: any;
+  hb: any;
+  s: any;
+  fu: any;
+}): void {
+  const { u, c, cl, vt, va, t, h, hb, s, fu } = rows;
+  if (Array.isArray(u) && u.length > 0) store.users = u;
+  if (Array.isArray(c) && c.length > 0) store.countries = c;
+  if (Array.isArray(cl)) {
+    const extractSerial = (item: any): number => {
+      const raw = String(item.client_id || '').trim();
+      if (/^\d+$/.test(raw)) return parseInt(raw, 10);
+      const m = raw.match(/\d+/g);
+      if (m && m.length > 0) {
+        const n = parseInt(m[m.length - 1], 10);
+        if (!isNaN(n)) return n;
+      }
+      return Number(item.id) || 0;
+    };
+    store.clients = cl
+      .map((item: any) => ({
+        ...item,
+        date_of_birth: item.date_of_birth ? String(item.date_of_birth).slice(0, 10) : null,
+      }))
+      .sort((a: any, b: any) => extractSerial(b) - extractSerial(a) || Number(b.id) - Number(a.id));
+  }
+  if (Array.isArray(vt) && vt.length > 0) store.visa_types = vt;
+  if (Array.isArray(va)) {
+    store.visa_applications = va.map((item: any) => ({
+      ...item,
+      delivery_date: item.delivery_date ? String(item.delivery_date).slice(0, 10) : null,
+    }));
+  }
+  if (Array.isArray(t)) {
+    store.tasks = t.map((item: any) => ({
+      ...item,
+      due_date: item.due_date ? String(item.due_date).slice(0, 10) : new Date().toISOString().slice(0, 10),
+    }));
+  }
+  if (Array.isArray(h) && h.length > 0) store.hotels = h;
+  if (Array.isArray(hb)) {
+    store.hotel_bookings = hb.map((item: any) => ({
+      ...item,
+      check_in_date: item.check_in_date ? String(item.check_in_date).slice(0, 10) : new Date().toISOString().slice(0, 10),
+      check_out_date: item.check_out_date ? String(item.check_out_date).slice(0, 10) : new Date().toISOString().slice(0, 10),
+    }));
+  }
+  if (Array.isArray(fu)) {
+    store.follow_ups = fu.map((item: any) => ({
+      ...item,
+      due_date: item.due_date ? String(item.due_date).slice(0, 10) : new Date().toISOString().slice(0, 10),
+    }));
+  }
+  if (Array.isArray(s) && s.length > 0) store.settings = s;
+}
+
+function applySecondaryRowsToStore(rows: {
+  cf: any;
+  cfv: any;
+  ash: any;
+  cm: any;
+  al: any;
+  hr: any;
+  invS: any;
+  invCat: any;
+  inv: any;
+  invItems: any;
+}): void {
+  const { cf, cfv, ash, cm, al, hr, invS, invCat, inv, invItems } = rows;
+  if (Array.isArray(cf) && cf.length > 0) store.client_custom_fields = cf;
+  if (Array.isArray(cfv)) store.client_custom_field_values = cfv;
+  if (Array.isArray(ash)) store.application_status_history = ash;
+  if (Array.isArray(cm)) store.comments = cm;
+  if (Array.isArray(al)) store.activity_logs = al;
+  if (Array.isArray(hr)) store.hotel_rooms = hr;
+
+  if (Array.isArray(invS) && invS.length > 0) {
+    store.invoice_settings = {
+      ...store.invoice_settings,
+      ...invS[0],
+      signature_enabled: invS[0].signature_enabled !== undefined ? Number(invS[0].signature_enabled) : (store.invoice_settings?.signature_enabled ?? 1),
+      signature_name: invS[0].signature_name ?? store.invoice_settings?.signature_name ?? 'Sarah Nadeem',
+      signature_designation: invS[0].signature_designation ?? store.invoice_settings?.signature_designation ?? 'Managing Director',
+      signature_image_url: invS[0].signature_image_url ?? store.invoice_settings?.signature_image_url ?? null,
+      signature_style: invS[0].signature_style || store.invoice_settings?.signature_style || 'script',
+      next_number: Number(invS[0].next_number) || 1001,
+    };
+  }
+  if (Array.isArray(invCat)) {
+    store.invoice_catalog_items = invCat.map((item: any) => ({
+      ...item,
+      default_unit_price: Number(item.default_unit_price) || 0,
+      is_active: Number(item.is_active ?? 1),
+      display_order: Number(item.display_order) || 0,
+    }));
+  }
+  if (Array.isArray(inv)) {
+    store.invoices = inv.map((item: any) => ({
+      ...item,
+      issue_date: item.issue_date ? String(item.issue_date).slice(0, 10) : new Date().toISOString().slice(0, 10),
+      due_date: item.due_date ? String(item.due_date).slice(0, 10) : null,
+      subtotal: Number(item.subtotal) || 0,
+      discount: Number(item.discount) || 0,
+      tax_rate: Number(item.tax_rate) || 0,
+      tax_amount: Number(item.tax_amount) || 0,
+      total_amount: Number(item.total_amount) || 0,
+      paid_amount: Number(item.paid_amount) || 0,
+      balance_due: Number(item.balance_due) || 0,
+    }));
+  }
+  if (Array.isArray(invItems)) {
+    store.invoice_items = invItems.map((item: any) => ({
+      ...item,
+      quantity: Number(item.quantity) || 1,
+      unit_price: Number(item.unit_price) || 0,
+      total: Number(item.total) || 0,
+    }));
+  }
+}
+
+async function safeSyncQuery(sql: string, timeoutMs = 10000): Promise<{ ok: boolean; rows: any }> {
+  if (!pool) return { ok: false, rows: null };
+  try {
+    const queryPromise = pool.query({ sql, timeout: timeoutMs });
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error(`Query timed out after ${timeoutMs}ms: ${sql.slice(0, 60)}`)), timeoutMs + 500)
+    );
+    const [rows]: any = await Promise.race([queryPromise, timeoutPromise]);
+    return { ok: true, rows };
+  } catch (err: any) {
+    if (isTransientMySQLError(err)) {
+      isConnectedToMySQL = false;
+      connectionError = err?.message || String(err);
+    }
+    if (err?.code !== 'ER_NO_SUCH_TABLE') {
+      console.warn(`[MySQL Table Sync Warning] (${sql}):`, err?.message || err);
+    }
+    return { ok: false, rows: null };
+  }
+}
+
+/**
+ * Phase 1 (Critical Path): Loads only the 10 core tables needed for auth, dashboard, clients,
+ * applications, tasks, calendar, hotels, and follow-ups in parallel without any DDL/ALTER queries.
+ */
+async function syncCoreFromMySQL(): Promise<void> {
+  if (!pool) return;
+  const startMs = Date.now();
+  const coreQueries = [
+    'SELECT * FROM users',
+    'SELECT * FROM countries ORDER BY display_order ASC, name ASC',
+    'SELECT * FROM clients ORDER BY id DESC',
+    'SELECT * FROM visa_types',
+    'SELECT * FROM visa_applications',
+    'SELECT * FROM tasks',
+    'SELECT * FROM hotels',
+    'SELECT * FROM hotel_bookings',
+    'SELECT * FROM settings',
+    'SELECT * FROM follow_ups',
+  ];
+
+  const results = await runWithConcurrency(
+    coreQueries.map((sql) => () => safeSyncQuery(sql, 8000)),
+    6
+  );
+
+  const succeeded = results.filter((r) => r.ok).length;
+  if (succeeded === 0) {
+    isConnectedToMySQL = false;
+    return;
+  }
+
+  lastPingMs = Math.max(1, Math.round((Date.now() - startMs) / 2));
+  isConnectedToMySQL = true;
+  connectionError = null;
+
+  const [u, c, cl, vt, va, t, h, hb, s, fu] = results.map((r) => r.rows);
+  applyCoreRowsToStore({ u, c, cl, vt, va, t, h, hb, s, fu });
+  recalculateNextIds();
+  lastSyncTime = Date.now();
+  saveStore(store);
+  console.log(`[Database] Phase 1 core MySQL sync completed in ${Date.now() - startMs}ms (${store.clients.length} clients, ${store.visa_applications.length} apps)`);
+}
+
+/**
+ * Phase 2 (Background): Loads secondary tables (history, comments, logs, custom fields, invoices)
+ * right after Phase 1 unblocks the initial UI.
+ */
+async function syncSecondaryFromMySQL(): Promise<void> {
+  if (!pool || !isConnectedToMySQL) return;
+  const syncStart = Date.now();
+  const beforeFingerprint = computeStoreFingerprint(store);
+  const secondaryQueries = [
+    'SELECT * FROM client_custom_fields ORDER BY display_order ASC',
+    'SELECT * FROM client_custom_field_values',
+    'SELECT * FROM application_status_history',
+    'SELECT * FROM comments',
+    'SELECT * FROM activity_logs ORDER BY id DESC LIMIT 300',
+    'SELECT * FROM hotel_rooms',
+    'SELECT * FROM invoice_settings LIMIT 1',
+    'SELECT * FROM invoice_catalog_items ORDER BY display_order ASC, id ASC',
+    'SELECT * FROM invoices ORDER BY id DESC',
+    'SELECT * FROM invoice_items',
+  ];
+
+  const results = await runWithConcurrency(
+    secondaryQueries.map((sql) => () => safeSyncQuery(sql, 10000)),
+    5
+  );
+
+  if (results.every((r) => !r.ok)) return;
+  if (lastLocalMutationTime > syncStart) return;
+
+  const [cf, cfv, ash, cm, al, hr, invS, invCat, inv, invItems] = results.map((r) => r.rows);
+  applySecondaryRowsToStore({ cf, cfv, ash, cm, al, hr, invS, invCat, inv, invItems });
+  recalculateNextIds();
+
+  const afterFingerprint = computeStoreFingerprint(store);
+  if (afterFingerprint !== beforeFingerprint) {
+    saveStore(store);
+    syncCompletedListeners.forEach((listener) => {
+      try {
+        listener();
+      } catch {}
+    });
+  }
+}
+
 async function syncFromMySQL(force = false): Promise<void> {
   if (!pool) return;
   if (!isConnectedToMySQL) {
@@ -1606,26 +1911,6 @@ async function syncFromMySQL(force = false): Promise<void> {
   inFlightSyncPromise = (async () => {
     const syncStart = Date.now();
     const beforeFingerprint = computeStoreFingerprint(store);
-    let failedQueries = 0;
-
-    const safeQuery = async (sql: string) => {
-      try {
-        const queryPromise = pool!.query({ sql, timeout: 12000 });
-        const timeoutPromise = new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error(`Query timed out after 12s: ${sql.slice(0, 60)}`)), 12500)
-        );
-        const [rows]: any = await Promise.race([queryPromise, timeoutPromise]);
-        return rows;
-      } catch (err: any) {
-        failedQueries += 1;
-        if (isTransientMySQLError(err)) {
-          isConnectedToMySQL = false;
-          connectionError = err?.message || String(err);
-        }
-        console.warn(`[MySQL Table Sync Warning] (${sql}):`, err?.message || err);
-        return null;
-      }
-    };
 
     try {
       const queries = [
@@ -1651,15 +1936,14 @@ async function syncFromMySQL(force = false): Promise<void> {
         'SELECT * FROM invoice_items',
       ];
 
-      // Run in controlled batches of 4 concurrent queries to avoid exhausting shared MySQL max_user_connections
-      const [u, c, cl, cf, cfv, vt, va, ash, t, cm, al, h, hr, hb, s, fu, invS, invCat, inv, invItems] =
-        await runWithConcurrency(
-          queries.map((sql) => () => safeQuery(sql)),
-          4
-        );
+      // Run in controlled batches of 6 concurrent queries to stay within shared MySQL connection limits while staying fast
+      const results = await runWithConcurrency(
+        queries.map((sql) => () => safeSyncQuery(sql, 12000)),
+        6
+      );
 
       // If every core query failed, keep existing in-memory store intact
-      if (failedQueries === queries.length) {
+      if (results.every((r) => !r.ok)) {
         return;
       }
 
@@ -1671,129 +1955,16 @@ async function syncFromMySQL(force = false): Promise<void> {
         return;
       }
 
-      if (Array.isArray(u) && u.length > 0) store.users = u;
-      if (Array.isArray(c) && c.length > 0) store.countries = c;
-      if (Array.isArray(cl)) {
-        const extractSerial = (c: any): number => {
-          const raw = String(c.client_id || '').trim();
-          if (/^\d+$/.test(raw)) return parseInt(raw, 10);
-          const m = raw.match(/\d+/g);
-          if (m && m.length > 0) {
-            const n = parseInt(m[m.length - 1], 10);
-            if (!isNaN(n)) return n;
-          }
-          return Number(c.id) || 0;
-        };
-        store.clients = cl
-          .map((item: any) => ({
-            ...item,
-            date_of_birth: item.date_of_birth ? String(item.date_of_birth).slice(0, 10) : null,
-          }))
-          .sort((a: any, b: any) => extractSerial(b) - extractSerial(a) || Number(b.id) - Number(a.id));
-      }
-      if (Array.isArray(cf) && cf.length > 0) store.client_custom_fields = cf;
-      if (Array.isArray(cfv)) store.client_custom_field_values = cfv;
-      if (Array.isArray(vt) && vt.length > 0) store.visa_types = vt;
-      if (Array.isArray(va)) {
-        store.visa_applications = va.map((item: any) => ({
-          ...item,
-          delivery_date: item.delivery_date ? String(item.delivery_date).slice(0, 10) : null,
-        }));
-      }
-      if (Array.isArray(ash)) store.application_status_history = ash;
-      if (Array.isArray(t)) {
-        store.tasks = t.map((item: any) => ({
-          ...item,
-          due_date: item.due_date ? String(item.due_date).slice(0, 10) : new Date().toISOString().slice(0, 10),
-        }));
-      }
-      if (Array.isArray(cm)) store.comments = cm;
-      if (Array.isArray(al)) store.activity_logs = al;
-      if (Array.isArray(h) && h.length > 0) store.hotels = h;
-      if (Array.isArray(hr)) store.hotel_rooms = hr;
-      if (Array.isArray(hb)) {
-        store.hotel_bookings = hb.map((item: any) => ({
-          ...item,
-          check_in_date: item.check_in_date ? String(item.check_in_date).slice(0, 10) : new Date().toISOString().slice(0, 10),
-          check_out_date: item.check_out_date ? String(item.check_out_date).slice(0, 10) : new Date().toISOString().slice(0, 10),
-        }));
-      }
-      if (Array.isArray(fu)) {
-        store.follow_ups = fu.map((item: any) => ({
-          ...item,
-          due_date: item.due_date ? String(item.due_date).slice(0, 10) : new Date().toISOString().slice(0, 10),
-        }));
-      }
-      if (Array.isArray(s) && s.length > 0) store.settings = s;
-
-      if (Array.isArray(invS) && invS.length > 0) {
-        store.invoice_settings = {
-          ...store.invoice_settings,
-          ...invS[0],
-          signature_enabled: invS[0].signature_enabled !== undefined ? Number(invS[0].signature_enabled) : (store.invoice_settings?.signature_enabled ?? 1),
-          signature_name: invS[0].signature_name ?? store.invoice_settings?.signature_name ?? 'Sarah Nadeem',
-          signature_designation: invS[0].signature_designation ?? store.invoice_settings?.signature_designation ?? 'Managing Director',
-          signature_image_url: invS[0].signature_image_url ?? store.invoice_settings?.signature_image_url ?? null,
-          signature_style: invS[0].signature_style || store.invoice_settings?.signature_style || 'script',
-          next_number: Number(invS[0].next_number) || 1001,
-        };
-      }
-      if (Array.isArray(invCat)) {
-        store.invoice_catalog_items = invCat.map((item: any) => ({
-          ...item,
-          default_unit_price: Number(item.default_unit_price) || 0,
-          is_active: Number(item.is_active ?? 1),
-          display_order: Number(item.display_order) || 0,
-        }));
-      }
-      if (Array.isArray(inv)) {
-        store.invoices = inv.map((item: any) => ({
-          ...item,
-          issue_date: item.issue_date ? String(item.issue_date).slice(0, 10) : new Date().toISOString().slice(0, 10),
-          due_date: item.due_date ? String(item.due_date).slice(0, 10) : null,
-          subtotal: Number(item.subtotal) || 0,
-          discount: Number(item.discount) || 0,
-          tax_rate: Number(item.tax_rate) || 0,
-          tax_amount: Number(item.tax_amount) || 0,
-          total_amount: Number(item.total_amount) || 0,
-          paid_amount: Number(item.paid_amount) || 0,
-          balance_due: Number(item.balance_due) || 0,
-        }));
-      }
-      if (Array.isArray(invItems)) {
-        store.invoice_items = invItems.map((item: any) => ({
-          ...item,
-          quantity: Number(item.quantity) || 1,
-          unit_price: Number(item.unit_price) || 0,
-          total: Number(item.total) || 0,
-        }));
-      }
-
-      // Recalculate nextIds safely
-      store.nextIds = {
-        users: Math.max(...store.users.map(x => x.id), 0) + 1,
-        countries: Math.max(...store.countries.map(x => x.id), 0) + 1,
-        clients: Math.max(...store.clients.map(x => x.id), 0) + 1,
-        client_custom_fields: Math.max(...store.client_custom_fields.map(x => x.id), 0) + 1,
-        client_custom_field_values: Math.max(...store.client_custom_field_values.map(x => x.id || 0), 0) + 1,
-        visa_types: Math.max(...store.visa_types.map(x => x.id), 0) + 1,
-        visa_applications: Math.max(...store.visa_applications.map(x => x.id), 0) + 1,
-        application_status_history: Math.max(...store.application_status_history.map(x => x.id || 0), 0) + 1,
-        tasks: Math.max(...store.tasks.map(x => x.id), 0) + 1,
-        comments: Math.max(...store.comments.map(x => x.id || 0), 0) + 1,
-        activity_logs: Math.max(...store.activity_logs.map(x => x.id || 0), 0) + 1,
-        hotels: Math.max(...(store.hotels || []).map(x => x.id), 0) + 1,
-        hotel_rooms: Math.max(...(store.hotel_rooms || []).map(x => x.id), 0) + 1,
-        hotel_bookings: Math.max(...(store.hotel_bookings || []).map(x => x.id), 0) + 1,
-        follow_ups: Math.max(...(store.follow_ups || []).map(x => x.id), 0) + 1,
-        settings: Math.max(...(store.settings || []).map(x => x.id), 0) + 1,
-        invoice_catalog_items: Math.max(...(store.invoice_catalog_items || []).map(x => x.id), 0) + 1,
-        invoices: Math.max(...(store.invoices || []).map(x => x.id), 0) + 1,
-        invoice_items: Math.max(...(store.invoice_items || []).map(x => x.id), 0) + 1,
-      };
+      const [u, c, cl, cf, cfv, vt, va, ash, t, cm, al, h, hr, hb, s, fu, invS, invCat, inv, invItems] = results.map(
+        (r) => r.rows
+      );
+      applyCoreRowsToStore({ u, c, cl, vt, va, t, h, hb, s, fu });
+      applySecondaryRowsToStore({ cf, cfv, ash, cm, al, hr, invS, invCat, inv, invItems });
+      recalculateNextIds();
 
       const wasInitial = !hasCompletedInitialSync;
       hasCompletedInitialSync = true;
+      hasCompletedSecondarySync = true;
       lastSyncTime = Date.now();
       const afterFingerprint = computeStoreFingerprint(store);
 
@@ -1833,13 +2004,29 @@ export const dbService = {
   },
 
   /**
-   * Awaits the initial startup MySQL sync (with a bounded timeout) so the first
-   * API requests after a cold boot never return empty/stale seed data.
+   * Awaits Phase 1 core MySQL sync (bounded timeout) so first API requests
+   * return real MySQL data quickly without waiting on DDL or secondary tables.
    */
-  async waitForInitialSync(timeoutMs = 8000): Promise<void> {
+  async waitForInitialSync(timeoutMs = 4500): Promise<void> {
     if (hasCompletedInitialSync || !initialSyncPromise) return;
     await Promise.race([
       initialSyncPromise,
+      new Promise<void>((resolve) => setTimeout(resolve, timeoutMs)),
+    ]);
+  },
+
+  /**
+   * Awaits Phase 2 secondary MySQL sync (invoices, history, comments, custom fields, logs)
+   * ONLY for routes that actually read those secondary tables.
+   */
+  async waitForSecondarySync(timeoutMs = 5000): Promise<void> {
+    if (hasCompletedSecondarySync) return;
+    if (!hasCompletedInitialSync && initialSyncPromise) {
+      await this.waitForInitialSync(timeoutMs);
+    }
+    if (hasCompletedSecondarySync || !secondarySyncPromise) return;
+    await Promise.race([
+      secondarySyncPromise,
       new Promise<void>((resolve) => setTimeout(resolve, timeoutMs)),
     ]);
   },
@@ -1849,7 +2036,7 @@ export const dbService = {
    * so HTTP API requests return in <1ms from memory without waiting on network I/O.
    */
   triggerBackgroundSync() {
-    if (!pool || !hasCompletedInitialSync) return;
+    if (!pool || !hasCompletedInitialSync || !hasCompletedSecondarySync) return;
     const now = Date.now();
     if (now - lastSyncTime >= SYNC_CACHE_TTL_MS && !inFlightSyncPromise) {
       void syncFromMySQL(false).catch(() => {});

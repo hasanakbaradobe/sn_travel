@@ -5,7 +5,6 @@
 
 import { Router, Request, Response, NextFunction } from 'express';
 import { dbService } from '../database/db.ts';
-import { scanPassportDocument } from '../services/passportScanner.ts';
 import {
   hashPassword,
   verifyPassword,
@@ -268,8 +267,22 @@ apiRouter.use(async (req: Request, res: Response, next: NextFunction) => {
   res.setHeader('Expires', '0');
   res.setHeader('Surrogate-Control', 'no-store');
 
-  if (req.path !== '/health') {
-    await dbService.waitForInitialSync(8000);
+  if (req.path !== '/health' && req.path !== '/proxy-image') {
+    await dbService.waitForInitialSync(4500);
+    const needsSecondary =
+      req.path.startsWith('/invoices') ||
+      req.path.startsWith('/invoice-') ||
+      req.path.startsWith('/custom-fields') ||
+      req.path.startsWith('/comments') ||
+      req.path.startsWith('/activity') ||
+      req.path.startsWith('/data-cleanup') ||
+      req.path.startsWith('/db/backup') ||
+      /^\/clients\/\d+/.test(req.path) ||
+      /^\/applications\/\d+/.test(req.path) ||
+      /^\/hotels\/\d+\/rooms/.test(req.path);
+    if (needsSecondary) {
+      await dbService.waitForSecondarySync(5000);
+    }
     dbService.triggerBackgroundSync();
   }
   next();
@@ -493,6 +506,7 @@ apiRouter.post('/auth/login', (req: Request, res: Response) => {
       role: user.role,
       last_login_at: user.last_login_at || new Date().toISOString(),
     },
+    bootstrap: buildBootstrapPayload(user),
   });
 });
 
@@ -533,17 +547,14 @@ apiRouter.get('/auth/me', (req: Request, res: Response) => {
   });
 });
 
-// Unified Bootstrap Endpoint — Fetches all core workspace datasets in 1 HTTP request
-// Uses versioned micro-caching so repeated polls / multi-tab loads return in <1ms
-apiRouter.get('/bootstrap', (req: Request, res: Response) => {
-  const currentUser = (req as any).user;
+function buildBootstrapPayload(currentUser: any) {
   const isSuperAdmin = currentUser?.role === 'super_admin';
   const dataVersion = dbService.getDataVersion();
   const cacheKey = `bootstrap_${isSuperAdmin ? 'super' : 'staff'}_v${dataVersion}`;
 
   const cached = getCachedReference<any>(cacheKey);
   if (cached) {
-    return res.json(cached);
+    return cached;
   }
 
   const allUsers = dbService.getUsers();
@@ -574,7 +585,14 @@ apiRouter.get('/bootstrap', (req: Request, res: Response) => {
   };
 
   setCachedReference(cacheKey, payload, 15000);
-  return res.json(payload);
+  return payload;
+}
+
+// Unified Bootstrap Endpoint — Fetches all core workspace datasets in 1 HTTP request
+// Uses versioned micro-caching so repeated polls / multi-tab loads return in <1ms
+apiRouter.get('/bootstrap', (req: Request, res: Response) => {
+  const currentUser = (req as any).user;
+  return res.json(buildBootstrapPayload(currentUser));
 });
 
 apiRouter.post('/auth/change-password', (req: Request, res: Response) => {
@@ -612,6 +630,7 @@ apiRouter.post('/scan-passport', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'No image provided for passport scan' });
     }
 
+    const { scanPassportDocument } = await import('../services/passportScanner.ts');
     const result = await scanPassportDocument(targetImage, mimeType, engine || 'auto');
     return res.json(result);
   } catch (err: any) {

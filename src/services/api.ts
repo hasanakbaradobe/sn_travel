@@ -45,7 +45,24 @@ import {
 
 const API_BASE = '/api';
 const CACHE_KEY_PREFIX = 'sn_api_cache_';
+const BOOTSTRAP_CACHE_PREFIX = 'sn_bootstrap_v1_';
 const DEFAULT_CACHE_TTL_MS = 60 * 1000; // 1 minute default TTL
+
+export interface BootstrapPayload {
+  dataVersion?: number;
+  metrics: DashboardMetrics;
+  clients: Client[];
+  applications: VisaApplication[];
+  tasks: Task[];
+  hotels: Hotel[];
+  hotelBookings: HotelBooking[];
+  followUps: FollowUp[];
+  visaTypes: VisaType[];
+  countries: Country[];
+  customFields: CustomField[];
+  dbStatus?: DatabaseStatus;
+  users?: User[];
+}
 
 interface CacheOptions extends RequestInit {
   skipCache?: boolean;
@@ -164,10 +181,57 @@ class ApiService {
     return this.token;
   }
 
+  public getCachedBootstrap(userId: number): BootstrapPayload | null {
+    try {
+      const raw = safeReadStorage(`${BOOTSTRAP_CACHE_PREFIX}${userId}`);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (parsed && parsed.data && typeof parsed.ts === 'number') {
+        // Accept snapshot up to 24h old for instant stale-while-revalidate display
+        if (Date.now() - parsed.ts < 24 * 60 * 60 * 1000) {
+          return parsed.data as BootstrapPayload;
+        }
+      }
+    } catch {
+      // ignore corrupted cache
+    }
+    return null;
+  }
+
+  public saveCachedBootstrap(userId: number, data: BootstrapPayload): void {
+    try {
+      const serialized = JSON.stringify({ ts: Date.now(), data });
+      // Guard storage quota: skip caching if payload exceeds 2MB
+      if (serialized.length > 2 * 1024 * 1024) return;
+      safeWriteStorage(`${BOOTSTRAP_CACHE_PREFIX}${userId}`, serialized);
+    } catch {
+      // ignore storage quota errors
+    }
+  }
+
+  public clearCachedBootstrap(): void {
+    try {
+      for (const storage of [window.localStorage, window.sessionStorage]) {
+        const toRemove: string[] = [];
+        for (let i = 0; i < storage.length; i++) {
+          const k = storage.key(i);
+          if (k && k.startsWith(BOOTSTRAP_CACHE_PREFIX)) toRemove.push(k);
+        }
+        toRemove.forEach((k) => storage.removeItem(k));
+      }
+    } catch {
+      // ignore
+    }
+  }
+
   setCurrentUser(user: User | null, token?: string) {
+    const prevUserId = this.currentUser?.id;
     this.currentUser = user;
     this.clearCache();
     if (user && token) {
+      if (prevUserId && prevUserId !== user.id) {
+        this.clearCachedBootstrap();
+      }
       this.token = token;
       safeWriteStorage('sn_user', JSON.stringify(user));
       safeWriteStorage('sn_token', token);
@@ -175,6 +239,7 @@ class ApiService {
       safeWriteStorage('sn_user', JSON.stringify(user));
     } else {
       this.token = null;
+      this.clearCachedBootstrap();
       safeRemoveStorage('sn_user');
       safeRemoveStorage('sn_token');
     }
@@ -302,12 +367,19 @@ class ApiService {
   }
 
   // Auth
-  async login(email: string, password: string, secretKey?: string): Promise<{ token: string; user: User }> {
-    const res = await this.request<{ token: string; user: User }>('/auth/login', {
+  async login(
+    email: string,
+    password: string,
+    secretKey?: string
+  ): Promise<{ token: string; user: User; bootstrap?: BootstrapPayload }> {
+    const res = await this.request<{ token: string; user: User; bootstrap?: BootstrapPayload }>('/auth/login', {
       method: 'POST',
       body: JSON.stringify({ email, password, secretKey }),
     });
     this.setCurrentUser(res.user, res.token);
+    if (res.bootstrap && res.user?.id) {
+      this.saveCachedBootstrap(res.user.id, res.bootstrap);
+    }
     return res;
   }
 
@@ -719,22 +791,12 @@ class ApiService {
   }
 
   // Unified Bootstrap & Dashboard
-  async getBootstrapData(): Promise<{
-    dataVersion?: number;
-    metrics: DashboardMetrics;
-    clients: Client[];
-    applications: VisaApplication[];
-    tasks: Task[];
-    hotels: Hotel[];
-    hotelBookings: HotelBooking[];
-    followUps: FollowUp[];
-    visaTypes: VisaType[];
-    countries: Country[];
-    customFields: CustomField[];
-    dbStatus?: DatabaseStatus;
-    users?: User[];
-  }> {
-    return this.request('/bootstrap');
+  async getBootstrapData(): Promise<BootstrapPayload> {
+    const data = await this.request<BootstrapPayload>('/bootstrap');
+    if (data && this.currentUser?.id) {
+      this.saveCachedBootstrap(this.currentUser.id, data);
+    }
+    return data;
   }
 
   async getDashboardMetrics(): Promise<DashboardMetrics> {

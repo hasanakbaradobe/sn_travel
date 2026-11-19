@@ -9,15 +9,8 @@ import { Header } from './components/Header';
 import { Sidebar, NavTab } from './components/Sidebar';
 import { DashboardView } from './pages/DashboardView';
 import { LoginView } from './pages/LoginView';
-import { CreateClientModal } from './components/CreateClientModal';
-import { NewApplicationModal } from './components/NewApplicationModal';
-import { ApplicationStatusModal } from './components/ApplicationStatusModal';
-import { NewTaskModal } from './components/NewTaskModal';
-import { ChangePasswordModal } from './components/ChangePasswordModal';
-import { CommandPalette } from './components/CommandPalette';
-import { CreateFollowUpModal } from './components/CreateFollowUpModal';
 
-// High-Performance Code Splitting: Lazy-load secondary views & heavy tools
+// High-Performance Code Splitting: Lazy-load secondary views, modals, & heavy OCR tools
 const ClientsView = React.lazy(() => import('./pages/ClientsView').then(m => ({ default: m.ClientsView })));
 const ClientProfileView = React.lazy(() => import('./pages/ClientProfileView').then(m => ({ default: m.ClientProfileView })));
 const ApplicationsView = React.lazy(() => import('./pages/ApplicationsView').then(m => ({ default: m.ApplicationsView })));
@@ -29,11 +22,18 @@ const TasksView = React.lazy(() => import('./pages/TasksView').then(m => ({ defa
 const PublicWebsiteManagementView = React.lazy(() => import('./pages/PublicWebsiteManagementView').then(m => ({ default: m.PublicWebsiteManagementView })));
 const SettingsView = React.lazy(() => import('./pages/SettingsView').then(m => ({ default: m.SettingsView })));
 const NotFoundPage = React.lazy(() => import('./pages/NotFoundPage').then(m => ({ default: m.NotFoundPage })));
+const CreateClientModal = React.lazy(() => import('./components/CreateClientModal').then(m => ({ default: m.CreateClientModal })));
+const NewApplicationModal = React.lazy(() => import('./components/NewApplicationModal').then(m => ({ default: m.NewApplicationModal })));
+const ApplicationStatusModal = React.lazy(() => import('./components/ApplicationStatusModal').then(m => ({ default: m.ApplicationStatusModal })));
+const NewTaskModal = React.lazy(() => import('./components/NewTaskModal').then(m => ({ default: m.NewTaskModal })));
+const ChangePasswordModal = React.lazy(() => import('./components/ChangePasswordModal').then(m => ({ default: m.ChangePasswordModal })));
+const CommandPalette = React.lazy(() => import('./components/CommandPalette').then(m => ({ default: m.CommandPalette })));
+const CreateFollowUpModal = React.lazy(() => import('./components/CreateFollowUpModal').then(m => ({ default: m.CreateFollowUpModal })));
 const PassportScannerModal = React.lazy(() => import('./components/PassportScannerModal').then(m => ({ default: m.PassportScannerModal })));
 const DatabaseModal = React.lazy(() => import('./components/DatabaseModal').then(m => ({ default: m.DatabaseModal })));
 const ReturnStatusWarningModal = React.lazy(() => import('./components/ReturnStatusWarningModal').then(m => ({ default: m.ReturnStatusWarningModal })));
 import { AlertTriangle, X, RotateCcw } from 'lucide-react';
-import { api } from './services/api';
+import { api, BootstrapPayload } from './services/api';
 import {
   Client,
   VisaApplication,
@@ -131,26 +131,56 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [returnStatusBanner]);
 
-  // Authentication State
-  const [currentUser, setCurrentUser] = useState<User | null>(api.getCurrentUser());
-  const [authChecking, setAuthChecking] = useState(!Boolean(api.getCurrentUser()));
+  // Authentication State & Instant Stale-While-Revalidate Hydration
+  const initialUserRef = useRef<User | null>(api.getCurrentUser());
+  const initialSnapshotRef = useRef<BootstrapPayload | null>(
+    initialUserRef.current ? api.getCachedBootstrap(initialUserRef.current.id) : null
+  );
+  const [currentUser, setCurrentUser] = useState<User | null>(initialUserRef.current);
+  const [authChecking, setAuthChecking] = useState(!Boolean(initialUserRef.current));
 
-  // Data State
-  const [users, setUsers] = useState<User[]>([]);
-  const [clients, setClients] = useState<Client[]>([]);
-  const [applications, setApplications] = useState<VisaApplication[]>([]);
-  const [tasks, setTasks] = useState<Task[]>([]);
-  const [visaTypes, setVisaTypes] = useState<VisaType[]>([]);
-  const [hotels, setHotels] = useState<Hotel[]>([]);
-  const [hotelBookings, setHotelBookings] = useState<HotelBooking[]>([]);
-  const [followUps, setFollowUps] = useState<FollowUp[]>([]);
-  const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
-  const [dbStatus, setDbStatus] = useState<DatabaseStatus | null>(null);
+  // Data State (seeded synchronously from per-user snapshot for 0ms first paint)
+  const [users, setUsers] = useState<User[]>(() => initialSnapshotRef.current?.users || []);
+  const [clients, setClients] = useState<Client[]>(() => initialSnapshotRef.current?.clients || []);
+  const [applications, setApplications] = useState<VisaApplication[]>(() => initialSnapshotRef.current?.applications || []);
+  const [tasks, setTasks] = useState<Task[]>(() => initialSnapshotRef.current?.tasks || []);
+  const [visaTypes, setVisaTypes] = useState<VisaType[]>(() =>
+    (initialSnapshotRef.current?.visaTypes || []).filter((v) => v.is_active !== 0)
+  );
+  const [hotels, setHotels] = useState<Hotel[]>(() => initialSnapshotRef.current?.hotels || []);
+  const [hotelBookings, setHotelBookings] = useState<HotelBooking[]>(() => initialSnapshotRef.current?.hotelBookings || []);
+  const [followUps, setFollowUps] = useState<FollowUp[]>(() => initialSnapshotRef.current?.followUps || []);
+  const [metrics, setMetrics] = useState<DashboardMetrics | null>(() => initialSnapshotRef.current?.metrics || null);
+  const [dbStatus, setDbStatus] = useState<DatabaseStatus | null>(() => initialSnapshotRef.current?.dbStatus || null);
   const [loading, setLoading] = useState(false);
   const [profileRefreshKey, setProfileRefreshKey] = useState(0);
   const inFlightRefreshRef = useRef<Promise<void> | null>(null);
   const pendingRefreshQueuedRef = useRef<boolean>(false);
-  const lastDataVersionRef = useRef<number>(-1);
+  const lastDataVersionRef = useRef<number>(
+    typeof initialSnapshotRef.current?.dataVersion === 'number' ? initialSnapshotRef.current.dataVersion : -1
+  );
+
+  const applyBootstrapData = (data: BootstrapPayload) => {
+    if (data.metrics) setMetrics(data.metrics);
+    if (Array.isArray(data.clients)) setClients(data.clients);
+    if (Array.isArray(data.applications)) setApplications(data.applications);
+    if (Array.isArray(data.tasks)) setTasks(data.tasks);
+    if (Array.isArray(data.visaTypes)) setVisaTypes(data.visaTypes.filter((v) => v.is_active !== 0));
+    if (Array.isArray(data.hotels)) setHotels(data.hotels);
+    if (Array.isArray(data.hotelBookings)) setHotelBookings(data.hotelBookings);
+    if (Array.isArray(data.followUps)) setFollowUps(data.followUps);
+    if (data.dbStatus) setDbStatus(data.dbStatus);
+    if (Array.isArray(data.users)) setUsers(data.users);
+
+    if (typeof data.dataVersion === 'number') {
+      if (data.dataVersion !== lastDataVersionRef.current) {
+        lastDataVersionRef.current = data.dataVersion;
+        setProfileRefreshKey((prev) => prev + 1);
+      }
+    } else {
+      setProfileRefreshKey((prev) => prev + 1);
+    }
+  };
 
   // Load all primary data in a single unified bootstrap call (with queued re-run so updates are never dropped)
   const refreshAllData = async (silent: boolean = false) => {
@@ -171,25 +201,7 @@ export default function App() {
 
         try {
           const data = await api.getBootstrapData();
-          if (data.metrics) setMetrics(data.metrics);
-          if (Array.isArray(data.clients)) setClients(data.clients);
-          if (Array.isArray(data.applications)) setApplications(data.applications);
-          if (Array.isArray(data.tasks)) setTasks(data.tasks);
-          if (Array.isArray(data.visaTypes)) setVisaTypes(data.visaTypes.filter((v) => v.is_active !== 0));
-          if (Array.isArray(data.hotels)) setHotels(data.hotels);
-          if (Array.isArray(data.hotelBookings)) setHotelBookings(data.hotelBookings);
-          if (Array.isArray(data.followUps)) setFollowUps(data.followUps);
-          if (data.dbStatus) setDbStatus(data.dbStatus);
-          if (Array.isArray(data.users)) setUsers(data.users);
-
-          if (typeof data.dataVersion === 'number') {
-            if (data.dataVersion !== lastDataVersionRef.current) {
-              lastDataVersionRef.current = data.dataVersion;
-              setProfileRefreshKey((prev) => prev + 1);
-            }
-          } else {
-            setProfileRefreshKey((prev) => prev + 1);
-          }
+          applyBootstrapData(data);
         } catch {
           // Fallback if bootstrap fails
           const [mtrRes, clsRes, appsRes, tsksRes, vtsRes, htlsRes, hbkgsRes, fusRes, dbsRes, usrsRes] =
@@ -306,24 +318,47 @@ export default function App() {
     const verifySession = async () => {
       const savedUser = api.getCurrentUser();
       if (!savedUser) {
-        // Fallback: if browser shields cleared localStorage (e.g. Brave), check if HttpOnly session cookie is still valid
-        try {
-          const verified = await api.getMe({ suppressAuthError: true });
+        // Run session-cookie fallback check AND secret login gate check in PARALLEL to eliminate sequential latency
+        const candidateKey = extractCandidateKey();
+        const [meResult, gateResult] = await Promise.allSettled([
+          api.getMe({ suppressAuthError: true }),
+          api.checkSecretLogin(candidateKey || undefined),
+        ]);
+
+        if (meResult.status === 'fulfilled') {
+          const verified = meResult.value;
           setCurrentUser(verified);
+          const cached = api.getCachedBootstrap(verified.id);
+          if (cached) applyBootstrapData(cached);
           setSecretGateChecking(false);
           setAuthChecking(false);
-          void refreshAllData();
-          return;
-        } catch {
-          setAuthChecking(false);
-          await checkSecretGate();
+          void refreshAllData(Boolean(cached));
           return;
         }
+
+        if (gateResult.status === 'fulfilled') {
+          const res = gateResult.value;
+          if (!res.protected) {
+            setSecretGatePassed(true);
+            setVerifiedSecretKey(null);
+          } else if (res.valid) {
+            setSecretGatePassed(true);
+            setVerifiedSecretKey(res.key || candidateKey);
+          } else {
+            setSecretGatePassed(false);
+            setVerifiedSecretKey(null);
+          }
+        } else {
+          setSecretGatePassed(false);
+        }
+        setSecretGateChecking(false);
+        setAuthChecking(false);
+        return;
       }
 
       setSecretGateChecking(false);
-      // Fire initial data hydration immediately in parallel with session verification
-      void refreshAllData();
+      // Fire initial data hydration immediately in parallel with session verification (silent if cached snapshot already rendered)
+      void refreshAllData(Boolean(initialSnapshotRef.current));
 
       try {
         const verified = await api.getMe();
@@ -466,17 +501,28 @@ export default function App() {
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
 
-  const handleLoginSuccess = (user: User) => {
+  const handleLoginSuccess = (user: User, bootstrap?: BootstrapPayload) => {
     setCurrentUser(user);
     // Replace URL cleanly with root dashboard
     window.history.replaceState(null, '', '/');
     setCurrentTab('dashboard');
-    refreshAllData(false);
+    if (bootstrap) {
+      applyBootstrapData(bootstrap);
+    } else {
+      refreshAllData(false);
+    }
   };
 
   const handleLogout = () => {
     api.logout();
     setCurrentUser(null);
+    setMetrics(null);
+    setClients([]);
+    setApplications([]);
+    setTasks([]);
+    setUsers([]);
+    setHotelBookings([]);
+    setFollowUps([]);
     setSecretGatePassed(false);
     setVerifiedSecretKey(null);
     window.history.pushState(null, '', '/');
@@ -847,17 +893,19 @@ export default function App() {
   if (!currentUser) {
     if (!secretGatePassed) {
       return (
-        <NotFoundPage
-          requestedPath={window.location.pathname}
-          isAuthenticated={false}
-          onAccessKeyEntered={(key) => {
-            setSecretGatePassed(true);
-            setVerifiedSecretKey(key);
-          }}
-          onNavigate={(tab) => {
-            window.location.href = `/${tab}`;
-          }}
-        />
+        <React.Suspense fallback={<div className="min-h-screen bg-slate-950" />}>
+          <NotFoundPage
+            requestedPath={window.location.pathname}
+            isAuthenticated={false}
+            onAccessKeyEntered={(key) => {
+              setSecretGatePassed(true);
+              setVerifiedSecretKey(key);
+            }}
+            onNavigate={(tab) => {
+              window.location.href = `/${tab}`;
+            }}
+          />
+        </React.Suspense>
       );
     }
 
@@ -1076,20 +1124,24 @@ export default function App() {
         </div>
       </div>
 
-      {/* Modals */}
-      <CreateClientModal
-        isOpen={createClientModalOpen}
-        onClose={() => {
-          setCreateClientModalOpen(false);
-          setScannedPassportData(null);
-        }}
-        onClientCreated={handleClientCreated}
-        onOpenExistingClient={(cid) => {
-          navigateTo('clients', cid);
-        }}
-        initialPassportData={scannedPassportData}
-        onOpenPassportScanner={() => setPassportScannerModalOpen(true)}
-      />
+      {/* Modals (lazy-loaded on demand to keep initial JS bundle fast) */}
+      {createClientModalOpen && (
+        <React.Suspense fallback={null}>
+          <CreateClientModal
+            isOpen={createClientModalOpen}
+            onClose={() => {
+              setCreateClientModalOpen(false);
+              setScannedPassportData(null);
+            }}
+            onClientCreated={handleClientCreated}
+            onOpenExistingClient={(cid) => {
+              navigateTo('clients', cid);
+            }}
+            initialPassportData={scannedPassportData}
+            onOpenPassportScanner={() => setPassportScannerModalOpen(true)}
+          />
+        </React.Suspense>
+      )}
 
       {passportScannerModalOpen && (
         <React.Suspense fallback={null}>
@@ -1109,41 +1161,53 @@ export default function App() {
         </React.Suspense>
       )}
 
-      <NewApplicationModal
-        isOpen={newAppModalOpen}
-        onClose={() => setNewAppModalOpen(false)}
-        clientId={newAppClientInfo.id}
-        clientName={newAppClientInfo.name}
-        clients={clients}
-        onApplicationCreated={() => refreshAllData(true)}
-      />
+      {newAppModalOpen && (
+        <React.Suspense fallback={null}>
+          <NewApplicationModal
+            isOpen={newAppModalOpen}
+            onClose={() => setNewAppModalOpen(false)}
+            clientId={newAppClientInfo.id}
+            clientName={newAppClientInfo.name}
+            clients={clients}
+            onApplicationCreated={() => refreshAllData(true)}
+          />
+        </React.Suspense>
+      )}
 
-      <ApplicationStatusModal
-        isOpen={statusModalOpen}
-        onClose={() => setStatusModalOpen(false)}
-        application={statusTargetApp}
-        onStatusUpdated={(updatedApp) => {
-          if (updatedApp) {
-            setApplications((prev) =>
-              prev.map((a) => (a.id === updatedApp.id ? { ...a, ...updatedApp } : a))
-            );
-            setStatusTargetApp((prev) =>
-              prev && prev.id === updatedApp.id ? { ...prev, ...updatedApp } : prev
-            );
-          }
-          refreshAllData(true);
-        }}
-      />
+      {statusModalOpen && (
+        <React.Suspense fallback={null}>
+          <ApplicationStatusModal
+            isOpen={statusModalOpen}
+            onClose={() => setStatusModalOpen(false)}
+            application={statusTargetApp}
+            onStatusUpdated={(updatedApp) => {
+              if (updatedApp) {
+                setApplications((prev) =>
+                  prev.map((a) => (a.id === updatedApp.id ? { ...a, ...updatedApp } : a))
+                );
+                setStatusTargetApp((prev) =>
+                  prev && prev.id === updatedApp.id ? { ...prev, ...updatedApp } : prev
+                );
+              }
+              refreshAllData(true);
+            }}
+          />
+        </React.Suspense>
+      )}
 
-      <NewTaskModal
-        isOpen={newTaskModalOpen}
-        onClose={() => setNewTaskModalOpen(false)}
-        clientId={newTaskClientInfo.id}
-        initialDueDate={newTaskClientInfo.dueDate}
-        clients={clients}
-        applications={applications}
-        onTaskCreated={() => refreshAllData(true)}
-      />
+      {newTaskModalOpen && (
+        <React.Suspense fallback={null}>
+          <NewTaskModal
+            isOpen={newTaskModalOpen}
+            onClose={() => setNewTaskModalOpen(false)}
+            clientId={newTaskClientInfo.id}
+            initialDueDate={newTaskClientInfo.dueDate}
+            clients={clients}
+            applications={applications}
+            onTaskCreated={() => refreshAllData(true)}
+          />
+        </React.Suspense>
+      )}
 
       {dbModalOpen && (
         <React.Suspense fallback={null}>
@@ -1155,36 +1219,48 @@ export default function App() {
         </React.Suspense>
       )}
 
-      <ChangePasswordModal
-        isOpen={changePasswordModalOpen}
-        onClose={() => setChangePasswordModalOpen(false)}
-        onSuccess={() => {
-          // Password updated
-        }}
-      />
+      {changePasswordModalOpen && (
+        <React.Suspense fallback={null}>
+          <ChangePasswordModal
+            isOpen={changePasswordModalOpen}
+            onClose={() => setChangePasswordModalOpen(false)}
+            onSuccess={() => {
+              // Password updated
+            }}
+          />
+        </React.Suspense>
+      )}
 
       {/* Global Command Palette (⌘K) */}
-      <CommandPalette
-        isOpen={commandPaletteOpen}
-        onClose={() => setCommandPaletteOpen(false)}
-        clients={clients}
-        applications={applications}
-        onNavigate={(tab, clientId) => navigateTo(tab, clientId)}
-        onOpenNewClient={() => setCreateClientModalOpen(true)}
-        onOpenNewApplication={() => handleOpenNewAppForClient()}
-        onOpenNewFollowUp={() => setCreateFollowUpModalOpen(true)}
-        onOpenNewTask={() => handleOpenNewTaskForClient()}
-        onOpenPassportScanner={() => setPassportScannerModalOpen(true)}
-      />
+      {commandPaletteOpen && (
+        <React.Suspense fallback={null}>
+          <CommandPalette
+            isOpen={commandPaletteOpen}
+            onClose={() => setCommandPaletteOpen(false)}
+            clients={clients}
+            applications={applications}
+            onNavigate={(tab, clientId) => navigateTo(tab, clientId)}
+            onOpenNewClient={() => setCreateClientModalOpen(true)}
+            onOpenNewApplication={() => handleOpenNewAppForClient()}
+            onOpenNewFollowUp={() => setCreateFollowUpModalOpen(true)}
+            onOpenNewTask={() => handleOpenNewTaskForClient()}
+            onOpenPassportScanner={() => setPassportScannerModalOpen(true)}
+          />
+        </React.Suspense>
+      )}
 
       {/* Quick Follow-up creation modal */}
-      <CreateFollowUpModal
-        isOpen={createFollowUpModalOpen}
-        onClose={() => setCreateFollowUpModalOpen(false)}
-        clients={clients}
-        users={users}
-        onSuccess={() => refreshAllData(true)}
-      />
+      {createFollowUpModalOpen && (
+        <React.Suspense fallback={null}>
+          <CreateFollowUpModal
+            isOpen={createFollowUpModalOpen}
+            onClose={() => setCreateFollowUpModalOpen(false)}
+            clients={clients}
+            users={users}
+            onSuccess={() => refreshAllData(true)}
+          />
+        </React.Suspense>
+      )}
 
       {/* Return Status Warning Modal */}
       {returnWarningState?.isOpen && (

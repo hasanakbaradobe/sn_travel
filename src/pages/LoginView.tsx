@@ -1,10 +1,10 @@
 import React, { useState } from 'react';
 import { Lock, Mail, Eye, EyeOff, ShieldCheck, AlertCircle, ArrowRight, Loader2, KeyRound } from 'lucide-react';
-import { api } from '../services/api';
+import { api, BootstrapPayload } from '../services/api';
 import { User } from '../types';
 
 interface LoginViewProps {
-  onLoginSuccess: (user: User) => void;
+  onLoginSuccess: (user: User, bootstrap?: BootstrapPayload) => void;
   secretKey?: string;
 }
 
@@ -24,7 +24,7 @@ export const LoginView: React.FC<LoginViewProps> = ({ onLoginSuccess, secretKey 
 
     try {
       const res = await api.login(email.trim().toLowerCase(), password, secretKey);
-      onLoginSuccess(res.user);
+      onLoginSuccess(res.user, res.bootstrap);
     } catch (err: any) {
       setErrorMessage(err.message || 'Invalid email or password. Please try again.');
     } finally {
