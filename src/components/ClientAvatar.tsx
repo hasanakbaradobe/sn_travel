@@ -1,6 +1,13 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { Eye, X, Image as ImageIcon, ExternalLink, RefreshCw } from 'lucide-react';
-import { getGoogleDriveCandidateUrls, isGoogleDriveLink } from '../utils/image';
+import {
+  extractGoogleDriveFileId,
+  getDrivePhotoRefreshVersion,
+  getGoogleDriveCandidateUrls,
+  isGoogleDriveLink,
+  markDrivePhotoRefreshed,
+  subscribeDrivePhotoRefresh,
+} from '../utils/image';
 
 interface ClientAvatarProps {
   name?: string;
@@ -30,14 +37,56 @@ export const ClientAvatar: React.FC<ClientAvatarProps> = ({
   className = '',
 }) => {
   const effectiveName = fullName || name || 'Client';
-  const [refreshNonce, setRefreshNonce] = useState<number | null>(null);
-  const candidates = getGoogleDriveCandidateUrls(
-    photoUrl,
-    refreshNonce ? { cacheBuster: refreshNonce, forceRefresh: true } : undefined
+  const fileId = extractGoogleDriveFileId(photoUrl);
+  const [refreshState, setRefreshState] = useState<{ version: number; force: boolean } | null>(() => {
+    const stored = getDrivePhotoRefreshVersion(photoUrl);
+    return stored ? { version: stored, force: false } : null;
+  });
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
+  const isSmallAvatar = size === 'xs' || size === 'sm' || size === 'md' || size === 'table';
+
+  const candidates = useMemo(
+    () =>
+      getGoogleDriveCandidateUrls(photoUrl, {
+        variant: isSmallAvatar ? 'thumb' : 'large',
+        cacheBuster: refreshState?.version,
+        forceRefresh: refreshState?.force,
+      }),
+    [photoUrl, isSmallAvatar, refreshState]
   );
+
+  const lightboxCandidates = useMemo(
+    () =>
+      getGoogleDriveCandidateUrls(photoUrl, {
+        variant: 'large',
+        cacheBuster: refreshState?.version,
+        forceRefresh: refreshState?.force,
+      }),
+    [photoUrl, refreshState]
+  );
+
   const [candidateIndex, setCandidateIndex] = useState(0);
   const [allFailed, setAllFailed] = useState(false);
   const [showLightbox, setShowLightbox] = useState(false);
+
+  useEffect(() => {
+    const stored = getDrivePhotoRefreshVersion(photoUrl);
+    setRefreshState(stored ? { version: stored, force: false } : null);
+  }, [photoUrl]);
+
+  useEffect(() => {
+    if (!fileId) return;
+    return subscribeDrivePhotoRefresh(({ fileId: updatedId, version }) => {
+      if (updatedId === fileId) {
+        setAllFailed(false);
+        setCandidateIndex(0);
+        setRefreshState((prev) =>
+          prev?.version === version ? prev : { version, force: false }
+        );
+      }
+    });
+  }, [fileId]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -52,9 +101,13 @@ export const ClientAvatar: React.FC<ClientAvatarProps> = ({
   useEffect(() => {
     setCandidateIndex(0);
     setAllFailed(candidates.length === 0);
-  }, [photoUrl, refreshNonce]);
+  }, [photoUrl, refreshState?.version]);
 
   const currentSrc = !allFailed && candidates.length > 0 ? candidates[candidateIndex] : null;
+  const lightboxSrc =
+    !allFailed && lightboxCandidates.length > 0
+      ? lightboxCandidates[Math.min(candidateIndex, lightboxCandidates.length - 1)]
+      : currentSrc;
   const initial = effectiveName ? effectiveName.trim().charAt(0).toUpperCase() : '?';
   const isDrive = isGoogleDriveLink(photoUrl);
 
@@ -65,14 +118,17 @@ export const ClientAvatar: React.FC<ClientAvatarProps> = ({
     } else {
       // All candidate URLs failed to load
       setAllFailed(true);
+      setIsRefreshing(false);
     }
   };
 
   const handleRefreshPhoto = (e: React.MouseEvent) => {
     e.stopPropagation();
+    const version = markDrivePhotoRefreshed(photoUrl) ?? Date.now();
+    setIsRefreshing(true);
     setAllFailed(false);
     setCandidateIndex(0);
-    setRefreshNonce(Date.now());
+    setRefreshState({ version, force: true });
   };
 
   return (
@@ -96,6 +152,7 @@ export const ClientAvatar: React.FC<ClientAvatarProps> = ({
               alt={effectiveName}
               referrerPolicy="no-referrer"
               className="w-full h-full object-cover object-center transition duration-200 group-hover:scale-105"
+              onLoad={() => setIsRefreshing(false)}
               onError={handleImageError}
               loading="lazy"
             />
@@ -116,7 +173,7 @@ export const ClientAvatar: React.FC<ClientAvatarProps> = ({
       </div>
 
       {/* Lightbox Modal for Enlarge View */}
-      {showLightbox && currentSrc && (
+      {showLightbox && lightboxSrc && (
         <div
           className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm animate-in fade-in duration-150 cursor-pointer"
           onClick={() => setShowLightbox(false)}
@@ -140,9 +197,11 @@ export const ClientAvatar: React.FC<ClientAvatarProps> = ({
 
             <div className="rounded-xl overflow-hidden bg-slate-100 max-h-[70vh] flex items-center justify-center p-2 border border-slate-200">
               <img
-                src={currentSrc}
+                src={lightboxSrc}
                 alt={effectiveName}
                 referrerPolicy="no-referrer"
+                onLoad={() => setIsRefreshing(false)}
+                onError={handleImageError}
                 className="w-full h-auto max-h-[65vh] object-contain rounded-lg shadow-xs"
               />
             </div>
@@ -154,11 +213,12 @@ export const ClientAvatar: React.FC<ClientAvatarProps> = ({
                   <button
                     type="button"
                     onClick={handleRefreshPhoto}
-                    className="text-slate-600 hover:text-sky-700 font-semibold flex items-center gap-1 cursor-pointer transition"
+                    disabled={isRefreshing}
+                    className="text-slate-600 hover:text-sky-700 disabled:opacity-60 font-semibold flex items-center gap-1 cursor-pointer transition"
                     title="Fetch latest version from Google Drive"
                   >
-                    <RefreshCw className="w-3 h-3" />
-                    <span>Reload from Drive</span>
+                    <RefreshCw className={`w-3 h-3 ${isRefreshing ? 'animate-spin' : ''}`} />
+                    <span>{isRefreshing ? 'Reloading...' : 'Reload from Drive'}</span>
                   </button>
                 )}
                 {photoUrl && (

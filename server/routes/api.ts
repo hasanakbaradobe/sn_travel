@@ -1904,7 +1904,7 @@ apiRouter.delete('/follow-ups/:id', async (req: Request, res: Response) => {
 // --------------------------------------------------------------------------
 const imageProxyCache = new Map<
   string,
-  { buffer: Buffer; contentType: string; expiresAt: number }
+  { buffer: Buffer; contentType: string; expiresAt: number; isLive?: boolean }
 >();
 
 apiRouter.get('/proxy-image', async (req: Request, res: Response) => {
@@ -1944,13 +1944,15 @@ apiRouter.get('/proxy-image', async (req: Request, res: Response) => {
 
   const cacheKey = fileId ? `gdrive:${fileId}` : imageUrl;
   const forceRefresh = req.query.refresh === '1' || req.query.refresh === 'true';
+  const liveMode = forceRefresh || req.query.live === '1' || req.query.live === 'true';
+  const hasVersionParam = typeof req.query.v === 'string' && req.query.v.trim().length > 0;
   if (forceRefresh) {
     imageProxyCache.delete(cacheKey);
   }
   const cachedImg = imageProxyCache.get(cacheKey);
-  if (!forceRefresh && cachedImg && Date.now() < cachedImg.expiresAt) {
+  if (!forceRefresh && cachedImg && Date.now() < cachedImg.expiresAt && (!liveMode || cachedImg.isLive)) {
     res.setHeader('Content-Type', cachedImg.contentType);
-    res.setHeader('Cache-Control', fileId ? 'public, max-age=60, must-revalidate' : 'public, max-age=300, must-revalidate');
+    res.setHeader('Cache-Control', 'public, max-age=86400');
     return res.send(cachedImg.buffer);
   }
 
@@ -1958,15 +1960,23 @@ apiRouter.get('/proxy-image', async (req: Request, res: Response) => {
   let candidateUrls: string[] = [];
 
   if (fileId) {
-    // Always fetch the live file bytes directly first (returns max-age=0 latest version when replaced in Drive)
-    primaryDriveUrl = `https://drive.usercontent.google.com/download?id=${fileId}&export=view`;
-    // Fallback candidates only if direct download fails (e.g., Drive virus-scan interstitial on large files)
-    candidateUrls = [
-      `https://drive.google.com/uc?export=download&id=${fileId}`,
-      `https://drive.google.com/thumbnail?id=${fileId}&sz=w1600`,
-      `https://lh3.googleusercontent.com/d/${fileId}`,
-      `https://drive.google.com/thumbnail?id=${fileId}&sz=w1000`,
-    ];
+    if (liveMode) {
+      // On-demand refresh: fetch live file bytes directly from Drive storage first
+      primaryDriveUrl = `https://drive.usercontent.google.com/download?id=${fileId}&export=view`;
+      candidateUrls = [
+        `https://drive.google.com/uc?export=download&id=${fileId}`,
+        `https://drive.google.com/thumbnail?id=${fileId}&sz=w1600`,
+        `https://lh3.googleusercontent.com/d/${fileId}`,
+      ];
+    } else {
+      // Normal fast path: race lightweight thumbnails and CDN endpoints
+      candidateUrls = [
+        `https://drive.google.com/thumbnail?id=${fileId}&sz=w1000`,
+        `https://lh3.googleusercontent.com/d/${fileId}`,
+        `https://drive.usercontent.google.com/download?id=${fileId}&export=view`,
+        `https://drive.google.com/uc?export=download&id=${fileId}`,
+      ];
+    }
   } else if (/google\.com\/imgres\?/i.test(imageUrl)) {
     try {
       const u = new URL(imageUrl);
@@ -2003,7 +2013,7 @@ apiRouter.get('/proxy-image', async (req: Request, res: Response) => {
     candidateUrls = [imageUrl];
   }
 
-  // Race candidate URLs concurrently (for Google Drive, always try live direct file first so replaced photos show immediately)
+  // Race candidate URLs concurrently (for on-demand Drive refresh, try live direct file first)
   const controllers = [
     ...(primaryDriveUrl ? [new AbortController()] : []),
     ...candidateUrls.map(() => new AbortController()),
@@ -2022,7 +2032,7 @@ apiRouter.get('/proxy-image', async (req: Request, res: Response) => {
           'User-Agent':
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
           Accept: 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
-          'Cache-Control': 'no-cache',
+          ...(liveMode ? { 'Cache-Control': 'no-cache' } : {}),
         },
       });
 
@@ -2056,10 +2066,12 @@ apiRouter.get('/proxy-image', async (req: Request, res: Response) => {
 
   try {
     let winner: { buffer: Buffer; contentType: string } | null = null;
+    let fetchedLive = false;
 
     if (primaryDriveUrl) {
       try {
         winner = await fetchCandidate(primaryDriveUrl, controllers[0], 5500);
+        fetchedLive = true;
       } catch {
         winner = null;
       }
@@ -2084,22 +2096,17 @@ apiRouter.get('/proxy-image', async (req: Request, res: Response) => {
         const oldestKey = imageProxyCache.keys().next().value;
         if (oldestKey) imageProxyCache.delete(oldestKey);
       }
-      // Short 60s TTL for Google Drive files so replaced images appear quickly
-      const ttlMs = fileId ? 60 * 1000 : 5 * 60 * 1000;
       imageProxyCache.set(cacheKey, {
         buffer: winner.buffer,
         contentType: winner.contentType,
-        expiresAt: Date.now() + ttlMs,
+        expiresAt: Date.now() + 30 * 60 * 1000, // 30-minute memory cache
+        isLive: fetchedLive,
       });
 
       res.setHeader('Content-Type', winner.contentType);
       res.setHeader(
         'Cache-Control',
-        forceRefresh
-          ? 'no-store, no-cache, must-revalidate'
-          : fileId
-          ? 'public, max-age=60, must-revalidate'
-          : 'public, max-age=300, must-revalidate'
+        forceRefresh && !hasVersionParam ? 'no-store, no-cache, must-revalidate' : 'public, max-age=86400'
       );
       return res.send(winner.buffer);
     }
