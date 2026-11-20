@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Eye, X, Image as ImageIcon, ExternalLink, AlertTriangle } from 'lucide-react';
-import { getGoogleDriveCandidateUrls, isGoogleDriveLink, extractGoogleDriveFileId } from '../utils/image';
+import { Eye, X, Image as ImageIcon, ExternalLink, RefreshCw } from 'lucide-react';
+import { getGoogleDriveCandidateUrls, isGoogleDriveLink } from '../utils/image';
 
 interface ClientAvatarProps {
   name?: string;
@@ -28,10 +28,13 @@ export const ClientAvatar: React.FC<ClientAvatarProps> = ({
   size = 'md',
   allowPreview = true,
   className = '',
-  showStatusBadge = false,
 }) => {
   const effectiveName = fullName || name || 'Client';
-  const candidates = getGoogleDriveCandidateUrls(photoUrl);
+  const [refreshNonce, setRefreshNonce] = useState<number | null>(null);
+  const candidates = getGoogleDriveCandidateUrls(
+    photoUrl,
+    refreshNonce ? { cacheBuster: refreshNonce, forceRefresh: true } : undefined
+  );
   const [candidateIndex, setCandidateIndex] = useState(0);
   const [allFailed, setAllFailed] = useState(false);
   const [showLightbox, setShowLightbox] = useState(false);
@@ -49,12 +52,11 @@ export const ClientAvatar: React.FC<ClientAvatarProps> = ({
   useEffect(() => {
     setCandidateIndex(0);
     setAllFailed(candidates.length === 0);
-  }, [photoUrl]);
+  }, [photoUrl, refreshNonce]);
 
   const currentSrc = !allFailed && candidates.length > 0 ? candidates[candidateIndex] : null;
   const initial = effectiveName ? effectiveName.trim().charAt(0).toUpperCase() : '?';
   const isDrive = isGoogleDriveLink(photoUrl);
-  const fileId = extractGoogleDriveFileId(photoUrl);
 
   const handleImageError = () => {
     if (candidateIndex + 1 < candidates.length) {
@@ -64,6 +66,13 @@ export const ClientAvatar: React.FC<ClientAvatarProps> = ({
       // All candidate URLs failed to load
       setAllFailed(true);
     }
+  };
+
+  const handleRefreshPhoto = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setAllFailed(false);
+    setCandidateIndex(0);
+    setRefreshNonce(Date.now());
   };
 
   return (
@@ -138,19 +147,32 @@ export const ClientAvatar: React.FC<ClientAvatarProps> = ({
               />
             </div>
 
-            <div className="flex items-center justify-between text-xs text-slate-500 pt-1">
+            <div className="flex items-center justify-between text-xs text-slate-500 pt-1 gap-2">
               <span>China Visa Client Identification Photo</span>
-              {photoUrl && (
-                <a
-                  href={photoUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-sky-700 hover:text-sky-900 font-semibold flex items-center gap-1 underline"
-                >
-                  <span>Open Original in Drive</span>
-                  <ExternalLink className="w-3 h-3" />
-                </a>
-              )}
+              <div className="flex items-center gap-3">
+                {isDrive && (
+                  <button
+                    type="button"
+                    onClick={handleRefreshPhoto}
+                    className="text-slate-600 hover:text-sky-700 font-semibold flex items-center gap-1 cursor-pointer transition"
+                    title="Fetch latest version from Google Drive"
+                  >
+                    <RefreshCw className="w-3 h-3" />
+                    <span>Reload from Drive</span>
+                  </button>
+                )}
+                {photoUrl && (
+                  <a
+                    href={photoUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-sky-700 hover:text-sky-900 font-semibold flex items-center gap-1 underline"
+                  >
+                    <span>Open Original in Drive</span>
+                    <ExternalLink className="w-3 h-3" />
+                  </a>
+                )}
+              </div>
             </div>
           </div>
         </div>

@@ -1943,20 +1943,27 @@ apiRouter.get('/proxy-image', async (req: Request, res: Response) => {
     (lh3Match && lh3Match[1]);
 
   const cacheKey = fileId ? `gdrive:${fileId}` : imageUrl;
+  const forceRefresh = req.query.refresh === '1' || req.query.refresh === 'true';
+  if (forceRefresh) {
+    imageProxyCache.delete(cacheKey);
+  }
   const cachedImg = imageProxyCache.get(cacheKey);
-  if (cachedImg && Date.now() < cachedImg.expiresAt) {
+  if (!forceRefresh && cachedImg && Date.now() < cachedImg.expiresAt) {
     res.setHeader('Content-Type', cachedImg.contentType);
-    res.setHeader('Cache-Control', 'public, max-age=86400');
+    res.setHeader('Cache-Control', fileId ? 'public, max-age=60, must-revalidate' : 'public, max-age=300, must-revalidate');
     return res.send(cachedImg.buffer);
   }
 
+  let primaryDriveUrl: string | null = null;
   let candidateUrls: string[] = [];
 
   if (fileId) {
+    // Always fetch the live file bytes directly first (returns max-age=0 latest version when replaced in Drive)
+    primaryDriveUrl = `https://drive.usercontent.google.com/download?id=${fileId}&export=view`;
+    // Fallback candidates only if direct download fails (e.g., Drive virus-scan interstitial on large files)
     candidateUrls = [
-      `https://drive.google.com/thumbnail?id=${fileId}&sz=w1600`,
-      `https://drive.usercontent.google.com/download?id=${fileId}&export=view`,
       `https://drive.google.com/uc?export=download&id=${fileId}`,
+      `https://drive.google.com/thumbnail?id=${fileId}&sz=w1600`,
       `https://lh3.googleusercontent.com/d/${fileId}`,
       `https://drive.google.com/thumbnail?id=${fileId}&sz=w1000`,
     ];
@@ -1996,19 +2003,26 @@ apiRouter.get('/proxy-image', async (req: Request, res: Response) => {
     candidateUrls = [imageUrl];
   }
 
-  // Race candidate URLs concurrently so the fastest working CDN endpoint wins immediately
-  const controllers = candidateUrls.map(() => new AbortController());
-  const fetchCandidate = async (targetUrl: string, idx: number): Promise<{ buffer: Buffer; contentType: string }> => {
-    const controller = controllers[idx];
-    const timer = setTimeout(() => controller.abort(), 4500);
+  // Race candidate URLs concurrently (for Google Drive, always try live direct file first so replaced photos show immediately)
+  const controllers = [
+    ...(primaryDriveUrl ? [new AbortController()] : []),
+    ...candidateUrls.map(() => new AbortController()),
+  ];
+  const fetchCandidate = async (
+    targetUrl: string,
+    controller: AbortController,
+    timeoutMs = 5500
+  ): Promise<{ buffer: Buffer; contentType: string }> => {
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const response = await fetchSafeExternal(targetUrl, {
         signal: controller.signal,
-        timeoutMs: 4500,
+        timeoutMs,
         headers: {
           'User-Agent':
             'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
           Accept: 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+          'Cache-Control': 'no-cache',
         },
       });
 
@@ -2041,9 +2055,23 @@ apiRouter.get('/proxy-image', async (req: Request, res: Response) => {
   };
 
   try {
-    const winner = await Promise.any(
-      candidateUrls.map((url, idx) => fetchCandidate(url, idx))
-    );
+    let winner: { buffer: Buffer; contentType: string } | null = null;
+
+    if (primaryDriveUrl) {
+      try {
+        winner = await fetchCandidate(primaryDriveUrl, controllers[0], 5500);
+      } catch {
+        winner = null;
+      }
+    }
+
+    if (!winner && candidateUrls.length > 0) {
+      const offset = primaryDriveUrl ? 1 : 0;
+      winner = await Promise.any(
+        candidateUrls.map((url, idx) => fetchCandidate(url, controllers[offset + idx], 4500))
+      );
+    }
+
     // Abort any slower in-flight candidate requests
     controllers.forEach((c) => {
       try {
@@ -2051,19 +2079,30 @@ apiRouter.get('/proxy-image', async (req: Request, res: Response) => {
       } catch {}
     });
 
-    if (imageProxyCache.size > 150) {
-      const oldestKey = imageProxyCache.keys().next().value;
-      if (oldestKey) imageProxyCache.delete(oldestKey);
-    }
-    imageProxyCache.set(cacheKey, {
-      buffer: winner.buffer,
-      contentType: winner.contentType,
-      expiresAt: Date.now() + 30 * 60 * 1000,
-    });
+    if (winner) {
+      if (imageProxyCache.size > 150) {
+        const oldestKey = imageProxyCache.keys().next().value;
+        if (oldestKey) imageProxyCache.delete(oldestKey);
+      }
+      // Short 60s TTL for Google Drive files so replaced images appear quickly
+      const ttlMs = fileId ? 60 * 1000 : 5 * 60 * 1000;
+      imageProxyCache.set(cacheKey, {
+        buffer: winner.buffer,
+        contentType: winner.contentType,
+        expiresAt: Date.now() + ttlMs,
+      });
 
-    res.setHeader('Content-Type', winner.contentType);
-    res.setHeader('Cache-Control', 'public, max-age=86400');
-    return res.send(winner.buffer);
+      res.setHeader('Content-Type', winner.contentType);
+      res.setHeader(
+        'Cache-Control',
+        forceRefresh
+          ? 'no-store, no-cache, must-revalidate'
+          : fileId
+          ? 'public, max-age=60, must-revalidate'
+          : 'public, max-age=300, must-revalidate'
+      );
+      return res.send(winner.buffer);
+    }
   } catch {
     // All server-side candidate fetches failed or timed out
   }

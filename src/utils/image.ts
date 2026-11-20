@@ -27,7 +27,12 @@ export function extractGoogleDriveFileId(url: string | null | undefined): string
   return null;
 }
 
-export function getGoogleDriveCandidateUrls(url: string | null | undefined): string[] {
+const SESSION_IMAGE_VERSION = Date.now();
+
+export function getGoogleDriveCandidateUrls(
+  url: string | null | undefined,
+  options?: { cacheBuster?: string | number; forceRefresh?: boolean }
+): string[] {
   if (!url || typeof url !== 'string') return [];
   const trimmed = url.trim();
   if (!trimmed) return [];
@@ -37,27 +42,32 @@ export function getGoogleDriveCandidateUrls(url: string | null | undefined): str
     return [trimmed];
   }
 
-  // Google Drive Link
+  const version = options?.cacheBuster ?? SESSION_IMAGE_VERSION;
+  const refreshParam = options?.forceRefresh ? '&refresh=1' : '';
+
+  // Google Drive Link — prefer server proxy (which fetches the live file via drive.usercontent.google.com
+  // instead of Google's stale lh3/thumbnail CDN cache) so replaced Drive photos update reliably
   const fileId = extractGoogleDriveFileId(trimmed);
   if (fileId) {
     return [
-      `https://lh3.googleusercontent.com/d/${fileId}`,
-      `https://drive.google.com/thumbnail?id=${fileId}&sz=w1000`,
-      `https://drive.google.com/uc?export=download&id=${fileId}`,
-      `/api/proxy-image?url=${encodeURIComponent(trimmed)}`,
+      `/api/proxy-image?url=${encodeURIComponent(trimmed)}&v=${version}${refreshParam}`,
+      `https://drive.usercontent.google.com/download?id=${fileId}&export=view&v=${version}`,
+      `https://lh3.googleusercontent.com/d/${fileId}=w1000?v=${version}`,
+      `https://drive.google.com/thumbnail?id=${fileId}&sz=w1000&v=${version}`,
     ];
   }
 
   // Already proxied
   if (trimmed.startsWith('/api/proxy-image')) {
-    return [trimmed];
+    const sep = trimmed.includes('?') ? '&' : '?';
+    return [`${trimmed}${sep}v=${version}${refreshParam}`];
   }
 
   // Direct Web Image (e.g. Unsplash, CDN, or uploaded image URL)
   if (/^https?:\/\//i.test(trimmed)) {
     return [
       trimmed,
-      `/api/proxy-image?url=${encodeURIComponent(trimmed)}`,
+      `/api/proxy-image?url=${encodeURIComponent(trimmed)}&v=${version}${refreshParam}`,
     ];
   }
 
