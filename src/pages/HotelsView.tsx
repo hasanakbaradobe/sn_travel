@@ -26,6 +26,7 @@ import { api } from '../services/api';
 import { NewHotelBookingModal } from '../components/NewHotelBookingModal';
 import { HotelBookingDetailModal } from '../components/HotelBookingDetailModal';
 import { getBookingPriceString, parseHotelPriceInput } from '../utils/hotelPrice';
+import { getLocalDateString } from '../utils/date';
 
 interface HotelsViewProps {
   clients: Client[];
@@ -56,7 +57,7 @@ export const HotelsView: React.FC<HotelsViewProps> = ({
   const [selectedBooking, setSelectedBooking] = useState<HotelBooking | null>(null);
   const [detailModalOpen, setDetailModalOpen] = useState(false);
 
-  const todayStr = new Date().toISOString().split('T')[0];
+  const todayStr = getLocalDateString();
 
   const fetchBookings = async (silent: boolean = false) => {
     try {

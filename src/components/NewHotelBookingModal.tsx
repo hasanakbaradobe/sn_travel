@@ -19,6 +19,7 @@ import { Client, Hotel, HotelRoom } from '../types';
 import { api } from '../services/api';
 import { ClientSelectSearch } from './ClientSelectSearch';
 import { parseHotelPriceInput } from '../utils/hotelPrice';
+import { getLocalDateString, addDaysLocal } from '../utils/date';
 
 interface NewHotelBookingModalProps {
   isOpen: boolean;
@@ -41,8 +42,8 @@ export const NewHotelBookingModal: React.FC<NewHotelBookingModalProps> = ({
   onBookingCreated,
   onOpenSettingsHotels,
 }) => {
-  const todayStr = new Date().toISOString().split('T')[0];
-  const defaultCheckoutStr = new Date(Date.now() + 86400000 * 3).toISOString().split('T')[0];
+  const todayStr = getLocalDateString();
+  const defaultCheckoutStr = addDaysLocal(3);
 
   const [selectedClientId, setSelectedClientId] = useState<number | null>(clientId || null);
   const [selectedHotelId, setSelectedHotelId] = useState<number | null>(hotels[0]?.id || null);

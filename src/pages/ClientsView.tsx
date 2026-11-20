@@ -52,6 +52,7 @@ export const ClientsView: React.FC<ClientsViewProps> = ({
   const [deleting, setDeleting] = useState(false);
   const [driveModalClient, setDriveModalClient] = useState<Client | null>(null);
   const [driveUrlInput, setDriveUrlInput] = useState('');
+  const [driveUrlError, setDriveUrlError] = useState<string | null>(null);
   const [savingDrive, setSavingDrive] = useState(false);
   const [copiedPassportId, setCopiedPassportId] = useState<number | null>(null);
 
@@ -786,13 +787,21 @@ export const ClientsView: React.FC<ClientsViewProps> = ({
                 <input
                   type="url"
                   value={driveUrlInput}
-                  onChange={(e) => setDriveUrlInput(e.target.value)}
+                  onChange={(e) => {
+                    setDriveUrlInput(e.target.value);
+                    if (driveUrlError) setDriveUrlError(null);
+                  }}
                   placeholder="https://drive.google.com/drive/folders/..."
                   className="w-full px-3 py-2 bg-slate-50 border border-slate-300 rounded-xl text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-600 font-mono"
                 />
                 <p className="text-[11px] text-slate-400 mt-1">
                   Paste the shared Google Drive folder link containing client passports and documents.
                 </p>
+                {driveUrlError && (
+                  <div className="mt-2 px-3 py-2 rounded-lg bg-rose-50 border border-rose-200 text-xs text-rose-700 font-medium">
+                    {driveUrlError}
+                  </div>
+                )}
               </div>
             </div>
 
@@ -800,7 +809,10 @@ export const ClientsView: React.FC<ClientsViewProps> = ({
               <button
                 type="button"
                 disabled={savingDrive}
-                onClick={() => setDriveModalClient(null)}
+                onClick={() => {
+                  setDriveUrlError(null);
+                  setDriveModalClient(null);
+                }}
                 className="px-4 py-2 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 rounded-xl text-xs font-semibold transition"
               >
                 Cancel
@@ -810,6 +822,7 @@ export const ClientsView: React.FC<ClientsViewProps> = ({
                 disabled={savingDrive}
                 onClick={async () => {
                   setSavingDrive(true);
+                  setDriveUrlError(null);
                   try {
                     await api.updateClient(driveModalClient.id, {
                       google_drive_url: driveUrlInput.trim() || null,
@@ -818,7 +831,7 @@ export const ClientsView: React.FC<ClientsViewProps> = ({
                     if (onRefreshData) onRefreshData();
                   } catch (err: any) {
                     console.error('Failed to update drive URL:', err);
-                    alert('Could not update Google Drive link: ' + (err.message || 'Unknown error'));
+                    setDriveUrlError('Could not update Google Drive link: ' + (err.message || 'Unknown error'));
                   } finally {
                     setSavingDrive(false);
                   }

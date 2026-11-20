@@ -1041,80 +1041,8 @@ function getInitialData(): StoreData {
       { id: 7, name: 'Document Legalization & Chinese Translation', description: 'Certified translation into Simplified Chinese by accredited legal translator', default_unit_price: 45, category: 'Document Services', is_active: 1, display_order: 7, created_at: now, updated_at: now },
       { id: 8, name: 'Secure Passport Return Courier Delivery', description: 'Insured premium diplomatic courier return delivery to client doorstep', default_unit_price: 25, category: 'Logistics', is_active: 1, display_order: 8, created_at: now, updated_at: now },
     ],
-    invoices: [
-      {
-        id: 1,
-        invoice_number: 'INV-2026-1001',
-        client_id: 1,
-        issue_date: yesterday,
-        due_date: tomorrow,
-        status: 'Paid',
-        payment_method: 'Bank Transfer',
-        currency: 'MYR',
-        subtotal: 490,
-        discount: 0,
-        tax_rate: 5,
-        tax_amount: 24.5,
-        total_amount: 514.5,
-        paid_amount: 514.5,
-        balance_due: 0,
-        notes: 'Client paid in full via Emirates NBD transfer.',
-        created_by_user_id: 1,
-        created_at: now,
-        updated_at: now,
-      },
-      {
-        id: 2,
-        invoice_number: 'INV-2026-1002',
-        client_id: 2,
-        issue_date: today,
-        due_date: inTwoDays,
-        status: 'Partial',
-        payment_method: 'Credit Card',
-        currency: 'MYR',
-        subtotal: 240,
-        discount: 0,
-        tax_rate: 5,
-        tax_amount: 12,
-        total_amount: 252,
-        paid_amount: 150,
-        balance_due: 102,
-        notes: 'Initial deposit received. Balance due upon passport collection.',
-        created_by_user_id: 2,
-        created_at: now,
-        updated_at: now,
-      },
-      {
-        id: 3,
-        invoice_number: 'INV-2026-1003',
-        client_id: 3,
-        issue_date: today,
-        due_date: tomorrow,
-        status: 'Pending',
-        payment_method: 'Bank Transfer',
-        currency: 'MYR',
-        subtotal: 380,
-        discount: 20,
-        tax_rate: 5,
-        tax_amount: 18,
-        total_amount: 378,
-        paid_amount: 0,
-        balance_due: 378,
-        notes: 'F visa processing and express translation package. Invoice emailed to client.',
-        created_by_user_id: 1,
-        created_at: now,
-        updated_at: now,
-      },
-    ],
-    invoice_items: [
-      { id: 1, invoice_id: 1, catalog_item_id: 1, description: 'China Commercial Trade Visa (M) - 1 Year Multi-Entry', quantity: 1, unit_price: 350, total: 350 },
-      { id: 2, invoice_id: 1, catalog_item_id: 3, description: 'Official Embassy Consular Visa Fee', quantity: 1, unit_price: 140, total: 140 },
-      { id: 3, invoice_id: 2, catalog_item_id: 2, description: 'China Tourist Visa (L) Standard Processing', quantity: 1, unit_price: 180, total: 180 },
-      { id: 4, invoice_id: 2, catalog_item_id: 6, description: 'Hotel Reservation & Voucher Booking', quantity: 1, unit_price: 60, total: 60 },
-      { id: 5, invoice_id: 3, catalog_item_id: 5, description: 'China Student Visa (X1/X2) Package', quantity: 1, unit_price: 220, total: 220 },
-      { id: 6, invoice_id: 3, catalog_item_id: 3, description: 'Official Embassy Consular Visa Fee', quantity: 1, unit_price: 140, total: 140 },
-      { id: 7, invoice_id: 3, catalog_item_id: 8, description: 'Secure Passport Return Courier Delivery', quantity: 1, unit_price: 20, total: 20 },
-    ],
+    invoices: [],
+    invoice_items: [],
     nextIds: {
       users: 4,
       countries: 21,
@@ -1133,8 +1061,8 @@ function getInitialData(): StoreData {
       follow_ups: 1,
       settings: 5,
       invoice_catalog_items: 9,
-      invoices: 4,
-      invoice_items: 8,
+      invoices: 1,
+      invoice_items: 1,
     },
   };
 }
@@ -1425,24 +1353,34 @@ async function deleteClientFromMySQL(id: number, clientIdString?: string): Promi
     console.log(`[MySQL] Successfully deleted client ${id} from MySQL database (affectedRows: ${res?.affectedRows})`);
     return true;
   } catch (err: any) {
-    console.warn(`[MySQL] Standard delete encountered error (${err.message}). Retrying with FOREIGN_KEY_CHECKS = 0...`);
+    console.warn(`[MySQL] Standard delete encountered error (${err.message}). Retrying on dedicated connection with FOREIGN_KEY_CHECKS = 0...`);
+    const conn = await pool.getConnection();
     try {
-      await pool.query('SET FOREIGN_KEY_CHECKS = 0');
-      await pool.query('DELETE FROM clients WHERE id = ?', [id]);
+      await conn.beginTransaction();
+      await conn.query('SET FOREIGN_KEY_CHECKS = 0');
+      await conn.query('DELETE FROM invoice_items WHERE invoice_id IN (SELECT id FROM invoices WHERE client_id = ?)', [id]).catch(() => {});
+      await conn.query('DELETE FROM invoices WHERE client_id = ?', [id]).catch(() => {});
+      await conn.query('DELETE FROM follow_ups WHERE client_id = ?', [id]).catch(() => {});
+      await conn.query('DELETE FROM application_status_history WHERE application_id IN (SELECT id FROM visa_applications WHERE client_id = ?)', [id]).catch(() => {});
+      await conn.query('DELETE FROM client_custom_field_values WHERE client_id = ?', [id]);
+      await conn.query('DELETE FROM visa_applications WHERE client_id = ?', [id]);
+      await conn.query('DELETE FROM tasks WHERE client_id = ?', [id]);
+      await conn.query('DELETE FROM comments WHERE client_id = ?', [id]);
+      await conn.query('DELETE FROM hotel_bookings WHERE client_id = ?', [id]);
+      await conn.query('DELETE FROM clients WHERE id = ?', [id]);
       if (clientIdString) {
-        await pool.query('DELETE FROM clients WHERE client_id = ?', [clientIdString]);
+        await conn.query('DELETE FROM clients WHERE client_id = ?', [clientIdString]);
       }
-      await pool.query('DELETE FROM client_custom_field_values WHERE client_id = ?', [id]);
-      await pool.query('DELETE FROM visa_applications WHERE client_id = ?', [id]);
-      await pool.query('DELETE FROM tasks WHERE client_id = ?', [id]);
-      await pool.query('DELETE FROM comments WHERE client_id = ?', [id]);
-      await pool.query('DELETE FROM hotel_bookings WHERE client_id = ?', [id]);
-      await pool.query('SET FOREIGN_KEY_CHECKS = 1');
-      console.log(`[MySQL] Successfully deleted client ${id} with FOREIGN_KEY_CHECKS = 0 fallback`);
+      await conn.commit();
+      console.log(`[MySQL] Successfully deleted client ${id} with dedicated-connection fallback`);
       return true;
     } catch (fbErr: any) {
+      await conn.rollback().catch(() => {});
       console.error(`[MySQL] Failed to delete client ${id} from MySQL:`, fbErr.message);
       throw fbErr;
+    } finally {
+      await conn.query('SET FOREIGN_KEY_CHECKS = 1').catch(() => {});
+      conn.release();
     }
   }
 }
@@ -1508,10 +1446,8 @@ async function ensureClientAndAppInMySQL(
     const client = store.clients.find(c => Number(c.id) === resolvedClientId);
     if (client) {
       await activePool.query(
-        `INSERT INTO clients (id, client_id, full_name, passport_number, country, phone, whatsapp, email, date_of_birth, address, occupation, notes, google_drive_url, photo_url, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
-         ON DUPLICATE KEY UPDATE
-           full_name = VALUES(full_name), passport_number = VALUES(passport_number), updated_at = NOW()`,
+        `INSERT IGNORE INTO clients (id, client_id, full_name, passport_number, country, phone, whatsapp, email, date_of_birth, address, occupation, notes, google_drive_url, photo_url, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
         [
           client.id,
           client.client_id,
@@ -1537,9 +1473,8 @@ async function ensureClientAndAppInMySQL(
       const vt = store.visa_types.find(v => Number(v.id) === Number(app.visa_type_id));
       if (vt) {
         await activePool.query(
-          `INSERT INTO visa_types (id, name, description, is_active, created_at, updated_at)
-           VALUES (?, ?, ?, ?, NOW(), NOW())
-           ON DUPLICATE KEY UPDATE name = VALUES(name)`,
+          `INSERT IGNORE INTO visa_types (id, name, description, is_active, created_at, updated_at)
+           VALUES (?, ?, ?, ?, NOW(), NOW())`,
           [vt.id, vt.name, vt.description, vt.is_active]
         );
       }
@@ -1547,11 +1482,8 @@ async function ensureClientAndAppInMySQL(
         ? app.assigned_user_id
         : null;
       await activePool.query(
-        `INSERT INTO visa_applications (id, application_id, client_id, visa_type_id, status, delivery_date, notes, assigned_user_id, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())
-         ON DUPLICATE KEY UPDATE
-           status = VALUES(status), delivery_date = VALUES(delivery_date),
-           notes = VALUES(notes), assigned_user_id = VALUES(assigned_user_id), updated_at = NOW()`,
+        `INSERT IGNORE INTO visa_applications (id, application_id, client_id, visa_type_id, status, delivery_date, notes, assigned_user_id, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW(), NOW())`,
         [
           app.id,
           app.application_id,
@@ -1661,7 +1593,7 @@ function applyCoreRowsToStore(rows: {
 }): void {
   const { u, c, cl, vt, va, t, h, hb, s, fu } = rows;
   if (Array.isArray(u) && u.length > 0) store.users = u;
-  if (Array.isArray(c) && c.length > 0) store.countries = c;
+  if (Array.isArray(c)) store.countries = c;
   if (Array.isArray(cl)) {
     const extractSerial = (item: any): number => {
       const raw = String(item.client_id || '').trim();
@@ -1680,7 +1612,7 @@ function applyCoreRowsToStore(rows: {
       }))
       .sort((a: any, b: any) => extractSerial(b) - extractSerial(a) || Number(b.id) - Number(a.id));
   }
-  if (Array.isArray(vt) && vt.length > 0) store.visa_types = vt;
+  if (Array.isArray(vt)) store.visa_types = vt;
   if (Array.isArray(va)) {
     store.visa_applications = va.map((item: any) => ({
       ...item,
@@ -1693,7 +1625,7 @@ function applyCoreRowsToStore(rows: {
       due_date: item.due_date ? String(item.due_date).slice(0, 10) : new Date().toISOString().slice(0, 10),
     }));
   }
-  if (Array.isArray(h) && h.length > 0) store.hotels = h;
+  if (Array.isArray(h)) store.hotels = h;
   if (Array.isArray(hb)) {
     store.hotel_bookings = hb.map((item: any) => ({
       ...item,
@@ -1707,7 +1639,7 @@ function applyCoreRowsToStore(rows: {
       due_date: item.due_date ? String(item.due_date).slice(0, 10) : new Date().toISOString().slice(0, 10),
     }));
   }
-  if (Array.isArray(s) && s.length > 0) store.settings = s;
+  if (Array.isArray(s)) store.settings = s;
 }
 
 function applySecondaryRowsToStore(rows: {
@@ -1723,7 +1655,7 @@ function applySecondaryRowsToStore(rows: {
   invItems: any;
 }): void {
   const { cf, cfv, ash, cm, al, hr, invS, invCat, inv, invItems } = rows;
-  if (Array.isArray(cf) && cf.length > 0) store.client_custom_fields = cf;
+  if (Array.isArray(cf)) store.client_custom_fields = cf;
   if (Array.isArray(cfv)) store.client_custom_field_values = cfv;
   if (Array.isArray(ash)) store.application_status_history = ash;
   if (Array.isArray(cm)) store.comments = cm;
@@ -3040,17 +2972,25 @@ export const dbService = {
       );
       if (newStatus === 'Returned') {
         await activePool.query(
-          `UPDATE tasks 
-           SET status = 'Completed', completed_at = NOW(), updated_at = NOW() 
-           WHERE (application_id = ? OR (client_id = ? AND (is_delivery_task = 1 OR title LIKE '%Delivery%' OR title LIKE '%Collection%' OR title LIKE '%Passport%'))) 
+          `UPDATE tasks
+           SET status = 'Completed', completed_at = NOW(), updated_at = NOW()
+           WHERE (
+               (application_id = ? AND (is_delivery_task = 1 OR title LIKE 'Delivery -%' OR title LIKE 'Pending Collection -%' OR title LIKE 'Rejected -%'))
+               OR (application_id IS NULL AND client_id = ? AND (is_delivery_task = 1 OR title LIKE 'Delivery -%' OR title LIKE 'Pending Collection -%'))
+             )
+             AND (title IS NULL OR title NOT LIKE '[Follow-up]%')
              AND status != 'Completed'`,
           [id, app.client_id]
         );
       } else if (oldStatus === 'Returned') {
         await activePool.query(
-          `UPDATE tasks 
-           SET status = 'Pending', completed_at = NULL, updated_at = NOW() 
-           WHERE (application_id = ? OR (client_id = ? AND (is_delivery_task = 1 OR title LIKE '%Delivery%' OR title LIKE '%Collection%' OR title LIKE '%Passport%'))) 
+          `UPDATE tasks
+           SET status = 'Pending', completed_at = NULL, updated_at = NOW()
+           WHERE (
+               (application_id = ? AND (is_delivery_task = 1 OR title LIKE 'Delivery -%' OR title LIKE 'Pending Collection -%' OR title LIKE 'Rejected -%'))
+               OR (application_id IS NULL AND client_id = ? AND (is_delivery_task = 1 OR title LIKE 'Delivery -%' OR title LIKE 'Pending Collection -%'))
+             )
+             AND (title IS NULL OR title NOT LIKE '[Follow-up]%')
              AND status = 'Completed'`,
           [id, app.client_id]
         );
@@ -3064,15 +3004,24 @@ export const dbService = {
       await this.syncUpcomingTask(app, clientName, userId);
     }
 
-    // If status is Returned, complete any pending collection or delivery tasks linked to this application (excluding follow-up tasks)
+    const isAppDeliveryTask = (t: Task): boolean => {
+      const isFollowUp =
+        (t.title && t.title.startsWith('[Follow-up]')) ||
+        (store.follow_ups && store.follow_ups.some(f => Number(f.task_id) === Number(t.id)));
+      if (isFollowUp) return false;
+      const isDeliveryLike =
+        t.is_delivery_task === 1 ||
+        /^(Delivery|Pending Collection|Rejected)\s*-/i.test(t.title || '');
+      if (!isDeliveryLike) return false;
+      if (t.application_id === id) return true;
+      if (!t.application_id && t.client_id === app.client_id) return true;
+      return false;
+    };
+
+    // If status is Returned, complete only pending collection/delivery tasks linked to this application
     if (newStatus === 'Returned') {
       store.tasks.forEach(t => {
-        const isFollowUp = (t.title && t.title.startsWith('[Follow-up]')) || (store.follow_ups && store.follow_ups.some(f => Number(f.task_id) === Number(t.id)));
-        if (
-          !isFollowUp &&
-          (t.application_id === id || (t.client_id === app.client_id && (t.is_delivery_task === 1 || t.title.toLowerCase().includes('delivery') || t.title.toLowerCase().includes('collection')))) &&
-          t.status !== 'Completed'
-        ) {
+        if (isAppDeliveryTask(t) && t.status !== 'Completed') {
           t.status = 'Completed';
           t.completed_at = new Date().toISOString();
           t.updated_at = new Date().toISOString();
@@ -3080,12 +3029,7 @@ export const dbService = {
       });
     } else if (oldStatus === 'Returned') {
       store.tasks.forEach(t => {
-        const isFollowUp = (t.title && t.title.startsWith('[Follow-up]')) || (store.follow_ups && store.follow_ups.some(f => Number(f.task_id) === Number(t.id)));
-        if (
-          !isFollowUp &&
-          (t.application_id === id || (t.client_id === app.client_id && (t.is_delivery_task === 1 || t.title.toLowerCase().includes('delivery') || t.title.toLowerCase().includes('collection')))) &&
-          t.status === 'Completed'
-        ) {
+        if (isAppDeliveryTask(t) && t.status === 'Completed') {
           t.status = 'Pending';
           t.completed_at = null;
           t.updated_at = new Date().toISOString();
@@ -3381,6 +3325,7 @@ export const dbService = {
       store.tasks.find(t => t.application_id === app.id && t.is_delivery_task === 1) ||
       store.tasks.find(
         t =>
+          !t.application_id &&
           t.client_id === app.client_id &&
           (t.is_delivery_task === 1 || /^(Delivery|Pending Collection|Rejected)\s*-/i.test(t.title || ''))
       );
@@ -3831,8 +3776,15 @@ export const dbService = {
       store.tasks.splice(idx, 1);
     }
 
+    const isDeliveryOrUpcomingTask = Boolean(
+      task &&
+      !(task.title && task.title.startsWith('[Follow-up]')) &&
+      !(store.follow_ups && store.follow_ups.some(f => Number(f.task_id) === Number(task.id))) &&
+      (task.is_delivery_task === 1 || /^(Delivery|Pending Collection|Rejected|Upcoming Client)\s*-/i.test(task.title || ''))
+    );
+
     if (task) {
-      if (task.is_delivery_task === 1 || task.application_id) {
+      if (isDeliveryOrUpcomingTask) {
         if (task.application_id) {
           const app = store.visa_applications.find(a => a.id === task.application_id);
           if (app) {
@@ -3866,7 +3818,7 @@ export const dbService = {
     saveStore(store);
 
     runMySQLWrite(async (activePool) => {
-      if (task && (task.is_delivery_task === 1 || task.application_id)) {
+      if (task && isDeliveryOrUpcomingTask) {
         if (task.application_id) {
           await activePool.query('UPDATE visa_applications SET delivery_date = NULL WHERE id = ?', [task.application_id]).catch(() => {});
         } else if (task.client_id) {
@@ -4395,11 +4347,34 @@ export const dbService = {
     if (store.hotel_rooms) {
       store.hotel_rooms = store.hotel_rooms.filter(r => r.hotel_id !== id);
     }
+
+    const removedCheckoutTaskIds: number[] = [];
+    if (store.hotel_bookings) {
+      store.hotel_bookings = store.hotel_bookings.filter(b => {
+        if (b.hotel_id === id) {
+          if (b.checkout_task_id) removedCheckoutTaskIds.push(b.checkout_task_id);
+          return false;
+        }
+        return true;
+      });
+    }
+    if (removedCheckoutTaskIds.length > 0 && store.tasks) {
+      const taskIdSet = new Set(removedCheckoutTaskIds);
+      store.tasks = store.tasks.filter(t => !(taskIdSet.has(t.id) && t.status === 'Pending'));
+    }
+
     saveStore(store);
 
     runMySQLWrite(async (activePool) => {
-      await activePool.query('DELETE FROM hotel_rooms WHERE hotel_id = ?', [id]).catch(() => {});
+      if (removedCheckoutTaskIds.length > 0) {
+        const placeholders = removedCheckoutTaskIds.map(() => '?').join(',');
+        await activePool.query(
+          `DELETE FROM tasks WHERE id IN (${placeholders}) AND status = 'Pending'`,
+          removedCheckoutTaskIds
+        ).catch(() => {});
+      }
       await activePool.query('DELETE FROM hotel_bookings WHERE hotel_id = ?', [id]).catch(() => {});
+      await activePool.query('DELETE FROM hotel_rooms WHERE hotel_id = ?', [id]).catch(() => {});
       await activePool.query('DELETE FROM hotels WHERE id = ?', [id]).catch(() => {});
     });
 
@@ -4485,6 +4460,13 @@ export const dbService = {
     const idx = store.hotel_rooms.findIndex(r => r.id === id);
     if (idx === -1) return false;
     const [deleted] = store.hotel_rooms.splice(idx, 1);
+    if (store.hotel_bookings) {
+      store.hotel_bookings.forEach(b => {
+        if (b.room_type_id === id) {
+          b.room_type_id = null;
+        }
+      });
+    }
     saveStore(store);
 
     runMySQLWrite(async (activePool) => {
@@ -4647,13 +4629,16 @@ export const dbService = {
     const taskTitle = `Hotel Check-Out: ${client.full_name} (${hotel.name})`;
     const taskDesc = `Scheduled checkout at ${hotel.name}${roomName ? ` [${roomName}]` : ''}.\nCheck-in: ${data.check_in_date} → Check-out: ${data.check_out_date}.\nClient: ${client.full_name} (${client.passport_number}).${data.comment ? `\nComment/Notes: ${data.comment}` : ''}`;
 
+    const validAssignedUserId =
+      userId && store.users.some(u => u.id === userId) ? userId : null;
+
     const checkoutTask: Task = {
       id: checkoutTaskId,
       title: taskTitle,
       description: taskDesc,
       client_id: client.id,
       application_id: null,
-      assigned_user_id: userId || 1,
+      assigned_user_id: validAssignedUserId,
       due_date: data.check_out_date,
       priority: 'High',
       status: 'Pending',
@@ -4682,7 +4667,7 @@ export const dbService = {
       price_details: resolvedPrice.price_details,
       currency: data.currency ? data.currency.trim().toUpperCase() : 'MYR',
       checkout_task_id: checkoutTaskId,
-      created_by_user_id: userId,
+      created_by_user_id: validAssignedUserId,
       created_at: now,
       updated_at: now,
     };
@@ -4691,11 +4676,12 @@ export const dbService = {
     saveStore(store);
 
     runMySQLWrite(async (activePool) => {
+      await ensureClientAndAppInMySQL(activePool, client.id, null);
       await activePool.query(
         `INSERT INTO tasks (id, title, description, client_id, application_id, assigned_user_id, due_date, priority, status, is_delivery_task, created_at, updated_at)
          VALUES (?, ?, ?, ?, NULL, ?, ?, 'High', 'Pending', 0, NOW(), NOW())
          ON DUPLICATE KEY UPDATE title = VALUES(title), due_date = VALUES(due_date), updated_at = NOW()`,
-        [checkoutTaskId, taskTitle, taskDesc, client.id, userId || 1, data.check_out_date]
+        [checkoutTaskId, taskTitle, taskDesc, client.id, validAssignedUserId, data.check_out_date]
       );
 
       try {
@@ -4815,12 +4801,45 @@ export const dbService = {
 
     booking.updated_at = new Date().toISOString();
 
-    // If check-out date changed, update the associated task's due_date
-    if (booking.checkout_task_id && data.check_out_date && data.check_out_date !== oldCheckoutDate) {
-      const task = store.tasks.find(t => t.id === booking.checkout_task_id);
-      if (task) {
-        task.due_date = data.check_out_date;
-        task.updated_at = new Date().toISOString();
+    // Sync linked checkout task status, dates, and description with booking updates
+    let syncedTaskUpdate: { id: number; title: string; description: string | null; due_date: string; status: Task['status']; completed_at: string | null } | null = null;
+    let cancelledTaskIdToDelete: number | null = null;
+
+    if (booking.checkout_task_id) {
+      const taskIdx = store.tasks.findIndex(t => t.id === booking.checkout_task_id);
+      if (taskIdx !== -1) {
+        const task = store.tasks[taskIdx];
+        if (booking.status === 'Cancelled' && task.status === 'Pending') {
+          cancelledTaskIdToDelete = task.id;
+          store.tasks.splice(taskIdx, 1);
+          booking.checkout_task_id = null;
+        } else {
+          const client = store.clients.find(c => c.id === booking.client_id);
+          const hotel = (store.hotels || []).find(h => h.id === booking.hotel_id);
+          if (client && hotel) {
+            task.title = `Hotel Check-Out: ${client.full_name} (${hotel.name})`;
+            task.description = `Scheduled checkout at ${hotel.name}${booking.room_type_name ? ` [${booking.room_type_name}]` : ''}.\nCheck-in: ${booking.check_in_date} → Check-out: ${booking.check_out_date}.\nClient: ${client.full_name} (${client.passport_number}).${booking.comment ? `\nComment/Notes: ${booking.comment}` : ''}`;
+          }
+          if (data.check_out_date && data.check_out_date !== oldCheckoutDate) {
+            task.due_date = data.check_out_date;
+          }
+          if (booking.status === 'Checked Out' && task.status !== 'Completed') {
+            task.status = 'Completed';
+            task.completed_at = new Date().toISOString();
+          } else if ((booking.status === 'Confirmed' || booking.status === 'Checked In') && data.status !== undefined && task.status === 'Completed') {
+            task.status = 'Pending';
+            task.completed_at = null;
+          }
+          task.updated_at = new Date().toISOString();
+          syncedTaskUpdate = {
+            id: task.id,
+            title: task.title,
+            description: task.description,
+            due_date: task.due_date,
+            status: task.status,
+            completed_at: task.completed_at,
+          };
+        }
       }
     }
 
@@ -4829,17 +4848,29 @@ export const dbService = {
     runMySQLWrite(async (activePool) => {
       try {
         await activePool.query(
-          `UPDATE hotel_bookings SET hotel_id = ?, room_type_id = ?, room_type_name = ?, check_in_date = ?, check_out_date = ?, guest_count = ?, room_count = ?, status = ?, comment = ?, special_requests = ?, total_price = ?, price_details = ?, currency = ?, updated_at = NOW() WHERE id = ?`,
-          [booking.hotel_id, booking.room_type_id, booking.room_type_name, booking.check_in_date, booking.check_out_date, booking.guest_count, booking.room_count, booking.status, booking.comment, booking.special_requests, booking.total_price, booking.price_details || null, booking.currency, id]
+          `UPDATE hotel_bookings SET hotel_id = ?, room_type_id = ?, room_type_name = ?, check_in_date = ?, check_out_date = ?, guest_count = ?, room_count = ?, status = ?, comment = ?, special_requests = ?, total_price = ?, price_details = ?, currency = ?, checkout_task_id = ?, updated_at = NOW() WHERE id = ?`,
+          [booking.hotel_id, booking.room_type_id, booking.room_type_name, booking.check_in_date, booking.check_out_date, booking.guest_count, booking.room_count, booking.status, booking.comment, booking.special_requests, booking.total_price, booking.price_details || null, booking.currency, booking.checkout_task_id, id]
         );
       } catch {
         await activePool.query(
-          `UPDATE hotel_bookings SET hotel_id = ?, room_type_id = ?, room_type_name = ?, check_in_date = ?, check_out_date = ?, guest_count = ?, room_count = ?, status = ?, comment = ?, special_requests = ?, total_price = ?, currency = ?, updated_at = NOW() WHERE id = ?`,
-          [booking.hotel_id, booking.room_type_id, booking.room_type_name, booking.check_in_date, booking.check_out_date, booking.guest_count, booking.room_count, booking.status, booking.comment, booking.special_requests, booking.total_price, booking.currency, id]
+          `UPDATE hotel_bookings SET hotel_id = ?, room_type_id = ?, room_type_name = ?, check_in_date = ?, check_out_date = ?, guest_count = ?, room_count = ?, status = ?, comment = ?, special_requests = ?, total_price = ?, currency = ?, checkout_task_id = ?, updated_at = NOW() WHERE id = ?`,
+          [booking.hotel_id, booking.room_type_id, booking.room_type_name, booking.check_in_date, booking.check_out_date, booking.guest_count, booking.room_count, booking.status, booking.comment, booking.special_requests, booking.total_price, booking.currency, booking.checkout_task_id, id]
         );
       }
-      if (booking.checkout_task_id && data.check_out_date && data.check_out_date !== oldCheckoutDate) {
-        await activePool.query('UPDATE tasks SET due_date = ?, updated_at = NOW() WHERE id = ?', [data.check_out_date, booking.checkout_task_id]);
+      if (cancelledTaskIdToDelete) {
+        await activePool.query("DELETE FROM tasks WHERE id = ? AND status = 'Pending'", [cancelledTaskIdToDelete]).catch(() => {});
+      } else if (syncedTaskUpdate) {
+        await activePool.query(
+          'UPDATE tasks SET title = ?, description = ?, due_date = ?, status = ?, completed_at = ?, updated_at = NOW() WHERE id = ?',
+          [
+            syncedTaskUpdate.title,
+            syncedTaskUpdate.description,
+            syncedTaskUpdate.due_date,
+            syncedTaskUpdate.status,
+            syncedTaskUpdate.completed_at ? new Date(syncedTaskUpdate.completed_at) : null,
+            syncedTaskUpdate.id,
+          ]
+        ).catch(() => {});
       }
     });
 
@@ -5495,6 +5526,14 @@ export const dbService = {
     let deletedHistoryCount = 0;
     let deletedLogsCount = 0;
 
+    const deletedAppIdList: number[] = [];
+    const deletedBookingIdList: number[] = [];
+    const deletedTaskIdSet = new Set<number>();
+    const deletedFollowUpIdList: number[] = [];
+    const deletedHistoryIdList: number[] = [];
+    const deletedLogIdList: number[] = [];
+    const clearedFollowUpTaskIdList: number[] = [];
+
     // 1. Purge Visa Applications & cascaded tasks/comments/history
     if (targets.applications) {
       const appsToKeep: VisaApplication[] = [];
@@ -5503,6 +5542,7 @@ export const dbService = {
       for (const app of store.visa_applications || []) {
         if (isDateInRange(app.created_at) || isDateInRange(app.updated_at)) {
           deletedAppIds.add(app.id);
+          deletedAppIdList.push(app.id);
           deletedAppsCount++;
         } else {
           appsToKeep.push(app);
@@ -5514,7 +5554,13 @@ export const dbService = {
       if (deletedAppIds.size > 0) {
         store.comments = (store.comments || []).filter(c => !c.application_id || !deletedAppIds.has(c.application_id));
         store.application_status_history = (store.application_status_history || []).filter(h => !deletedAppIds.has(h.application_id));
-        store.tasks = (store.tasks || []).filter(t => !t.application_id || !deletedAppIds.has(t.application_id));
+        store.tasks = (store.tasks || []).filter(t => {
+          if (t.application_id && deletedAppIds.has(t.application_id)) {
+            deletedTaskIdSet.add(Number(t.id));
+            return false;
+          }
+          return true;
+        });
       }
     }
 
@@ -5525,9 +5571,11 @@ export const dbService = {
 
       for (const b of store.hotel_bookings || []) {
         if (isDateInRange(b.created_at) || isDateInRange(b.check_in_date) || isDateInRange(b.check_out_date)) {
+          deletedBookingIdList.push(b.id);
           deletedBookingsCount++;
           if (b.checkout_task_id) {
             deletedCheckoutTaskIds.add(b.checkout_task_id);
+            deletedTaskIdSet.add(Number(b.checkout_task_id));
           }
         } else {
           bookingsToKeep.push(b);
@@ -5549,6 +5597,7 @@ export const dbService = {
         if (isDateInRange(task.created_at) || isDateInRange(task.due_date)) {
           deletedTasksCount++;
           deletedTaskIds.add(Number(task.id));
+          deletedTaskIdSet.add(Number(task.id));
         } else {
           tasksToKeep.push(task);
         }
@@ -5559,6 +5608,7 @@ export const dbService = {
         store.follow_ups.forEach(f => {
           if (f.task_id && deletedTaskIds.has(Number(f.task_id))) {
             f.task_id = null;
+            clearedFollowUpTaskIdList.push(f.id);
           }
         });
       }
@@ -5575,9 +5625,11 @@ export const dbService = {
           isDateInRange(fu.due_date) ||
           isDateInRange(fu.completed_at)
         ) {
+          deletedFollowUpIdList.push(fu.id);
           deletedFollowUpsCount++;
           if (fu.task_id) {
             deletedFollowUpTaskIds.add(Number(fu.task_id));
+            deletedTaskIdSet.add(Number(fu.task_id));
           }
         } else {
           followUpsToKeep.push(fu);
@@ -5596,6 +5648,7 @@ export const dbService = {
       const historyToKeep: ApplicationStatusHistory[] = [];
       for (const item of store.application_status_history || []) {
         if (isDateInRange(item.created_at || (item as any).changed_at)) {
+          deletedHistoryIdList.push(item.id);
           deletedHistoryCount++;
         } else {
           historyToKeep.push(item);
@@ -5609,6 +5662,7 @@ export const dbService = {
       const logsToKeep: ActivityLog[] = [];
       for (const item of store.activity_logs || []) {
         if (isDateInRange(item.created_at)) {
+          deletedLogIdList.push(item.id);
           deletedLogsCount++;
         } else {
           logsToKeep.push(item);
@@ -5619,84 +5673,60 @@ export const dbService = {
 
     saveStore(store);
 
+    const allDeletedTaskIds = Array.from(deletedTaskIdSet);
+    const deleteByIdChunks = async (conn: mysql.PoolConnection, table: string, column: string, ids: number[]) => {
+      if (ids.length === 0) return;
+      const chunkSize = 500;
+      for (let i = 0; i < ids.length; i += chunkSize) {
+        const chunk = ids.slice(i, i + chunkSize);
+        const placeholders = chunk.map(() => '?').join(',');
+        await conn.query(`DELETE FROM \`${table}\` WHERE \`${column}\` IN (${placeholders})`, chunk);
+      }
+    };
+
     runMySQLWrite(async (activePool) => {
+      const conn = await activePool.getConnection();
       try {
-        await activePool.query('SET FOREIGN_KEY_CHECKS = 0').catch(() => {});
-        let dateCondition = '';
-        const params: any[] = [];
-        if (normStartDate && normEndDate) {
-          dateCondition = 'BETWEEN ? AND ?';
-          params.push(normStartDate, normEndDate + ' 23:59:59');
-        } else if (normStartDate) {
-          dateCondition = '>= ?';
-          params.push(normStartDate);
-        } else if (normEndDate) {
-          dateCondition = '<= ?';
-          params.push(normEndDate + ' 23:59:59');
+        await conn.beginTransaction();
+        await conn.query('SET FOREIGN_KEY_CHECKS = 0');
+
+        if (deletedAppIdList.length > 0) {
+          await deleteByIdChunks(conn, 'application_status_history', 'application_id', deletedAppIdList).catch(() => {});
+          await deleteByIdChunks(conn, 'comments', 'application_id', deletedAppIdList).catch(() => {});
+          await deleteByIdChunks(conn, 'tasks', 'application_id', deletedAppIdList).catch(() => {});
+          await deleteByIdChunks(conn, 'visa_applications', 'id', deletedAppIdList).catch(() => {});
+        }
+        if (deletedBookingIdList.length > 0) {
+          await deleteByIdChunks(conn, 'hotel_bookings', 'id', deletedBookingIdList).catch(() => {});
+        }
+        if (clearedFollowUpTaskIdList.length > 0) {
+          const chunkSize = 500;
+          for (let i = 0; i < clearedFollowUpTaskIdList.length; i += chunkSize) {
+            const chunk = clearedFollowUpTaskIdList.slice(i, i + chunkSize);
+            const placeholders = chunk.map(() => '?').join(',');
+            await conn.query(`UPDATE follow_ups SET task_id = NULL WHERE id IN (${placeholders})`, chunk).catch(() => {});
+          }
+        }
+        if (allDeletedTaskIds.length > 0) {
+          await deleteByIdChunks(conn, 'tasks', 'id', allDeletedTaskIds).catch(() => {});
+        }
+        if (deletedFollowUpIdList.length > 0) {
+          await deleteByIdChunks(conn, 'follow_ups', 'id', deletedFollowUpIdList).catch(() => {});
+        }
+        if (deletedHistoryIdList.length > 0) {
+          await deleteByIdChunks(conn, 'application_status_history', 'id', deletedHistoryIdList).catch(() => {});
+        }
+        if (deletedLogIdList.length > 0) {
+          await deleteByIdChunks(conn, 'activity_logs', 'id', deletedLogIdList).catch(() => {});
         }
 
-        if (targets.applications) {
-          if (dateCondition) {
-            await activePool.query(`DELETE FROM application_status_history WHERE application_id IN (SELECT id FROM visa_applications WHERE created_at ${dateCondition})`, params).catch(() => {});
-            await activePool.query(`DELETE FROM tasks WHERE application_id IN (SELECT id FROM visa_applications WHERE created_at ${dateCondition})`, params).catch(() => {});
-            await activePool.query(`DELETE FROM comments WHERE application_id IN (SELECT id FROM visa_applications WHERE created_at ${dateCondition})`, params).catch(() => {});
-            await activePool.query(`DELETE FROM visa_applications WHERE created_at ${dateCondition}`, params).catch(() => {});
-          } else {
-            await activePool.query('DELETE FROM application_status_history').catch(() => {});
-            await activePool.query('DELETE FROM comments WHERE application_id IS NOT NULL').catch(() => {});
-            await activePool.query('DELETE FROM visa_applications').catch(() => {});
-          }
-        }
-        if (targets.hotel_bookings) {
-          if (dateCondition) {
-            await activePool.query(`DELETE FROM hotel_bookings WHERE created_at ${dateCondition}`, params).catch(() => {});
-          } else {
-            await activePool.query('DELETE FROM hotel_bookings').catch(() => {});
-          }
-        }
-        if (targets.tasks) {
-          if (dateCondition) {
-            await activePool.query(`DELETE FROM tasks WHERE due_date ${dateCondition}`, params).catch(() => {});
-          } else {
-            await activePool.query('DELETE FROM tasks').catch(() => {});
-          }
-        }
-        if (targets.follow_ups) {
-          if (normStartDate && normEndDate) {
-            await activePool.query(
-              'DELETE FROM follow_ups WHERE (created_at BETWEEN ? AND ?) OR (due_date BETWEEN ? AND ?)',
-              [normStartDate, normEndDate + ' 23:59:59', normStartDate, normEndDate + ' 23:59:59']
-            ).catch(() => {});
-          } else if (normStartDate) {
-            await activePool.query(
-              'DELETE FROM follow_ups WHERE created_at >= ? OR due_date >= ?',
-              [normStartDate, normStartDate]
-            ).catch(() => {});
-          } else if (normEndDate) {
-            await activePool.query(
-              'DELETE FROM follow_ups WHERE created_at <= ? OR due_date <= ?',
-              [normEndDate + ' 23:59:59', normEndDate + ' 23:59:59']
-            ).catch(() => {});
-          } else {
-            await activePool.query('DELETE FROM follow_ups').catch(() => {});
-          }
-        }
-        if (targets.status_history) {
-          if (dateCondition) {
-            await activePool.query(`DELETE FROM application_status_history WHERE created_at ${dateCondition}`, params).catch(() => {});
-          } else {
-            await activePool.query('DELETE FROM application_status_history').catch(() => {});
-          }
-        }
-        if (targets.activity_logs) {
-          if (dateCondition) {
-            await activePool.query(`DELETE FROM activity_logs WHERE created_at ${dateCondition}`, params).catch(() => {});
-          } else {
-            await activePool.query('DELETE FROM activity_logs').catch(() => {});
-          }
-        }
+        await conn.commit();
+      } catch (err) {
+        await conn.rollback().catch(() => {});
+        throw err;
       } finally {
-        await activePool.query('SET FOREIGN_KEY_CHECKS = 1').catch(() => {});
+        await conn.query('SET FOREIGN_KEY_CHECKS = 1').catch(() => {});
+        conn.release();
       }
     });
 
@@ -5857,6 +5887,29 @@ export const dbService = {
       return `'${str}'`;
     };
 
+    const TABLE_COLUMNS: Record<string, string[]> = {
+      users: ['id', 'name', 'email', 'password_hash', 'role', 'is_active', 'last_login_at', 'created_at', 'updated_at'],
+      countries: ['id', 'name', 'code', 'is_active', 'created_at'],
+      client_custom_fields: ['id', 'field_name', 'field_label', 'field_type', 'field_options', 'is_required', 'is_active', 'display_order', 'created_at', 'updated_at'],
+      clients: ['id', 'client_id', 'full_name', 'passport_number', 'country', 'phone', 'whatsapp', 'email', 'date_of_birth', 'address', 'occupation', 'notes', 'google_drive_url', 'photo_url', 'created_at', 'updated_at'],
+      client_custom_field_values: ['id', 'client_id', 'field_id', 'value', 'updated_at'],
+      visa_types: ['id', 'name', 'description', 'is_active', 'created_at', 'updated_at'],
+      visa_applications: ['id', 'application_id', 'client_id', 'visa_type_id', 'status', 'delivery_date', 'notes', 'assigned_user_id', 'created_at', 'updated_at'],
+      application_status_history: ['id', 'application_id', 'old_status', 'new_status', 'delivery_date', 'changed_by_user_id', 'notes', 'created_at'],
+      tasks: ['id', 'title', 'description', 'client_id', 'application_id', 'assigned_user_id', 'due_date', 'priority', 'status', 'is_delivery_task', 'completed_at', 'created_at', 'updated_at'],
+      comments: ['id', 'client_id', 'application_id', 'user_id', 'message', 'created_at'],
+      activity_logs: ['id', 'user_id', 'action', 'entity_type', 'entity_id', 'description', 'created_at'],
+      hotels: ['id', 'name', 'city', 'address', 'star_rating', 'phone', 'email', 'notes', 'is_active', 'created_at', 'updated_at'],
+      hotel_rooms: ['id', 'hotel_id', 'name', 'price_per_night', 'currency', 'capacity', 'description', 'is_active', 'created_at', 'updated_at'],
+      hotel_bookings: ['id', 'booking_reference', 'client_id', 'hotel_id', 'room_type_id', 'room_type_name', 'check_in_date', 'check_out_date', 'guest_count', 'room_count', 'status', 'comment', 'special_requests', 'total_price', 'price_details', 'currency', 'checkout_task_id', 'created_by_user_id', 'created_at', 'updated_at'],
+      follow_ups: ['id', 'client_id', 'title', 'reason', 'channel', 'cadence', 'due_date', 'notes', 'message_template', 'priority', 'status', 'task_id', 'assigned_user_id', 'completed_at', 'completed_notes', 'created_at', 'updated_at'],
+      invoice_settings: ['id', 'company_name', 'company_tagline', 'logo_url', 'phone', 'whatsapp', 'email', 'website', 'address', 'tax_number', 'bank_details', 'payment_notes', 'terms_and_conditions', 'signature_enabled', 'signature_name', 'signature_designation', 'signature_image_url', 'signature_style', 'default_currency', 'invoice_prefix', 'next_number', 'updated_at'],
+      invoice_catalog_items: ['id', 'name', 'description', 'default_unit_price', 'category', 'is_active', 'display_order', 'created_at', 'updated_at'],
+      invoices: ['id', 'invoice_number', 'client_id', 'issue_date', 'due_date', 'status', 'payment_method', 'currency', 'subtotal', 'discount', 'tax_rate', 'tax_amount', 'total_amount', 'paid_amount', 'balance_due', 'notes', 'created_by_user_id', 'created_at', 'updated_at'],
+      invoice_items: ['id', 'invoice_id', 'catalog_item_id', 'description', 'quantity', 'unit_price', 'total'],
+      settings: ['id', 'setting_key', 'setting_value', 'updated_at'],
+    };
+
     const dumpTable = (tableName: string, rows: any[]) => {
       sql += `-- --------------------------------------------------------\n`;
       sql += `-- Table: \`${tableName}\` (${rows.length} rows)\n`;
@@ -5865,7 +5918,8 @@ export const dbService = {
         sql += `-- (No rows)\n\n`;
         return;
       }
-      const keys = Object.keys(rows[0]);
+      const allowedCols = TABLE_COLUMNS[tableName];
+      const keys = allowedCols ? allowedCols : Object.keys(rows[0]);
       const columns = keys.map(k => `\`${k}\``).join(', ');
       sql += `DELETE FROM \`${tableName}\`;\n`;
       sql += `INSERT INTO \`${tableName}\` (${columns}) VALUES\n`;
@@ -5909,7 +5963,7 @@ export const dbService = {
     return sql;
   },
 
-  restoreFromSqlDump(dumpContent: string, operatorId: number = 1): {
+  async restoreFromSqlDump(dumpContent: string, operatorId: number = 1): Promise<{
     success: boolean;
     restored: {
       clients: number;
@@ -5919,12 +5973,90 @@ export const dbService = {
       follow_ups: number;
       users: number;
     };
-  } {
+  }> {
     if (!dumpContent || typeof dumpContent !== 'string') {
       throw new Error('Invalid SQL backup content provided');
     }
 
-    const applyValidatedSnapshot = (parsed: any) => {
+    const RESTORE_TABLES: Array<{ table: string; columns: string[]; getRows: () => any[] }> = [
+      { table: 'users', columns: ['id', 'name', 'email', 'password_hash', 'role', 'is_active', 'last_login_at', 'created_at', 'updated_at'], getRows: () => store.users || [] },
+      { table: 'countries', columns: ['id', 'name', 'code', 'is_active', 'created_at'], getRows: () => store.countries || [] },
+      { table: 'client_custom_fields', columns: ['id', 'field_name', 'field_label', 'field_type', 'field_options', 'is_required', 'is_active', 'display_order', 'created_at', 'updated_at'], getRows: () => store.client_custom_fields || [] },
+      { table: 'clients', columns: ['id', 'client_id', 'full_name', 'passport_number', 'country', 'phone', 'whatsapp', 'email', 'date_of_birth', 'address', 'occupation', 'notes', 'google_drive_url', 'photo_url', 'created_at', 'updated_at'], getRows: () => store.clients || [] },
+      { table: 'client_custom_field_values', columns: ['id', 'client_id', 'field_id', 'value', 'updated_at'], getRows: () => store.client_custom_field_values || [] },
+      { table: 'visa_types', columns: ['id', 'name', 'description', 'is_active', 'created_at', 'updated_at'], getRows: () => store.visa_types || [] },
+      { table: 'visa_applications', columns: ['id', 'application_id', 'client_id', 'visa_type_id', 'status', 'delivery_date', 'notes', 'assigned_user_id', 'created_at', 'updated_at'], getRows: () => store.visa_applications || [] },
+      { table: 'application_status_history', columns: ['id', 'application_id', 'old_status', 'new_status', 'delivery_date', 'changed_by_user_id', 'notes', 'created_at'], getRows: () => store.application_status_history || [] },
+      { table: 'tasks', columns: ['id', 'title', 'description', 'client_id', 'application_id', 'assigned_user_id', 'due_date', 'priority', 'status', 'is_delivery_task', 'completed_at', 'created_at', 'updated_at'], getRows: () => store.tasks || [] },
+      { table: 'comments', columns: ['id', 'client_id', 'application_id', 'user_id', 'message', 'created_at'], getRows: () => store.comments || [] },
+      { table: 'activity_logs', columns: ['id', 'user_id', 'action', 'entity_type', 'entity_id', 'description', 'created_at'], getRows: () => store.activity_logs || [] },
+      { table: 'hotels', columns: ['id', 'name', 'city', 'address', 'star_rating', 'phone', 'email', 'notes', 'is_active', 'created_at', 'updated_at'], getRows: () => store.hotels || [] },
+      { table: 'hotel_rooms', columns: ['id', 'hotel_id', 'name', 'price_per_night', 'currency', 'capacity', 'description', 'is_active', 'created_at', 'updated_at'], getRows: () => store.hotel_rooms || [] },
+      { table: 'hotel_bookings', columns: ['id', 'booking_reference', 'client_id', 'hotel_id', 'room_type_id', 'room_type_name', 'check_in_date', 'check_out_date', 'guest_count', 'room_count', 'status', 'comment', 'special_requests', 'total_price', 'price_details', 'currency', 'checkout_task_id', 'created_by_user_id', 'created_at', 'updated_at'], getRows: () => store.hotel_bookings || [] },
+      { table: 'follow_ups', columns: ['id', 'client_id', 'title', 'reason', 'channel', 'cadence', 'due_date', 'notes', 'message_template', 'priority', 'status', 'task_id', 'assigned_user_id', 'completed_at', 'completed_notes', 'created_at', 'updated_at'], getRows: () => store.follow_ups || [] },
+      { table: 'invoice_settings', columns: ['id', 'company_name', 'company_tagline', 'logo_url', 'phone', 'whatsapp', 'email', 'website', 'address', 'tax_number', 'bank_details', 'payment_notes', 'terms_and_conditions', 'signature_enabled', 'signature_name', 'signature_designation', 'signature_image_url', 'signature_style', 'default_currency', 'invoice_prefix', 'next_number', 'updated_at'], getRows: () => (store.invoice_settings ? [store.invoice_settings] : []) },
+      { table: 'invoice_catalog_items', columns: ['id', 'name', 'description', 'default_unit_price', 'category', 'is_active', 'display_order', 'created_at', 'updated_at'], getRows: () => store.invoice_catalog_items || [] },
+      { table: 'invoices', columns: ['id', 'invoice_number', 'client_id', 'issue_date', 'due_date', 'status', 'payment_method', 'currency', 'subtotal', 'discount', 'tax_rate', 'tax_amount', 'total_amount', 'paid_amount', 'balance_due', 'notes', 'created_by_user_id', 'created_at', 'updated_at'], getRows: () => store.invoices || [] },
+      { table: 'invoice_items', columns: ['id', 'invoice_id', 'catalog_item_id', 'description', 'quantity', 'unit_price', 'total'], getRows: () => store.invoice_items || [] },
+      { table: 'settings', columns: ['id', 'setting_key', 'setting_value', 'updated_at'], getRows: () => store.settings || [] },
+    ];
+
+    const normalizeMySQLVal = (col: string, val: any) => {
+      if (val === undefined || val === null) return null;
+      if ((col.endsWith('_at') || col === 'last_login_at') && typeof val === 'string' && val.includes('T')) {
+        const d = new Date(val);
+        if (!isNaN(d.getTime())) return d;
+      }
+      if ((col.endsWith('_date') || col === 'date_of_birth') && typeof val === 'string') {
+        return val.slice(0, 10) || null;
+      }
+      return val;
+    };
+
+    const persistRestoredStoreToMySQL = async () => {
+      if (!pool || !isConnectedToMySQL) return;
+      const conn = await pool.getConnection();
+      try {
+        await conn.beginTransaction();
+        await conn.query('SET FOREIGN_KEY_CHECKS = 0');
+
+        for (const { table, columns, getRows } of RESTORE_TABLES) {
+          const rows = getRows();
+          await conn.query(`DELETE FROM \`${table}\``);
+          if (rows.length === 0) continue;
+
+          // Intersect with actual columns present in MySQL table for forward/backward compatibility
+          const [colMeta]: any = await conn.query(`SHOW COLUMNS FROM \`${table}\``);
+          const dbColSet = new Set<string>(Array.isArray(colMeta) ? colMeta.map((c: any) => String(c.Field)) : columns);
+          const activeCols = columns.filter(c => dbColSet.has(c));
+          if (activeCols.length === 0) continue;
+
+          const colSql = activeCols.map(c => `\`${c}\``).join(', ');
+          const rowPlaceholder = `(${activeCols.map(() => '?').join(', ')})`;
+          const chunkSize = 100;
+          for (let i = 0; i < rows.length; i += chunkSize) {
+            const chunk = rows.slice(i, i + chunkSize);
+            const placeholders = chunk.map(() => rowPlaceholder).join(', ');
+            const params = chunk.flatMap(r => activeCols.map(c => normalizeMySQLVal(c, r[c])));
+            await conn.query(`INSERT INTO \`${table}\` (${colSql}) VALUES ${placeholders}`, params);
+          }
+        }
+
+        await conn.commit();
+        lastLocalMutationTime = Date.now();
+        lastSyncTime = Date.now();
+        console.log('[MySQL] Database restore persisted transactionally to MySQL.');
+      } catch (err: any) {
+        await conn.rollback().catch(() => {});
+        console.error('[MySQL] Failed to persist database restore to MySQL:', err.message);
+        throw new Error(`Restore failed while syncing to MySQL: ${err.message}`);
+      } finally {
+        await conn.query('SET FOREIGN_KEY_CHECKS = 1').catch(() => {});
+        conn.release();
+      }
+    };
+
+    const applyValidatedSnapshot = async (parsed: any) => {
       if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.clients)) {
         return null;
       }
@@ -5977,6 +6109,7 @@ export const dbService = {
         invoice_items: maxIdOf(store.invoice_items),
       };
 
+      await persistRestoredStoreToMySQL();
       saveStore(store);
 
       this.logActivity(
@@ -6006,9 +6139,12 @@ export const dbService = {
       try {
         const jsonStr = Buffer.from(match[1], 'base64').toString('utf-8');
         const parsed = JSON.parse(jsonStr);
-        const res = applyValidatedSnapshot(parsed);
+        const res = await applyValidatedSnapshot(parsed);
         if (res) return res;
       } catch (err: any) {
+        if (err?.message?.startsWith('Restore failed while syncing to MySQL')) {
+          throw err;
+        }
         console.warn('[Restore] Failed to restore from JSON snapshot, attempting JSON fallback...', err);
       }
     }
@@ -6017,9 +6153,12 @@ export const dbService = {
     if (dumpContent.trim().startsWith('{')) {
       try {
         const parsed = JSON.parse(dumpContent);
-        const res = applyValidatedSnapshot(parsed);
+        const res = await applyValidatedSnapshot(parsed);
         if (res) return res;
-      } catch {
+      } catch (err: any) {
+        if (err?.message?.startsWith('Restore failed while syncing to MySQL')) {
+          throw err;
+        }
         // Continue to error
       }
     }
@@ -6707,51 +6846,61 @@ export const dbService = {
       : null;
 
     runMySQLWrite(async (activePool) => {
-      await activePool.query(
-        `UPDATE invoices SET
-           invoice_number = ?, client_id = ?, issue_date = ?, due_date = ?, status = ?,
-           payment_method = ?, currency = ?, subtotal = ?, discount = ?, tax_rate = ?,
-           tax_amount = ?, total_amount = ?, paid_amount = ?, balance_due = ?, notes = ?
-         WHERE id = ?`,
-        [
-          inv.invoice_number,
-          inv.client_id,
-          inv.issue_date,
-          inv.due_date,
-          inv.status,
-          inv.payment_method,
-          inv.currency,
-          inv.subtotal,
-          inv.discount,
-          inv.tax_rate,
-          inv.tax_amount,
-          inv.total_amount,
-          inv.paid_amount,
-          inv.balance_due,
-          inv.notes,
-          inv.id,
-        ]
-      );
+      const conn = await activePool.getConnection();
+      try {
+        await conn.beginTransaction();
+        await conn.query(
+          `UPDATE invoices SET
+             invoice_number = ?, client_id = ?, issue_date = ?, due_date = ?, status = ?,
+             payment_method = ?, currency = ?, subtotal = ?, discount = ?, tax_rate = ?,
+             tax_amount = ?, total_amount = ?, paid_amount = ?, balance_due = ?, notes = ?
+           WHERE id = ?`,
+          [
+            inv.invoice_number,
+            inv.client_id,
+            inv.issue_date,
+            inv.due_date,
+            inv.status,
+            inv.payment_method,
+            inv.currency,
+            inv.subtotal,
+            inv.discount,
+            inv.tax_rate,
+            inv.tax_amount,
+            inv.total_amount,
+            inv.paid_amount,
+            inv.balance_due,
+            inv.notes,
+            inv.id,
+          ]
+        );
 
-      if (currentItemsSnapshot) {
-        await activePool.query('DELETE FROM invoice_items WHERE invoice_id = ?', [id]);
-        if (currentItemsSnapshot.length > 0) {
-          const placeholders = currentItemsSnapshot.map(() => '(?, ?, ?, ?, ?, ?, ?)').join(', ');
-          const flatParams = currentItemsSnapshot.flatMap(it => [
-            it.id,
-            it.invoice_id,
-            it.catalog_item_id,
-            it.description,
-            it.quantity,
-            it.unit_price,
-            it.total,
-          ]);
-          await activePool.query(
-            `INSERT INTO invoice_items (id, invoice_id, catalog_item_id, description, quantity, unit_price, total)
-             VALUES ${placeholders}`,
-            flatParams
-          );
+        if (currentItemsSnapshot) {
+          await conn.query('DELETE FROM invoice_items WHERE invoice_id = ?', [id]);
+          if (currentItemsSnapshot.length > 0) {
+            const placeholders = currentItemsSnapshot.map(() => '(?, ?, ?, ?, ?, ?, ?)').join(', ');
+            const flatParams = currentItemsSnapshot.flatMap(it => [
+              it.id,
+              it.invoice_id,
+              it.catalog_item_id,
+              it.description,
+              it.quantity,
+              it.unit_price,
+              it.total,
+            ]);
+            await conn.query(
+              `INSERT INTO invoice_items (id, invoice_id, catalog_item_id, description, quantity, unit_price, total)
+               VALUES ${placeholders}`,
+              flatParams
+            );
+          }
         }
+        await conn.commit();
+      } catch (err) {
+        await conn.rollback().catch(() => {});
+        throw err;
+      } finally {
+        conn.release();
       }
     });
 

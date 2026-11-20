@@ -33,6 +33,7 @@ import { Task, VisaApplication, Client, User as UserType, HotelBooking } from '.
 import { getPriorityBadge, STATUS_CONFIG } from '../utils/status';
 import { ClientAvatar } from '../components/ClientAvatar';
 import { HotelBookingDetailModal } from '../components/HotelBookingDetailModal';
+import { ConfirmDeleteModal } from '../components/ConfirmDeleteModal';
 import { api } from '../services/api';
 
 export interface CalendarEvent {
@@ -135,6 +136,14 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
   const [calendarError, setCalendarError] = useState<string | null>(null);
   const [selectedHotelBooking, setSelectedHotelBooking] = useState<HotelBooking | null>(null);
   const [copiedEventId, setCopiedEventId] = useState<string | null>(null);
+  const [pendingConfirmAction, setPendingConfirmAction] = useState<{
+    type: 'delete_task' | 'clear_delivery';
+    id: number;
+    title: string;
+    message: string;
+    confirmLabel: string;
+  } | null>(null);
+  const [confirmingAction, setConfirmingAction] = useState(false);
 
   const handleCopyPassport = async (e: React.MouseEvent, passportNumber: string, copyKey: string) => {
     e.stopPropagation();
@@ -1586,10 +1595,13 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                       <button
                         type="button"
                         onClick={() => {
-                          if (window.confirm(`Are you sure you want to delete task "${ev.title}"?`)) {
-                            setLocalTasks((prev) => prev.filter((t) => t.id !== ev.taskId));
-                            onDeleteTask(ev.taskId!);
-                          }
+                          setPendingConfirmAction({
+                            type: 'delete_task',
+                            id: ev.taskId!,
+                            title: 'Delete Calendar Task',
+                            message: `Are you sure you want to permanently delete task "${ev.title}"?`,
+                            confirmLabel: 'Delete Task',
+                          });
                         }}
                         className="px-2.5 py-1 bg-rose-950/80 hover:bg-rose-900 text-rose-300 hover:text-white rounded-lg text-xs font-semibold border border-rose-800/80 transition cursor-pointer flex items-center gap-1"
                         title="Delete Task"
@@ -1602,15 +1614,14 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
                     {!ev.taskId && ev.rawApp && (
                       <button
                         type="button"
-                        onClick={async () => {
-                          if (window.confirm(`Clear collection date for ${ev.rawApp?.client_name || 'Client'}?`)) {
-                            try {
-                              await api.updateApplication(ev.rawApp!.id, { delivery_date: null });
-                              if (onRefreshData) onRefreshData(true);
-                            } catch (err) {
-                              console.error('Failed to clear collection date:', err);
-                            }
-                          }
+                        onClick={() => {
+                          setPendingConfirmAction({
+                            type: 'clear_delivery',
+                            id: ev.rawApp!.id,
+                            title: 'Clear Collection Date',
+                            message: `Clear collection date for ${ev.rawApp?.client_name || 'Client'}? The visa application will remain intact.`,
+                            confirmLabel: 'Clear Date',
+                          });
                         }}
                         className="px-2.5 py-1 bg-rose-950/80 hover:bg-rose-900 text-rose-300 hover:text-white rounded-lg text-xs font-semibold border border-rose-800/80 transition cursor-pointer flex items-center gap-1"
                         title="Clear Collection Date"
@@ -2872,6 +2883,37 @@ export const CalendarView: React.FC<CalendarViewProps> = ({
           onOpenClient={onOpenClient}
         />
       )}
+
+      {/* Iframe-Safe Confirmation Modal for Deleting Tasks / Clearing Collection Dates */}
+      <ConfirmDeleteModal
+        isOpen={!!pendingConfirmAction}
+        title={pendingConfirmAction?.title || 'Confirm Action'}
+        message={pendingConfirmAction?.message || ''}
+        confirmLabel={pendingConfirmAction?.confirmLabel || 'Confirm'}
+        isLoading={confirmingAction}
+        onCancel={() => {
+          if (!confirmingAction) setPendingConfirmAction(null);
+        }}
+        onConfirm={async () => {
+          if (!pendingConfirmAction) return;
+          setConfirmingAction(true);
+          try {
+            if (pendingConfirmAction.type === 'delete_task') {
+              setLocalTasks((prev) => prev.filter((t) => t.id !== pendingConfirmAction.id));
+              if (onDeleteTask) onDeleteTask(pendingConfirmAction.id);
+            } else {
+              await api.updateApplication(pendingConfirmAction.id, { delivery_date: null });
+              if (onRefreshData) onRefreshData(true);
+            }
+            setPendingConfirmAction(null);
+          } catch (err: any) {
+            console.error('Calendar confirmation action failed:', err);
+            setCalendarError(err?.message || 'Failed to complete action.');
+          } finally {
+            setConfirmingAction(false);
+          }
+        }}
+      />
     </div>
   );
 };

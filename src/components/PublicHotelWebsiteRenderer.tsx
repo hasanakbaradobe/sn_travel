@@ -44,6 +44,7 @@ import {
   PublicSnapshotHotel,
   PublicSnapshotRoom,
 } from '../types';
+import { addDaysLocal } from '../utils/date';
 
 interface PublicHotelWebsiteRendererProps {
   snapshot: PublicWebsiteSnapshot | null;
@@ -103,13 +104,9 @@ function getFacilityIconByKeyword(label: string, className = 'w-4 h-4') {
 }
 
 function getDefaultDates() {
-  const tomorrow = new Date();
-  tomorrow.setDate(tomorrow.getDate() + 1);
-  const checkOut = new Date();
-  checkOut.setDate(checkOut.getDate() + 4);
   return {
-    checkIn: tomorrow.toISOString().slice(0, 10),
-    checkOut: checkOut.toISOString().slice(0, 10),
+    checkIn: addDaysLocal(1),
+    checkOut: addDaysLocal(4),
   };
 }
 

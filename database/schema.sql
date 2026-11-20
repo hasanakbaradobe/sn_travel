@@ -335,6 +335,7 @@ CREATE TABLE `hotel_bookings` (
   `comment` TEXT DEFAULT NULL,
   `special_requests` TEXT DEFAULT NULL,
   `total_price` DECIMAL(10,2) DEFAULT NULL,
+  `price_details` VARCHAR(255) DEFAULT NULL,
   `currency` VARCHAR(10) NOT NULL DEFAULT 'USD',
   `checkout_task_id` INT DEFAULT NULL,
   `created_by_user_id` INT DEFAULT NULL,

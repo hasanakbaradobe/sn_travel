@@ -14,6 +14,7 @@ import {
 import { DashboardMetrics, Task, Client, ApplicationStatus } from '../types';
 import { STATUS_CONFIG, getPriorityBadge } from '../utils/status';
 import { ClientAvatar } from '../components/ClientAvatar';
+import { getLocalDateString } from '../utils/date';
 
 interface DashboardViewProps {
   metrics: DashboardMetrics | null;
@@ -328,7 +329,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
 
             <div className="divide-y divide-slate-100">
               {(() => {
-                const todayIso = new Date().toISOString().slice(0, 10);
+                const todayIso = getLocalDateString();
                 const mergedMap = new Map<number, Client & { active_status?: string }>();
                 if (Array.isArray(metrics.recent_clients)) {
                   for (const rc of metrics.recent_clients) {

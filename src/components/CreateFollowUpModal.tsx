@@ -13,6 +13,7 @@ import {
 import { Client, User as UserType } from '../types';
 import { ClientAvatar } from './ClientAvatar';
 import { api } from '../services/api';
+import { addDaysLocal } from '../utils/date';
 
 interface CreateFollowUpModalProps {
   isOpen: boolean;
@@ -62,11 +63,7 @@ export const CreateFollowUpModal: React.FC<CreateFollowUpModalProps> = ({
   }, [selectedClientId]);
 
   // Helper to calculate date
-  const getDatePlusDays = (days: number): string => {
-    const d = new Date();
-    d.setDate(d.getDate() + days);
-    return d.toISOString().split('T')[0];
-  };
+  const getDatePlusDays = (days: number): string => addDaysLocal(days);
 
   const selectedClient = useMemo(() => {
     if (!selectedClientId) return null;

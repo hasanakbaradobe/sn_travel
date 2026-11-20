@@ -10,6 +10,7 @@ import {
 import { FollowUp, FollowUpCadence } from '../types';
 import { ClientAvatar } from './ClientAvatar';
 import { api } from '../services/api';
+import { addDaysLocal } from '../utils/date';
 
 interface CompleteFollowUpModalProps {
   isOpen: boolean;
@@ -35,9 +36,7 @@ export const CompleteFollowUpModal: React.FC<CompleteFollowUpModalProps> = ({
     if (isOpen) {
       setError(null);
       setRepeatChoice('1 Month');
-      const d = new Date();
-      d.setDate(d.getDate() + 30);
-      setCustomDate(d.toISOString().split('T')[0]);
+      setCustomDate(addDaysLocal(30));
     }
   }, [isOpen, followUp?.id]);
 
@@ -60,9 +59,7 @@ export const CompleteFollowUpModal: React.FC<CompleteFollowUpModalProps> = ({
           }
           nextDueDate = customDate;
         } else {
-          const d = new Date();
-          d.setDate(d.getDate() + (repeatChoice === '1 Month' ? 30 : 60));
-          nextDueDate = d.toISOString().split('T')[0];
+          nextDueDate = addDaysLocal(repeatChoice === '1 Month' ? 30 : 60);
         }
       }
 

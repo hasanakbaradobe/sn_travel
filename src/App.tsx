@@ -34,6 +34,7 @@ const DatabaseModal = React.lazy(() => import('./components/DatabaseModal').then
 const ReturnStatusWarningModal = React.lazy(() => import('./components/ReturnStatusWarningModal').then(m => ({ default: m.ReturnStatusWarningModal })));
 import { AlertTriangle, X, RotateCcw } from 'lucide-react';
 import { api, BootstrapPayload } from './services/api';
+import { getLocalDateString } from './utils/date';
 import {
   Client,
   VisaApplication,
@@ -156,6 +157,7 @@ export default function App() {
   const [profileRefreshKey, setProfileRefreshKey] = useState(0);
   const inFlightRefreshRef = useRef<Promise<void> | null>(null);
   const pendingRefreshQueuedRef = useRef<boolean>(false);
+  const secretCheckInFlightRef = useRef<Promise<void> | null>(null);
   const lastDataVersionRef = useRef<number>(
     typeof initialSnapshotRef.current?.dataVersion === 'number' ? initialSnapshotRef.current.dataVersion : -1
   );
@@ -280,31 +282,39 @@ export default function App() {
   };
 
   const checkSecretGate = async () => {
-    try {
-      setSecretGateChecking(true);
-      const candidateKey = extractCandidateKey();
-      const res = await api.checkSecretLogin(candidateKey || undefined);
-
-      if (!res.protected) {
-        // Protection is disabled -> anyone can access login screen
-        setSecretGatePassed(true);
-        setVerifiedSecretKey(null);
-      } else if (res.valid) {
-        // Valid secret URL key strictly in URL -> permit access to login
-        setSecretGatePassed(true);
-        const resolvedKey = res.key || candidateKey;
-        setVerifiedSecretKey(resolvedKey);
-      } else {
-        // Invalid or missing secret key in URL -> gate closed, show 404!
-        setSecretGatePassed(false);
-        setVerifiedSecretKey(null);
-      }
-    } catch (err) {
-      console.warn('[Gatekeeper] Secret gate verification error:', err);
-      setSecretGatePassed(false);
-    } finally {
-      setSecretGateChecking(false);
+    if (secretCheckInFlightRef.current) {
+      return secretCheckInFlightRef.current;
     }
+    const run = (async () => {
+      try {
+        setSecretGateChecking(true);
+        const candidateKey = extractCandidateKey();
+        const res = await api.checkSecretLogin(candidateKey || undefined);
+
+        if (!res.protected) {
+          // Protection is disabled -> anyone can access login screen
+          setSecretGatePassed(true);
+          setVerifiedSecretKey(null);
+        } else if (res.valid) {
+          // Valid secret URL key strictly in URL -> permit access to login
+          setSecretGatePassed(true);
+          const resolvedKey = res.key || candidateKey;
+          setVerifiedSecretKey(resolvedKey);
+        } else {
+          // Invalid or missing secret key in URL -> gate closed, show 404!
+          setSecretGatePassed(false);
+          setVerifiedSecretKey(null);
+        }
+      } catch (err) {
+        console.warn('[Gatekeeper] Secret gate verification error:', err);
+        setSecretGatePassed(false);
+      } finally {
+        setSecretGateChecking(false);
+        secretCheckInFlightRef.current = null;
+      }
+    })();
+    secretCheckInFlightRef.current = run;
+    return run;
   };
 
   // Verify session on mount and setup auth error interceptor
@@ -386,34 +396,48 @@ export default function App() {
   useEffect(() => {
     if (!currentUserId) return;
 
+    let cancelled = false;
     let eventSource: EventSource | null = null;
     let sseConnected = false;
     let lastPollAt = Date.now();
 
-    try {
-      const token = api.getToken();
-      const sseUrl = token ? `/api/events?token=${encodeURIComponent(token)}` : '/api/events';
-      eventSource = new EventSource(sseUrl);
-      eventSource.onopen = () => {
-        sseConnected = true;
-      };
-      eventSource.onerror = () => {
-        sseConnected = false;
-      };
-      eventSource.onmessage = (event) => {
+    const connectSse = async () => {
+      try {
+        let sseUrl = '/api/events';
         try {
-          const parsed = JSON.parse(event.data);
-          if (parsed && parsed.type === 'connected') {
-            sseConnected = true;
-          } else if (parsed && parsed.type === 'data_changed') {
-            lastPollAt = Date.now();
-            refreshAllData(true);
+          const { ticket } = await api.getSseTicket();
+          if (ticket) {
+            sseUrl = `/api/events?ticket=${encodeURIComponent(ticket)}`;
           }
-        } catch {}
-      };
-    } catch (e) {
-      console.warn('[SSE] EventSource connection failed, falling back to polling:', e);
-    }
+        } catch {
+          // Fallback to HttpOnly cookie authentication if ticket request fails
+        }
+        if (cancelled) return;
+
+        eventSource = new EventSource(sseUrl);
+        eventSource.onopen = () => {
+          sseConnected = true;
+        };
+        eventSource.onerror = () => {
+          sseConnected = false;
+        };
+        eventSource.onmessage = (event) => {
+          try {
+            const parsed = JSON.parse(event.data);
+            if (parsed && parsed.type === 'connected') {
+              sseConnected = true;
+            } else if (parsed && parsed.type === 'data_changed') {
+              lastPollAt = Date.now();
+              refreshAllData(true);
+            }
+          } catch {}
+        };
+      } catch (e) {
+        console.warn('[SSE] EventSource connection failed, falling back to polling:', e);
+      }
+    };
+
+    void connectSse();
 
     // Smart background fallback poll: every 45s when SSE is live, or every 15s if SSE is disconnected
     const interval = setInterval(() => {
@@ -427,6 +451,7 @@ export default function App() {
     }, 15000);
 
     return () => {
+      cancelled = true;
       if (eventSource) {
         eventSource.close();
       }
@@ -513,14 +538,16 @@ export default function App() {
     }
   };
 
-  const handleLogout = () => {
-    api.logout();
+  const handleLogout = async () => {
+    await api.logout();
+    lastDataVersionRef.current = -1;
     setCurrentUser(null);
     setMetrics(null);
     setClients([]);
     setApplications([]);
     setTasks([]);
     setUsers([]);
+    setHotels([]);
     setHotelBookings([]);
     setFollowUps([]);
     setSecretGatePassed(false);
@@ -833,17 +860,20 @@ export default function App() {
     const taskToDelete = tasks.find((t) => t.id === taskId);
     setTasks((prev) => prev.filter((t) => t.id !== taskId));
 
-    if (taskToDelete) {
-      if (taskToDelete.application_id) {
+    if (taskToDelete && taskToDelete.application_id) {
+      const titleLower = (taskToDelete.title || '').toLowerCase();
+      const isFollowUp = titleLower.startsWith('[follow-up]');
+      const isDeliveryTask =
+        !isFollowUp &&
+        (taskToDelete.is_delivery_task === 1 ||
+          titleLower.startsWith('delivery -') ||
+          titleLower.includes('delivery') ||
+          titleLower.includes('collection') ||
+          titleLower.includes('upcoming'));
+      if (isDeliveryTask) {
         setApplications((prev) =>
           prev.map((a) =>
             a.id === taskToDelete.application_id ? { ...a, delivery_date: null } : a
-          )
-        );
-      } else if (taskToDelete.client_id) {
-        setApplications((prev) =>
-          prev.map((a) =>
-            a.client_id === taskToDelete.client_id ? { ...a, delivery_date: null } : a
           )
         );
       }
@@ -931,7 +961,7 @@ export default function App() {
           todayTasksCount={metrics?.today_tasks || 0}
           attentionAppsCount={metrics?.apps_requiring_attention?.length || 0}
           activeHotelsCount={hotelBookings.filter(b => b.status === 'Confirmed' || b.status === 'Checked In').length}
-          dueFollowUpsCount={followUps.filter(f => f.status === 'Pending' && (f.due_date <= new Date().toISOString().split('T')[0])).length}
+          dueFollowUpsCount={followUps.filter(f => f.status === 'Pending' && (f.due_date <= getLocalDateString())).length}
         />
 
         {/* Main Content Area */}

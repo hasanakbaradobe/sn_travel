@@ -94,30 +94,52 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({
     );
   }, [invoices, statusFilter, search]);
 
-  // Aggregate Metrics (excluding Cancelled from billed/balance totals)
+  // Aggregate Metrics (excluding Cancelled from billed, collected, and balance totals; grouped by currency)
   const metrics = useMemo(() => {
     let totalBilled = 0;
     let totalCollected = 0;
     let balanceDue = 0;
     let pendingCount = 0;
+    let activeCount = 0;
+    const byCurrency: Record<string, { billed: number; collected: number; balance: number }> = {};
 
     invoices.forEach(inv => {
       if (inv.status !== 'Cancelled') {
-        totalBilled += Number(inv.total_amount) || 0;
-        balanceDue += Number(inv.balance_due) || 0;
+        activeCount++;
+        const cur = inv.currency || defaultCurrency || 'MYR';
+        if (!byCurrency[cur]) {
+          byCurrency[cur] = { billed: 0, collected: 0, balance: 0 };
+        }
+        const billed = Number(inv.total_amount) || 0;
+        const paid = Number(inv.paid_amount) || 0;
+        const balance = Number(inv.balance_due) || 0;
+
+        totalBilled += billed;
+        totalCollected += paid;
+        balanceDue += balance;
+
+        byCurrency[cur].billed += billed;
+        byCurrency[cur].collected += paid;
+        byCurrency[cur].balance += balance;
       }
-      totalCollected += Number(inv.paid_amount) || 0;
       if (inv.status === 'Pending' || inv.status === 'Partial') pendingCount++;
     });
 
+    const currencies = Object.keys(byCurrency);
+
     return {
       count: invoices.length,
+      activeCount,
       totalBilled,
       totalCollected,
       balanceDue,
       pendingCount,
+      byCurrency,
+      currencies,
+      isMultiCurrency: currencies.length > 1,
+      primaryCurrency: currencies[0] || defaultCurrency || 'MYR',
     };
-  }, [invoices]);
+  }, [invoices, defaultCurrency]);
 
   // Delete invoice handler
   const handleDeleteInvoice = async () => {
@@ -214,11 +236,21 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({
           <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">
             Total Billed
           </span>
-          <div className="text-xl sm:text-2xl font-black text-slate-900 font-mono">
-            {formatCurrency(invoices[0]?.currency || defaultCurrency)} {metrics.totalBilled.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-          </div>
+          {metrics.isMultiCurrency ? (
+            <div className="space-y-0.5">
+              {metrics.currencies.map(cur => (
+                <div key={cur} className="text-sm sm:text-base font-black text-slate-900 font-mono leading-tight">
+                  {formatCurrency(cur)} {metrics.byCurrency[cur].billed.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="text-xl sm:text-2xl font-black text-slate-900 font-mono">
+              {formatCurrency(metrics.primaryCurrency)} {metrics.totalBilled.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+            </div>
+          )}
           <span className="text-[11px] text-slate-500">
-            Across {metrics.count} invoices
+            Across {metrics.activeCount} active invoice{metrics.activeCount === 1 ? '' : 's'}
           </span>
         </div>
 
@@ -226,13 +258,25 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({
           <span className="text-[10px] font-bold text-emerald-600 uppercase tracking-wider block">
             Collected / Paid
           </span>
-          <div className="text-xl sm:text-2xl font-black text-emerald-700 font-mono">
-            {formatCurrency(invoices[0]?.currency || defaultCurrency)} {metrics.totalCollected.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-          </div>
+          {metrics.isMultiCurrency ? (
+            <div className="space-y-0.5">
+              {metrics.currencies.map(cur => (
+                <div key={cur} className="text-sm sm:text-base font-black text-emerald-700 font-mono leading-tight">
+                  {formatCurrency(cur)} {metrics.byCurrency[cur].collected.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="text-xl sm:text-2xl font-black text-emerald-700 font-mono">
+              {formatCurrency(metrics.primaryCurrency)} {metrics.totalCollected.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+            </div>
+          )}
           <span className="text-[11px] text-emerald-600 font-semibold">
-            {metrics.totalBilled > 0
-              ? `${Math.round((metrics.totalCollected / metrics.totalBilled) * 100)}% settled`
-              : '0% settled'}
+            {metrics.isMultiCurrency
+              ? 'Excludes cancelled invoices'
+              : metrics.totalBilled > 0
+                ? `${Math.round((metrics.totalCollected / metrics.totalBilled) * 100)}% settled`
+                : '0% settled'}
           </span>
         </div>
 
@@ -240,9 +284,19 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({
           <span className="text-[10px] font-bold text-amber-600 uppercase tracking-wider block">
             Outstanding Balance
           </span>
-          <div className="text-xl sm:text-2xl font-black text-amber-700 font-mono">
-            {formatCurrency(invoices[0]?.currency || defaultCurrency)} {metrics.balanceDue.toLocaleString(undefined, { minimumFractionDigits: 2 })}
-          </div>
+          {metrics.isMultiCurrency ? (
+            <div className="space-y-0.5">
+              {metrics.currencies.map(cur => (
+                <div key={cur} className="text-sm sm:text-base font-black text-amber-700 font-mono leading-tight">
+                  {formatCurrency(cur)} {metrics.byCurrency[cur].balance.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="text-xl sm:text-2xl font-black text-amber-700 font-mono">
+              {formatCurrency(metrics.primaryCurrency)} {metrics.balanceDue.toLocaleString(undefined, { minimumFractionDigits: 2 })}
+            </div>
+          )}
           <span className="text-[11px] text-amber-600">
             Awaiting full settlement
           </span>

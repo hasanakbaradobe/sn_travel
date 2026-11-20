@@ -3,6 +3,7 @@ import { X, CheckSquare, Calendar, Loader2, AlertCircle } from 'lucide-react';
 import { api } from '../services/api';
 import { TaskPriority, Client, VisaApplication } from '../types';
 import { ClientSelectSearch } from './ClientSelectSearch';
+import { getLocalDateString } from '../utils/date';
 
 interface NewTaskModalProps {
   isOpen: boolean;
@@ -29,7 +30,7 @@ export const NewTaskModal: React.FC<NewTaskModalProps> = ({
   const [description, setDescription] = useState('');
   const [selectedClientId, setSelectedClientId] = useState<number | ''>(clientId || '');
   const [selectedApplicationId, setSelectedApplicationId] = useState<number | ''>(applicationId || '');
-  const [dueDate, setDueDate] = useState(initialDueDate || new Date().toISOString().split('T')[0]);
+  const [dueDate, setDueDate] = useState(initialDueDate || getLocalDateString());
   const [priority, setPriority] = useState<TaskPriority>('Normal');
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -49,7 +50,7 @@ export const NewTaskModal: React.FC<NewTaskModalProps> = ({
       setSelectedClientId(clientId || '');
       setSelectedApplicationId(applicationId || '');
       if (initialDueDate) setDueDate(initialDueDate);
-      else setDueDate(new Date().toISOString().split('T')[0]);
+      else setDueDate(getLocalDateString());
       setTitle('');
       setDescription('');
       setPriority('Normal');

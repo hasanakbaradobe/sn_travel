@@ -5,8 +5,71 @@
  */
 
 import crypto from 'crypto';
+import fs from 'fs';
+import path from 'path';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'sn_travels_agency_jwt_secure_key_2026_super_secret_signing_salt_998811';
+function resolveJwtSecret(): string {
+  const envSecret = (process.env.JWT_SECRET || '').trim();
+  if (envSecret && envSecret.length >= 16) {
+    return envSecret;
+  }
+
+  // Avoid hardcoded secrets in source code: persist an auto-generated random key in data/.jwt-secret
+  // so local/dev restarts preserve active sessions without embedding a known key in git.
+  try {
+    const dataDir = path.resolve(process.cwd(), 'data');
+    const secretFile = path.join(dataDir, '.jwt-secret');
+    if (fs.existsSync(secretFile)) {
+      const stored = fs.readFileSync(secretFile, 'utf-8').trim();
+      if (stored.length >= 32) {
+        return stored;
+      }
+    }
+    if (!fs.existsSync(dataDir)) {
+      fs.mkdirSync(dataDir, { recursive: true });
+    }
+    const generated = crypto.randomBytes(48).toString('hex');
+    fs.writeFileSync(secretFile, generated, { encoding: 'utf-8', mode: 0o600 });
+    if (process.env.NODE_ENV === 'production') {
+      console.warn('[Security] JWT_SECRET env var is not set. Generated a local random signing key; please configure JWT_SECRET in your server environment variables.');
+    }
+    return generated;
+  } catch {
+    console.warn('[Security] JWT_SECRET env var is not set. Using an ephemeral random signing key for this process.');
+    return crypto.randomBytes(48).toString('hex');
+  }
+}
+
+const JWT_SECRET = resolveJwtSecret();
+
+// Single-use short-lived tickets for Server-Sent Events (prevents exposing long-lived JWTs in URLs/logs)
+interface SseTicketEntry {
+  userId: number;
+  expiresAt: number;
+}
+const sseTickets = new Map<string, SseTicketEntry>();
+const SSE_TICKET_TTL_MS = 30_000;
+
+export function createSseTicket(userId: number): string {
+  const now = Date.now();
+  if (sseTickets.size > 500) {
+    for (const [k, v] of sseTickets.entries()) {
+      if (v.expiresAt <= now) sseTickets.delete(k);
+    }
+  }
+  const ticket = crypto.randomBytes(24).toString('base64url');
+  sseTickets.set(ticket, { userId, expiresAt: now + SSE_TICKET_TTL_MS });
+  return ticket;
+}
+
+export function consumeSseTicket(ticket: string): number | null {
+  if (!ticket || typeof ticket !== 'string') return null;
+  const entry = sseTickets.get(ticket.trim());
+  if (!entry) return null;
+  sseTickets.delete(ticket.trim());
+  if (Date.now() > entry.expiresAt) return null;
+  return entry.userId;
+}
 
 // --------------------------------------------------------------------------
 // Password Hashing & Verification (scrypt + salt)

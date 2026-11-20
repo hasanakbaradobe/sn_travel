@@ -21,6 +21,7 @@ import {
   PaymentMethod,
 } from '../types';
 import { ClientAvatar } from './ClientAvatar';
+import { getLocalDateString } from '../utils/date';
 
 interface CreateInvoiceModalProps {
   isOpen: boolean;
@@ -62,7 +63,7 @@ export const CreateInvoiceModal: React.FC<CreateInvoiceModalProps> = ({
 
   // Form Fields
   const [invoiceNumber, setInvoiceNumber] = useState('');
-  const [issueDate, setIssueDate] = useState(new Date().toISOString().slice(0, 10));
+  const [issueDate, setIssueDate] = useState(getLocalDateString());
   const [dueDate, setDueDate] = useState('');
   const [status, setStatus] = useState<InvoiceStatus>('Pending');
   const [paymentMethod, setPaymentMethod] = useState<PaymentMethod | ''>('Bank Transfer');
@@ -155,7 +156,7 @@ export const CreateInvoiceModal: React.FC<CreateInvoiceModalProps> = ({
         }
       } else {
         setClientId(initialClientId || '');
-        const today = new Date().toISOString().slice(0, 10);
+        const today = getLocalDateString();
         setIssueDate(today);
         setDueDate('');
         setStatus('Pending');

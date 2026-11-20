@@ -63,6 +63,7 @@ import {
 } from '../types';
 import { getInvoiceLogoCandidates } from '../utils/imageUrl';
 import { ConfirmDeleteModal } from '../components/ConfirmDeleteModal';
+import { getLocalDateString, addDaysLocal } from '../utils/date';
 
 interface SettingsViewProps {
   currentUser: User | null;
@@ -108,6 +109,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [loadingInvoiceSettings, setLoadingInvoiceSettings] = useState(false);
   const [savingInvoiceSettings, setSavingInvoiceSettings] = useState(false);
   const [invoiceSettingsSuccess, setInvoiceSettingsSuccess] = useState(false);
+  const [invoiceSettingsError, setInvoiceSettingsError] = useState<string | null>(null);
 
   // Form fields for invoice settings
   const [invCompanyName, setInvCompanyName] = useState('SN Travels Agency');
@@ -241,6 +243,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [pendingRestoreText, setPendingRestoreText] = useState<string | null>(null);
   const [pendingRestoreFileName, setPendingRestoreFileName] = useState<string>('');
   const [backupSuccessMsg, setBackupSuccessMsg] = useState<string | null>(null);
+  const [backupErrorMsg, setBackupErrorMsg] = useState<string | null>(null);
   const [restoreErrorMsg, setRestoreErrorMsg] = useState<string | null>(null);
 
   // Secret Login URL & Gatekeeper State
@@ -327,11 +330,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     try {
       setDownloadingBackup(true);
       setBackupSuccessMsg(null);
+      setBackupErrorMsg(null);
       const blob = await api.downloadSqlBackup();
       const url = window.URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      link.download = `sn_travels_full_backup_${new Date().toISOString().slice(0, 10)}.sql`;
+      link.download = `sn_travels_full_backup_${getLocalDateString()}.sql`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -339,7 +343,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       setBackupSuccessMsg('Full SQL Database Backup file generated & downloaded successfully!');
       setTimeout(() => setBackupSuccessMsg(null), 5000);
     } catch (err: any) {
-      alert('Failed to generate database backup: ' + (err.message || 'Unknown error'));
+      setBackupErrorMsg('Failed to generate database backup: ' + (err.message || 'Unknown error'));
     } finally {
       setDownloadingBackup(false);
     }
@@ -350,6 +354,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     if (!file) return;
     setPendingRestoreFileName(file.name);
     setRestoreErrorMsg(null);
+    setBackupErrorMsg(null);
     const reader = new FileReader();
     reader.onload = (event) => {
       const text = event.target?.result as string;
@@ -357,7 +362,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       setRestoreModalOpen(true);
     };
     reader.onerror = () => {
-      alert('Failed to read selected backup file.');
+      setBackupErrorMsg('Failed to read selected backup file.');
     };
     reader.readAsText(file);
     e.target.value = '';
@@ -454,6 +459,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     e.preventDefault();
     setSavingInvoiceSettings(true);
     setInvoiceSettingsSuccess(false);
+    setInvoiceSettingsError(null);
 
     try {
       const updated = await api.updateInvoiceSettings({
@@ -484,7 +490,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       showFeedback('Company invoice branding & details saved successfully');
       setTimeout(() => setInvoiceSettingsSuccess(false), 4000);
     } catch (err: any) {
-      alert(err.message || 'Failed to save invoice settings');
+      setInvoiceSettingsError(err.message || 'Failed to save invoice settings');
     } finally {
       setSavingInvoiceSettings(false);
     }
@@ -1085,7 +1091,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
       setCleanupEndDate('');
       loadCleanupPreview('', '', cleanupTargets);
     } else {
-      const targetDate = new Date(Date.now() - days * 86400000).toISOString().split('T')[0];
+      const targetDate = addDaysLocal(-days);
       setCleanupEndDate(targetDate);
       loadCleanupPreview('', targetDate, cleanupTargets);
     }
@@ -1219,7 +1225,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
-    link.download = `sn_travels_purge_${new Date().toISOString().split('T')[0]}.sql`;
+    link.download = `sn_travels_purge_${getLocalDateString()}.sql`;
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -2025,6 +2031,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 <div className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-xl text-xs font-bold animate-in fade-in">
                   <CheckCircle2 className="w-4 h-4 text-emerald-600" />
                   <span>Invoice Settings Saved!</span>
+                </div>
+              )}
+              {invoiceSettingsError && (
+                <div className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-rose-50 text-rose-800 border border-rose-200 rounded-xl text-xs font-semibold animate-in fade-in">
+                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                  <span>{invoiceSettingsError}</span>
                 </div>
               )}
             </div>
@@ -3176,6 +3188,12 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 <div className="px-3 py-1.5 bg-emerald-50 text-emerald-800 border border-emerald-200 rounded-xl text-xs font-semibold flex items-center gap-1.5 animate-in fade-in">
                   <Check className="w-4 h-4 text-emerald-600 shrink-0" />
                   <span>{backupSuccessMsg}</span>
+                </div>
+              )}
+              {backupErrorMsg && (
+                <div className="px-3 py-1.5 bg-rose-50 text-rose-800 border border-rose-200 rounded-xl text-xs font-semibold flex items-center gap-1.5 animate-in fade-in">
+                  <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                  <span>{backupErrorMsg}</span>
                 </div>
               )}
             </div>

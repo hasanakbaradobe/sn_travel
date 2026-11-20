@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import { Task, TaskPriority } from '../types';
 import { getPriorityBadge } from '../utils/status';
+import { getLocalDateString } from '../utils/date';
 import { ConfirmDeleteModal } from '../components/ConfirmDeleteModal';
 
 interface TasksViewProps {
@@ -65,7 +66,7 @@ export const TasksView: React.FC<TasksViewProps> = ({
     });
   }, [tasks, filterStatus, filterPriority, search]);
 
-  const today = new Date().toISOString().split('T')[0];
+  const today = getLocalDateString();
 
   return (
     <div className="p-4 sm:p-6 lg:p-8 space-y-6 max-w-7xl mx-auto">

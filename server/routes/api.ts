@@ -16,6 +16,8 @@ import {
   validatePasswordStrength,
   timingSafeEqualStrings,
   checkEndpointRateLimit,
+  createSseTicket,
+  consumeSseTicket,
 } from '../services/auth.ts';
 import fs from 'fs';
 import path from 'path';
@@ -206,53 +208,11 @@ function buildAuthCookie(req: Request, value: string, maxAgeSeconds: number): st
   return isSecure ? `${base}; SameSite=None; Secure` : `${base}; SameSite=Lax`;
 }
 
-apiRouter.get('/events', (req: Request, res: Response) => {
-  // Require valid authenticated token via Authorization header, ?token= query parameter, or HttpOnly session cookie
-  let token = '';
-  const authHeader = req.headers.authorization;
-  if (authHeader && authHeader.startsWith('Bearer ')) {
-    token = authHeader.substring(7).trim();
-  } else if (typeof req.query.token === 'string') {
-    token = req.query.token.trim();
-  } else {
-    token = getCookieToken(req);
-  }
-
-  const payload = token ? verifyToken(token) : null;
-  const user = payload?.id ? dbService.getUserById(payload.id) : null;
-  if (!user || user.is_active !== 1) {
-    return res.status(401).json({ error: 'Authentication required for real-time event stream.' });
-  }
-
-  // Bound maximum concurrent SSE connections
-  if (sseClients.size >= 100) {
-    const oldest = sseClients.values().next().value;
-    if (oldest) {
-      try {
-        oldest.end();
-      } catch {}
-      sseClients.delete(oldest);
-    }
-  }
-
-  res.setHeader('Content-Type', 'text/event-stream');
-  res.setHeader('Cache-Control', 'no-cache, no-transform');
-  res.setHeader('Connection', 'keep-alive');
-  res.setHeader('X-Accel-Buffering', 'no');
-  if (typeof (res as any).flushHeaders === 'function') {
-    (res as any).flushHeaders();
-  }
-
-  res.write(`data: ${JSON.stringify({ type: 'connected', timestamp: Date.now() })}\n\n`);
-  if (typeof (res as any).flush === 'function') {
-    (res as any).flush();
-  }
-  sseClients.add(res);
-
-  req.on('close', () => {
-    sseClients.delete(res);
-  });
-});
+function parsePositiveId(raw: unknown): number | null {
+  if (typeof raw !== 'string' || !/^\d+$/.test(raw.trim())) return null;
+  const num = Number(raw.trim());
+  return Number.isSafeInteger(num) && num > 0 ? num : null;
+}
 
 // Invalidate API caches and notify connected browsers whenever a MySQL sync pulls fresh changes
 dbService.onSyncCompleted(() => {
@@ -294,7 +254,13 @@ apiRouter.use((req: Request, res: Response, next: NextFunction) => {
   if (['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)) {
     const originalJson = res.json;
     res.json = function (body: any) {
-      if (res.statusCode < 400 && req.path !== '/auth/login' && req.path !== '/auth/me') {
+      if (
+        res.statusCode < 400 &&
+        req.path !== '/auth/login' &&
+        req.path !== '/auth/me' &&
+        req.path !== '/auth/logout' &&
+        req.path !== '/events/ticket'
+      ) {
         broadcastDataChange('data_changed', { endpoint: req.path });
       }
       return originalJson.call(this, body);
@@ -306,6 +272,67 @@ apiRouter.use((req: Request, res: Response, next: NextFunction) => {
 // Health Check (Public)
 apiRouter.get('/health', (_req: Request, res: Response) => {
   return res.json({ status: 'ok', timestamp: new Date().toISOString(), sse_clients: sseClients.size });
+});
+
+// Real-Time Server-Sent Events Stream (placed after initial DB sync middleware; uses short-lived ticket or cookie/header auth)
+apiRouter.get('/events', (req: Request, res: Response) => {
+  let user = null;
+
+  // 1. Prefer short-lived single-use opaque ticket (?ticket=...) — never exposes long-lived JWT in URLs/logs
+  if (typeof req.query.ticket === 'string' && req.query.ticket.trim()) {
+    const ticketUserId = consumeSseTicket(req.query.ticket.trim());
+    if (ticketUserId) {
+      user = dbService.getUserById(ticketUserId);
+    }
+  }
+
+  // 2. Fallback to Authorization header or HttpOnly session cookie
+  if (!user) {
+    let token = '';
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      token = authHeader.substring(7).trim();
+    } else {
+      token = getCookieToken(req);
+    }
+    const payload = token ? verifyToken(token) : null;
+    if (payload?.id) {
+      user = dbService.getUserById(payload.id);
+    }
+  }
+
+  if (!user || user.is_active !== 1) {
+    return res.status(401).json({ error: 'Authentication required for real-time event stream.' });
+  }
+
+  // Bound maximum concurrent SSE connections
+  if (sseClients.size >= 100) {
+    const oldest = sseClients.values().next().value;
+    if (oldest) {
+      try {
+        oldest.end();
+      } catch {}
+      sseClients.delete(oldest);
+    }
+  }
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  if (typeof (res as any).flushHeaders === 'function') {
+    (res as any).flushHeaders();
+  }
+
+  res.write(`data: ${JSON.stringify({ type: 'connected', timestamp: Date.now() })}\n\n`);
+  if (typeof (res as any).flush === 'function') {
+    (res as any).flush();
+  }
+  sseClients.add(res);
+
+  req.on('close', () => {
+    sseClients.delete(res);
+  });
 });
 
 // --------------------------------------------------------------------------
@@ -394,8 +421,11 @@ function requireAdminOrSuperAdmin(req: Request, res: Response, next: NextFunctio
 // Check if secret login URL protection is enabled, and validate candidate key
 apiRouter.get('/auth/secret-check', (req: Request, res: Response) => {
   const clientIp = (req.headers['x-forwarded-for'] as string) || req.ip || req.socket.remoteAddress || 'unknown';
-  if (!checkEndpointRateLimit(`secret_check:${clientIp}`, 30, 60_000)) {
-    return res.status(429).json({ error: 'Too many verification requests. Please wait a moment.' });
+  const rl = checkEndpointRateLimit(`secret_check:${clientIp}`, 30, 60_000);
+  if (!rl.allowed) {
+    return res.status(429).json({
+      error: `Too many verification requests. Please wait ${rl.waitSeconds || 60} seconds.`,
+    });
   }
 
   const { key } = req.query;
@@ -416,7 +446,7 @@ apiRouter.get('/auth/secret-check', (req: Request, res: Response) => {
   });
 });
 
-apiRouter.post('/auth/login', (req: Request, res: Response) => {
+apiRouter.post('/auth/login', async (req: Request, res: Response) => {
   const { email, password, secretKey } = req.body;
   if (!email || !password) {
     return res.status(400).json({ error: 'Email and password are required' });
@@ -476,9 +506,10 @@ apiRouter.post('/auth/login', (req: Request, res: Response) => {
     });
   }
 
-  // Transparently upgrade legacy plain-text or SHA256 hashes to scrypt on successful login
+  // Transparently upgrade legacy plain-text or SHA256 hashes to scrypt and persist to MySQL + disk
   if (!user.password_hash.startsWith('scrypt:')) {
-    user.password_hash = hashPassword(password);
+    const upgradedHash = hashPassword(password);
+    await dbService.updateUser(user.id, { password_hash: upgradedHash }, user.id);
   }
 
   // Reset failed login tracking on success
@@ -525,6 +556,13 @@ apiRouter.use(requireAuth);
 
 // Public Website CMS Administrative Endpoints (Restricted to Admin & Super Admin)
 apiRouter.use('/public-site/admin', publicSiteAdminRouter);
+
+// Issue short-lived single-use SSE stream ticket (30s TTL) so EventSource never sends JWTs in URLs
+apiRouter.post('/events/ticket', (req: Request, res: Response) => {
+  const user = (req as any).user;
+  const ticket = createSseTicket(user.id);
+  return res.json({ ticket });
+});
 
 apiRouter.get('/auth/me', (req: Request, res: Response) => {
   const user = (req as any).user;
@@ -595,7 +633,7 @@ apiRouter.get('/bootstrap', (req: Request, res: Response) => {
   return res.json(buildBootstrapPayload(currentUser));
 });
 
-apiRouter.post('/auth/change-password', (req: Request, res: Response) => {
+apiRouter.post('/auth/change-password', async (req: Request, res: Response) => {
   const currentUser = (req as any).user;
   const { current_password, new_password } = req.body;
 
@@ -605,7 +643,8 @@ apiRouter.post('/auth/change-password', (req: Request, res: Response) => {
 
   const isCurrentValid = verifyPassword(current_password, currentUser.password_hash);
   if (!isCurrentValid) {
-    return res.status(401).json({ error: 'Current password is incorrect' });
+    // Return 400 (not 401) so the user's active session is not forcibly logged out on a typo
+    return res.status(400).json({ error: 'Current password is incorrect' });
   }
 
   const strength = validatePasswordStrength(new_password);
@@ -614,7 +653,7 @@ apiRouter.post('/auth/change-password', (req: Request, res: Response) => {
   }
 
   const newHash = hashPassword(new_password);
-  dbService.updateUser(currentUser.id, { password_hash: newHash }, currentUser.id);
+  await dbService.updateUser(currentUser.id, { password_hash: newHash }, currentUser.id);
 
   return res.json({ message: 'Password changed successfully' });
 });
@@ -681,7 +720,10 @@ apiRouter.get('/clients/next-serial', (req: Request, res: Response) => {
 });
 
 apiRouter.get('/clients/:id', (req: Request, res: Response) => {
-  const id = parseInt(req.params.id, 10);
+  const id = parsePositiveId(req.params.id);
+  if (!id) {
+    return res.status(400).json({ error: 'Invalid client ID' });
+  }
   const client = dbService.getClientById(id);
   if (!client) {
     return res.status(404).json({ error: 'Client not found' });
@@ -690,8 +732,24 @@ apiRouter.get('/clients/:id', (req: Request, res: Response) => {
 });
 
 apiRouter.post('/clients', async (req: Request, res: Response) => {
-  const currentUser = getCurrentUser(req);
-  const { full_name, passport_number, country, ignore_duplicate, custom_fields, ...rest } = req.body;
+  const currentUser = (req as any).user;
+  const {
+    client_id,
+    full_name,
+    passport_number,
+    country,
+    phone,
+    whatsapp,
+    email,
+    date_of_birth,
+    address,
+    occupation,
+    notes,
+    google_drive_url,
+    photo_url,
+    ignore_duplicate,
+    custom_fields,
+  } = req.body;
 
   if (!full_name || !passport_number || !country) {
     return res.status(400).json({ error: 'Full Name, Passport Number, and Country are required' });
@@ -710,22 +768,34 @@ apiRouter.post('/clients', async (req: Request, res: Response) => {
 
   const client = await dbService.createClient(
     {
+      client_id,
       full_name,
       passport_number,
       country,
+      phone,
+      whatsapp,
+      email,
+      date_of_birth,
+      address,
+      occupation,
+      notes,
+      google_drive_url,
+      photo_url,
       custom_fields,
-      ...rest,
     },
-    currentUser?.id || 1
+    currentUser.id
   );
 
   return res.status(201).json(client);
 });
 
 apiRouter.put('/clients/:id', async (req: Request, res: Response) => {
-  const currentUser = getCurrentUser(req);
-  const id = parseInt(req.params.id, 10);
-  const updated = await dbService.updateClient(id, req.body, currentUser?.id || 1);
+  const currentUser = (req as any).user;
+  const id = parsePositiveId(req.params.id);
+  if (!id) {
+    return res.status(400).json({ error: 'Invalid client ID' });
+  }
+  const updated = await dbService.updateClient(id, req.body, currentUser.id);
   if (!updated) {
     return res.status(404).json({ error: 'Client not found' });
   }
@@ -734,12 +804,12 @@ apiRouter.put('/clients/:id', async (req: Request, res: Response) => {
 
 apiRouter.delete('/clients/:id', async (req: Request, res: Response) => {
   try {
-    const currentUser = getCurrentUser(req);
-    const id = parseInt(req.params.id, 10);
-    if (isNaN(id)) {
+    const currentUser = (req as any).user;
+    const id = parsePositiveId(req.params.id);
+    if (!id) {
       return res.status(400).json({ error: 'Invalid client ID' });
     }
-    const success = await dbService.deleteClient(id, currentUser?.id || 1);
+    const success = await dbService.deleteClient(id, currentUser.id);
     if (!success) {
       return res.status(404).json({ error: 'Client not found' });
     }
@@ -778,7 +848,10 @@ apiRouter.get('/applications', (req: Request, res: Response) => {
 });
 
 apiRouter.get('/applications/:id', (req: Request, res: Response) => {
-  const id = parseInt(req.params.id, 10);
+  const id = parsePositiveId(req.params.id);
+  if (!id) {
+    return res.status(400).json({ error: 'Invalid application ID' });
+  }
   const app = dbService.getApplicationById(id);
   if (!app) {
     return res.status(404).json({ error: 'Application not found' });
@@ -787,7 +860,7 @@ apiRouter.get('/applications/:id', (req: Request, res: Response) => {
 });
 
 apiRouter.post('/applications', async (req: Request, res: Response) => {
-  const currentUser = getCurrentUser(req);
+  const currentUser = (req as any).user;
   const { client_id, visa_type_id, status, delivery_date, notes, assigned_user_id } = req.body;
 
   if (!client_id || !visa_type_id) {
@@ -803,15 +876,18 @@ apiRouter.post('/applications', async (req: Request, res: Response) => {
       notes,
       assigned_user_id: assigned_user_id ? Number(assigned_user_id) : undefined,
     },
-    currentUser?.id || 1
+    currentUser.id
   );
 
   return res.status(201).json(app);
 });
 
 apiRouter.patch('/applications/:id/status', async (req: Request, res: Response) => {
-  const currentUser = getCurrentUser(req);
-  const id = parseInt(req.params.id, 10);
+  const currentUser = (req as any).user;
+  const id = parsePositiveId(req.params.id);
+  if (!id) {
+    return res.status(400).json({ error: 'Invalid application ID' });
+  }
   const { status, delivery_date, notes } = req.body;
 
   if (!status) {
@@ -823,7 +899,7 @@ apiRouter.patch('/applications/:id/status', async (req: Request, res: Response) 
     status,
     delivery_date,
     notes,
-    currentUser?.id || 1
+    currentUser.id
   );
 
   if (!updated) {
@@ -834,7 +910,7 @@ apiRouter.patch('/applications/:id/status', async (req: Request, res: Response) 
 });
 
 apiRouter.patch('/applications/batch-status', async (req: Request, res: Response) => {
-  const currentUser = getCurrentUser(req);
+  const currentUser = (req as any).user;
   const { applicationIds, status, deliveryDate, notes } = req.body;
 
   if (!Array.isArray(applicationIds) || applicationIds.length === 0) {
@@ -850,7 +926,7 @@ apiRouter.patch('/applications/batch-status', async (req: Request, res: Response
     status,
     deliveryDate,
     notes,
-    currentUser?.id || 1
+    currentUser.id
   );
 
   return res.json({
@@ -860,12 +936,12 @@ apiRouter.patch('/applications/batch-status', async (req: Request, res: Response
 });
 
 apiRouter.put('/applications/:id', async (req: Request, res: Response) => {
-  const currentUser = getCurrentUser(req);
-  const id = parseInt(req.params.id, 10);
-  if (isNaN(id)) {
+  const currentUser = (req as any).user;
+  const id = parsePositiveId(req.params.id);
+  if (!id) {
     return res.status(400).json({ error: 'Invalid application ID' });
   }
-  const updated = await dbService.updateApplication(id, req.body, currentUser?.id || 1);
+  const updated = await dbService.updateApplication(id, req.body, currentUser.id);
   if (!updated) {
     return res.status(404).json({ error: 'Application not found' });
   }
@@ -873,12 +949,12 @@ apiRouter.put('/applications/:id', async (req: Request, res: Response) => {
 });
 
 apiRouter.delete('/applications/:id', async (req: Request, res: Response) => {
-  const currentUser = getCurrentUser(req);
-  const id = parseInt(req.params.id, 10);
-  if (isNaN(id)) {
+  const currentUser = (req as any).user;
+  const id = parsePositiveId(req.params.id);
+  if (!id) {
     return res.status(400).json({ error: 'Invalid application ID' });
   }
-  const ok = await dbService.deleteApplication(id, currentUser?.id || 1);
+  const ok = await dbService.deleteApplication(id, currentUser.id);
   if (!ok) {
     return res.status(404).json({ error: 'Application not found' });
   }
@@ -901,7 +977,7 @@ apiRouter.get('/tasks', (req: Request, res: Response) => {
 });
 
 apiRouter.post('/tasks', async (req: Request, res: Response) => {
-  const currentUser = getCurrentUser(req);
+  const currentUser = (req as any).user;
   const { title, description, client_id, application_id, assigned_user_id, due_date, priority } = req.body;
 
   if (!title || !due_date) {
@@ -914,23 +990,23 @@ apiRouter.post('/tasks', async (req: Request, res: Response) => {
       description,
       client_id: client_id ? Number(client_id) : null,
       application_id: application_id ? Number(application_id) : null,
-      assigned_user_id: assigned_user_id ? Number(assigned_user_id) : (currentUser?.id || 1),
+      assigned_user_id: assigned_user_id ? Number(assigned_user_id) : currentUser.id,
       due_date,
       priority,
     },
-    currentUser?.id || 1
+    currentUser.id
   );
 
   return res.status(201).json(task);
 });
 
 apiRouter.put('/tasks/:id', async (req: Request, res: Response) => {
-  const currentUser = getCurrentUser(req);
-  const id = parseInt(req.params.id, 10);
-  if (isNaN(id)) {
+  const currentUser = (req as any).user;
+  const id = parsePositiveId(req.params.id);
+  if (!id) {
     return res.status(400).json({ error: 'Invalid task ID' });
   }
-  const updated = await dbService.updateTask(id, req.body, currentUser?.id || 1);
+  const updated = await dbService.updateTask(id, req.body, currentUser.id);
   if (!updated) {
     return res.status(404).json({ error: 'Task not found' });
   }
@@ -938,9 +1014,9 @@ apiRouter.put('/tasks/:id', async (req: Request, res: Response) => {
 });
 
 apiRouter.patch('/tasks/:id/toggle', async (req: Request, res: Response) => {
-  const currentUser = getCurrentUser(req);
-  const id = parseInt(req.params.id, 10);
-  if (isNaN(id)) {
+  const currentUser = (req as any).user;
+  const id = parsePositiveId(req.params.id);
+  if (!id) {
     return res.status(400).json({ error: 'Invalid task ID' });
   }
   const currentTask = dbService.getTaskById(id);
@@ -948,17 +1024,17 @@ apiRouter.patch('/tasks/:id/toggle', async (req: Request, res: Response) => {
     return res.status(404).json({ error: 'Task not found' });
   }
   const nextStatus = currentTask.status === 'Completed' ? 'Pending' : 'Completed';
-  const updated = await dbService.updateTask(id, { status: nextStatus }, currentUser?.id || 1);
+  const updated = await dbService.updateTask(id, { status: nextStatus }, currentUser.id);
   return res.json(updated);
 });
 
 apiRouter.delete('/tasks/:id', async (req: Request, res: Response) => {
-  const currentUser = getCurrentUser(req);
-  const id = parseInt(req.params.id, 10);
-  if (isNaN(id)) {
+  const currentUser = (req as any).user;
+  const id = parsePositiveId(req.params.id);
+  if (!id) {
     return res.status(400).json({ error: 'Invalid task ID' });
   }
-  await dbService.deleteTask(id, currentUser?.id || 1);
+  await dbService.deleteTask(id, currentUser.id);
   return res.json({ message: 'Task deleted successfully' });
 });
 
@@ -986,7 +1062,7 @@ apiRouter.get('/comments', (req: Request, res: Response) => {
 });
 
 apiRouter.post('/comments', async (req: Request, res: Response) => {
-  const currentUser = getCurrentUser(req);
+  const currentUser = (req as any).user;
   const { client_id, application_id, message } = req.body;
 
   if (!client_id || !message) {
@@ -996,7 +1072,7 @@ apiRouter.post('/comments', async (req: Request, res: Response) => {
   const comment = await dbService.createComment({
     client_id: Number(client_id),
     application_id: application_id ? Number(application_id) : null,
-    user_id: currentUser?.id || 1,
+    user_id: currentUser.id,
     message,
   });
 
@@ -1004,9 +1080,9 @@ apiRouter.post('/comments', async (req: Request, res: Response) => {
 });
 
 apiRouter.put('/comments/:id', async (req: Request, res: Response) => {
-  const currentUser = getCurrentUser(req);
-  const id = parseInt(req.params.id, 10);
-  if (isNaN(id)) {
+  const currentUser = (req as any).user;
+  const id = parsePositiveId(req.params.id);
+  if (!id) {
     return res.status(400).json({ error: 'Invalid comment ID' });
   }
 
@@ -1019,7 +1095,7 @@ apiRouter.put('/comments/:id', async (req: Request, res: Response) => {
   }
 
   try {
-    const updated = await dbService.updateComment(id, rawMessage, currentUser?.id || 1);
+    const updated = await dbService.updateComment(id, rawMessage, currentUser.id);
     if (!updated) {
       return res.status(404).json({ error: 'Comment not found' });
     }
@@ -1030,13 +1106,13 @@ apiRouter.put('/comments/:id', async (req: Request, res: Response) => {
 });
 
 apiRouter.delete('/comments/:id', async (req: Request, res: Response) => {
-  const currentUser = getCurrentUser(req);
-  const id = parseInt(req.params.id, 10);
-  if (isNaN(id)) {
+  const currentUser = (req as any).user;
+  const id = parsePositiveId(req.params.id);
+  if (!id) {
     return res.status(400).json({ error: 'Invalid comment ID' });
   }
 
-  const deleted = await dbService.deleteComment(id, currentUser?.id || 1);
+  const deleted = await dbService.deleteComment(id, currentUser.id);
   if (!deleted) {
     return res.status(404).json({ error: 'Comment not found' });
   }
@@ -1057,11 +1133,8 @@ apiRouter.get('/custom-fields', (req: Request, res: Response) => {
   return res.json(fields);
 });
 
-apiRouter.post('/custom-fields', async (req: Request, res: Response) => {
-  const currentUser = getCurrentUser(req);
-  if (currentUser?.role !== 'super_admin') {
-    return res.status(403).json({ error: 'Super Admin access required to manage custom fields' });
-  }
+apiRouter.post('/custom-fields', requireSuperAdmin, async (req: Request, res: Response) => {
+  const currentUser = (req as any).user;
 
   const { field_name, field_label, field_type, field_options, is_required, display_order } = req.body;
   if (!field_name || !field_label || !field_type) {
@@ -1072,34 +1145,37 @@ apiRouter.post('/custom-fields', async (req: Request, res: Response) => {
     { field_name, field_label, field_type, field_options, is_required, display_order },
     currentUser.id
   );
+  invalidateReferenceCache('custom_fields_');
   return res.status(201).json(field);
 });
 
-apiRouter.put('/custom-fields/:id', async (req: Request, res: Response) => {
-  const currentUser = getCurrentUser(req);
-  if (currentUser?.role !== 'super_admin') {
-    return res.status(403).json({ error: 'Super Admin access required to manage custom fields' });
-  }
+apiRouter.put('/custom-fields/:id', requireSuperAdmin, async (req: Request, res: Response) => {
+  const currentUser = (req as any).user;
 
-  const id = parseInt(req.params.id, 10);
+  const id = parsePositiveId(req.params.id);
+  if (!id) {
+    return res.status(400).json({ error: 'Invalid custom field ID' });
+  }
   const updated = await dbService.updateCustomField(id, req.body, currentUser.id);
   if (!updated) {
     return res.status(404).json({ error: 'Field not found' });
   }
+  invalidateReferenceCache('custom_fields_');
   return res.json(updated);
 });
 
-apiRouter.delete('/custom-fields/:id', async (req: Request, res: Response) => {
-  const currentUser = getCurrentUser(req);
-  if (currentUser?.role !== 'super_admin') {
-    return res.status(403).json({ error: 'Super Admin access required to delete custom fields' });
-  }
+apiRouter.delete('/custom-fields/:id', requireSuperAdmin, async (req: Request, res: Response) => {
+  const currentUser = (req as any).user;
 
-  const id = parseInt(req.params.id, 10);
+  const id = parsePositiveId(req.params.id);
+  if (!id) {
+    return res.status(400).json({ error: 'Invalid custom field ID' });
+  }
   const success = await dbService.deleteCustomField(id, currentUser.id);
   if (!success) {
     return res.status(404).json({ error: 'Field not found' });
   }
+  invalidateReferenceCache('custom_fields_');
   return res.json({ message: 'Field deleted successfully' });
 });
 
@@ -1117,11 +1193,8 @@ apiRouter.get('/visa-types', (req: Request, res: Response) => {
   return res.json(list);
 });
 
-apiRouter.post('/visa-types', async (req: Request, res: Response) => {
-  const currentUser = getCurrentUser(req);
-  if (currentUser?.role !== 'super_admin') {
-    return res.status(403).json({ error: 'Super Admin access required to manage visa types' });
-  }
+apiRouter.post('/visa-types', requireSuperAdmin, async (req: Request, res: Response) => {
+  const currentUser = (req as any).user;
 
   const { name, description } = req.body;
   if (!name) {
@@ -1129,35 +1202,38 @@ apiRouter.post('/visa-types', async (req: Request, res: Response) => {
   }
 
   const vt = await dbService.createVisaType({ name, description }, currentUser.id);
+  invalidateReferenceCache('visa_types_');
   return res.status(201).json(vt);
 });
 
-apiRouter.put('/visa-types/:id', async (req: Request, res: Response) => {
-  const currentUser = getCurrentUser(req);
-  if (currentUser?.role !== 'super_admin') {
-    return res.status(403).json({ error: 'Super Admin access required' });
-  }
+apiRouter.put('/visa-types/:id', requireSuperAdmin, async (req: Request, res: Response) => {
+  const currentUser = (req as any).user;
 
-  const id = parseInt(req.params.id, 10);
+  const id = parsePositiveId(req.params.id);
+  if (!id) {
+    return res.status(400).json({ error: 'Invalid visa type ID' });
+  }
   const updated = await dbService.updateVisaType(id, req.body, currentUser.id);
   if (!updated) {
     return res.status(404).json({ error: 'Visa type not found' });
   }
+  invalidateReferenceCache('visa_types_');
   return res.json(updated);
 });
 
-apiRouter.delete('/visa-types/:id', async (req: Request, res: Response) => {
-  const currentUser = getCurrentUser(req);
-  if (currentUser?.role !== 'super_admin') {
-    return res.status(403).json({ error: 'Super Admin access required' });
-  }
+apiRouter.delete('/visa-types/:id', requireSuperAdmin, async (req: Request, res: Response) => {
+  const currentUser = (req as any).user;
 
-  const id = parseInt(req.params.id, 10);
+  const id = parsePositiveId(req.params.id);
+  if (!id) {
+    return res.status(400).json({ error: 'Invalid visa type ID' });
+  }
   try {
     const success = await dbService.deleteVisaType(id, currentUser.id);
     if (!success) {
       return res.status(404).json({ error: 'Visa type not found' });
     }
+    invalidateReferenceCache('visa_types_');
     return res.json({ message: 'Visa type deleted' });
   } catch (err: any) {
     return res.status(400).json({ error: err.message || 'Cannot delete visa type' });
@@ -1179,21 +1255,24 @@ apiRouter.get('/countries', (req: Request, res: Response) => {
 });
 
 apiRouter.post('/countries', requireAdminOrSuperAdmin, async (req: Request, res: Response) => {
-  const currentUser = getCurrentUser(req);
+  const currentUser = (req as any).user;
   const { name, code } = req.body;
   if (!name || !name.trim()) {
     return res.status(400).json({ error: 'Country name is required' });
   }
 
-  const country = await dbService.createCountry({ name: name.trim(), code }, currentUser?.id || 1);
+  const country = await dbService.createCountry({ name: name.trim(), code }, currentUser.id);
   invalidateReferenceCache('countries_');
   return res.status(201).json(country);
 });
 
 apiRouter.put('/countries/:id', requireAdminOrSuperAdmin, async (req: Request, res: Response) => {
-  const currentUser = getCurrentUser(req);
-  const id = parseInt(req.params.id, 10);
-  const updated = await dbService.updateCountry(id, req.body, currentUser?.id || 1);
+  const currentUser = (req as any).user;
+  const id = parsePositiveId(req.params.id);
+  if (!id) {
+    return res.status(400).json({ error: 'Invalid country ID' });
+  }
+  const updated = await dbService.updateCountry(id, req.body, currentUser.id);
   if (!updated) {
     return res.status(404).json({ error: 'Country not found' });
   }
@@ -1202,9 +1281,12 @@ apiRouter.put('/countries/:id', requireAdminOrSuperAdmin, async (req: Request, r
 });
 
 apiRouter.delete('/countries/:id', requireAdminOrSuperAdmin, async (req: Request, res: Response) => {
-  const currentUser = getCurrentUser(req);
-  const id = parseInt(req.params.id, 10);
-  const success = await dbService.deleteCountry(id, currentUser?.id || 1);
+  const currentUser = (req as any).user;
+  const id = parsePositiveId(req.params.id);
+  if (!id) {
+    return res.status(400).json({ error: 'Invalid country ID' });
+  }
+  const success = await dbService.deleteCountry(id, currentUser.id);
   if (!success) {
     return res.status(404).json({ error: 'Country not found' });
   }
@@ -1288,7 +1370,10 @@ apiRouter.post('/users', requireSuperAdmin, async (req: Request, res: Response) 
 
 apiRouter.put('/users/:id', requireSuperAdmin, async (req: Request, res: Response) => {
   const currentUser = (req as any).user;
-  const id = parseInt(req.params.id, 10);
+  const id = parsePositiveId(req.params.id);
+  if (!id) {
+    return res.status(400).json({ error: 'Invalid user ID' });
+  }
   const { name, email, password, role, is_active } = req.body;
 
   const targetUser = dbService.getUserById(id);
@@ -1352,7 +1437,10 @@ apiRouter.put('/users/:id', requireSuperAdmin, async (req: Request, res: Respons
 
 apiRouter.delete('/users/:id', requireSuperAdmin, async (req: Request, res: Response) => {
   const currentUser = (req as any).user;
-  const id = parseInt(req.params.id, 10);
+  const id = parsePositiveId(req.params.id);
+  if (!id) {
+    return res.status(400).json({ error: 'Invalid user ID' });
+  }
 
   if (id === currentUser.id) {
     return res.status(400).json({ error: 'You cannot delete your own account while logged in.' });
@@ -1503,7 +1591,7 @@ apiRouter.get('/db/backup', requireSuperAdmin, (_req: Request, res: Response) =>
   }
 });
 
-apiRouter.post('/db/restore', requireSuperAdmin, (req: Request, res: Response) => {
+apiRouter.post('/db/restore', requireSuperAdmin, async (req: Request, res: Response) => {
   try {
     const currentUser = (req as any).user;
     const { dumpContent } = req.body;
@@ -1511,7 +1599,7 @@ apiRouter.post('/db/restore', requireSuperAdmin, (req: Request, res: Response) =
       return res.status(400).json({ error: 'No SQL backup data provided for restoration' });
     }
 
-    const result = dbService.restoreFromSqlDump(dumpContent, currentUser.id);
+    const result = await dbService.restoreFromSqlDump(dumpContent, currentUser.id);
     return res.json({
       message: 'Database restored successfully from backup',
       restored: result.restored,
@@ -1521,7 +1609,7 @@ apiRouter.post('/db/restore', requireSuperAdmin, (req: Request, res: Response) =
   }
 });
 
-apiRouter.get('/db/schema-sql', (req: Request, res: Response) => {
+apiRouter.get('/db/schema-sql', requireSuperAdmin, (_req: Request, res: Response) => {
   try {
     const schemaPath = path.resolve(process.cwd(), 'database/schema.sql');
     if (fs.existsSync(schemaPath)) {
@@ -1534,7 +1622,7 @@ apiRouter.get('/db/schema-sql', (req: Request, res: Response) => {
   }
 });
 
-apiRouter.get('/db/seed-sql', (req: Request, res: Response) => {
+apiRouter.get('/db/seed-sql', requireSuperAdmin, (_req: Request, res: Response) => {
   try {
     const seedPath = path.resolve(process.cwd(), 'database/seed.sql');
     if (fs.existsSync(seedPath)) {
@@ -1598,7 +1686,10 @@ apiRouter.get('/hotels', (req: Request, res: Response) => {
 });
 
 apiRouter.get('/hotels/:id', (req: Request, res: Response) => {
-  const id = parseInt(req.params.id, 10);
+  const id = parsePositiveId(req.params.id);
+  if (!id) {
+    return res.status(400).json({ error: 'Invalid hotel ID' });
+  }
   const hotel = dbService.getHotelById(id);
   if (!hotel) {
     return res.status(404).json({ error: 'Hotel not found' });
@@ -1607,7 +1698,7 @@ apiRouter.get('/hotels/:id', (req: Request, res: Response) => {
 });
 
 apiRouter.post('/hotels', requireAdminOrSuperAdmin, async (req: Request, res: Response) => {
-  const currentUser = getCurrentUser(req);
+  const currentUser = (req as any).user;
   const { name, city, address, star_rating, phone, email, notes } = req.body;
   if (!name || !name.trim()) {
     return res.status(400).json({ error: 'Hotel name is required' });
@@ -1615,16 +1706,19 @@ apiRouter.post('/hotels', requireAdminOrSuperAdmin, async (req: Request, res: Re
 
   const hotel = await dbService.createHotel(
     { name, city, address, star_rating, phone, email, notes },
-    currentUser?.id || 1
+    currentUser.id
   );
   invalidateReferenceCache('hotels_');
   return res.status(201).json(hotel);
 });
 
 apiRouter.put('/hotels/:id', requireAdminOrSuperAdmin, async (req: Request, res: Response) => {
-  const currentUser = getCurrentUser(req);
-  const id = parseInt(req.params.id, 10);
-  const updated = await dbService.updateHotel(id, req.body, currentUser?.id || 1);
+  const currentUser = (req as any).user;
+  const id = parsePositiveId(req.params.id);
+  if (!id) {
+    return res.status(400).json({ error: 'Invalid hotel ID' });
+  }
+  const updated = await dbService.updateHotel(id, req.body, currentUser.id);
   if (!updated) {
     return res.status(404).json({ error: 'Hotel not found' });
   }
@@ -1633,9 +1727,12 @@ apiRouter.put('/hotels/:id', requireAdminOrSuperAdmin, async (req: Request, res:
 });
 
 apiRouter.delete('/hotels/:id', requireAdminOrSuperAdmin, async (req: Request, res: Response) => {
-  const currentUser = getCurrentUser(req);
-  const id = parseInt(req.params.id, 10);
-  const ok = await dbService.deleteHotel(id, currentUser?.id || 1);
+  const currentUser = (req as any).user;
+  const id = parsePositiveId(req.params.id);
+  if (!id) {
+    return res.status(400).json({ error: 'Invalid hotel ID' });
+  }
+  const ok = await dbService.deleteHotel(id, currentUser.id);
   if (!ok) {
     return res.status(404).json({ error: 'Hotel not found' });
   }
@@ -1647,15 +1744,21 @@ apiRouter.delete('/hotels/:id', requireAdminOrSuperAdmin, async (req: Request, r
 // Hotel Room Types Endpoints
 // --------------------------------------------------------------------------
 apiRouter.get('/hotels/:id/rooms', (req: Request, res: Response) => {
-  const hotelId = parseInt(req.params.id, 10);
+  const hotelId = parsePositiveId(req.params.id);
+  if (!hotelId) {
+    return res.status(400).json({ error: 'Invalid hotel ID' });
+  }
   const activeOnly = req.query.active_only === 'true';
   const rooms = dbService.getHotelRooms(hotelId, activeOnly);
   return res.json(rooms);
 });
 
 apiRouter.post('/hotels/:id/rooms', requireAdminOrSuperAdmin, async (req: Request, res: Response) => {
-  const currentUser = getCurrentUser(req);
-  const hotelId = parseInt(req.params.id, 10);
+  const currentUser = (req as any).user;
+  const hotelId = parsePositiveId(req.params.id);
+  if (!hotelId) {
+    return res.status(400).json({ error: 'Invalid hotel ID' });
+  }
   const { name, price_per_night, currency, capacity, description } = req.body;
   if (!name || !name.trim()) {
     return res.status(400).json({ error: 'Room type name is required' });
@@ -1664,16 +1767,19 @@ apiRouter.post('/hotels/:id/rooms', requireAdminOrSuperAdmin, async (req: Reques
   const room = await dbService.createHotelRoom(
     hotelId,
     { name, price_per_night, currency, capacity, description },
-    currentUser?.id || 1
+    currentUser.id
   );
   invalidateReferenceCache('hotels_');
   return res.status(201).json(room);
 });
 
 apiRouter.put('/hotel-rooms/:id', requireAdminOrSuperAdmin, async (req: Request, res: Response) => {
-  const currentUser = getCurrentUser(req);
-  const id = parseInt(req.params.id, 10);
-  const updated = await dbService.updateHotelRoom(id, req.body, currentUser?.id || 1);
+  const currentUser = (req as any).user;
+  const id = parsePositiveId(req.params.id);
+  if (!id) {
+    return res.status(400).json({ error: 'Invalid room type ID' });
+  }
+  const updated = await dbService.updateHotelRoom(id, req.body, currentUser.id);
   if (!updated) {
     return res.status(404).json({ error: 'Room type not found' });
   }
@@ -1682,9 +1788,12 @@ apiRouter.put('/hotel-rooms/:id', requireAdminOrSuperAdmin, async (req: Request,
 });
 
 apiRouter.delete('/hotel-rooms/:id', requireAdminOrSuperAdmin, async (req: Request, res: Response) => {
-  const currentUser = getCurrentUser(req);
-  const id = parseInt(req.params.id, 10);
-  const ok = await dbService.deleteHotelRoom(id, currentUser?.id || 1);
+  const currentUser = (req as any).user;
+  const id = parsePositiveId(req.params.id);
+  if (!id) {
+    return res.status(400).json({ error: 'Invalid room type ID' });
+  }
+  const ok = await dbService.deleteHotelRoom(id, currentUser.id);
   if (!ok) {
     return res.status(404).json({ error: 'Room type not found' });
   }
@@ -1707,7 +1816,10 @@ apiRouter.get('/hotel-bookings', (req: Request, res: Response) => {
 });
 
 apiRouter.get('/hotel-bookings/:id', (req: Request, res: Response) => {
-  const id = parseInt(req.params.id, 10);
+  const id = parsePositiveId(req.params.id);
+  if (!id) {
+    return res.status(400).json({ error: 'Invalid booking ID' });
+  }
   const booking = dbService.getHotelBookingById(id);
   if (!booking) {
     return res.status(404).json({ error: 'Booking not found' });
@@ -1716,7 +1828,7 @@ apiRouter.get('/hotel-bookings/:id', (req: Request, res: Response) => {
 });
 
 apiRouter.post('/hotel-bookings', async (req: Request, res: Response) => {
-  const currentUser = getCurrentUser(req);
+  const currentUser = (req as any).user;
   const {
     client_id,
     hotel_id,
@@ -1767,7 +1879,7 @@ apiRouter.post('/hotel-bookings', async (req: Request, res: Response) => {
         price_details,
         currency,
       },
-      currentUser?.id || 1
+      currentUser.id
     );
     return res.status(201).json(booking);
   } catch (err: any) {
@@ -1776,15 +1888,18 @@ apiRouter.post('/hotel-bookings', async (req: Request, res: Response) => {
 });
 
 apiRouter.put('/hotel-bookings/:id', async (req: Request, res: Response) => {
-  const currentUser = getCurrentUser(req);
-  const id = parseInt(req.params.id, 10);
+  const currentUser = (req as any).user;
+  const id = parsePositiveId(req.params.id);
+  if (!id) {
+    return res.status(400).json({ error: 'Invalid booking ID' });
+  }
   const { check_in_date, check_out_date } = req.body;
 
   if (check_in_date && check_out_date && check_out_date < check_in_date) {
     return res.status(400).json({ error: 'Check-out date cannot be earlier than check-in date' });
   }
 
-  const updated = await dbService.updateHotelBooking(id, req.body, currentUser?.id || 1);
+  const updated = await dbService.updateHotelBooking(id, req.body, currentUser.id);
   if (!updated) {
     return res.status(404).json({ error: 'Booking not found' });
   }
@@ -1792,9 +1907,12 @@ apiRouter.put('/hotel-bookings/:id', async (req: Request, res: Response) => {
 });
 
 apiRouter.delete('/hotel-bookings/:id', async (req: Request, res: Response) => {
-  const currentUser = getCurrentUser(req);
-  const id = parseInt(req.params.id, 10);
-  const ok = await dbService.deleteHotelBooking(id, currentUser?.id || 1);
+  const currentUser = (req as any).user;
+  const id = parsePositiveId(req.params.id);
+  if (!id) {
+    return res.status(400).json({ error: 'Invalid booking ID' });
+  }
+  const ok = await dbService.deleteHotelBooking(id, currentUser.id);
   if (!ok) {
     return res.status(404).json({ error: 'Booking not found' });
   }
@@ -1816,7 +1934,10 @@ apiRouter.get('/follow-ups', (req: Request, res: Response) => {
 });
 
 apiRouter.get('/follow-ups/:id', (req: Request, res: Response) => {
-  const id = parseInt(req.params.id, 10);
+  const id = parsePositiveId(req.params.id);
+  if (!id) {
+    return res.status(400).json({ error: 'Invalid follow-up ID' });
+  }
   const followUp = dbService.getFollowUpById(id);
   if (!followUp) {
     return res.status(404).json({ error: 'Follow-up not found' });
@@ -1825,7 +1946,7 @@ apiRouter.get('/follow-ups/:id', (req: Request, res: Response) => {
 });
 
 apiRouter.post('/follow-ups', async (req: Request, res: Response) => {
-  const currentUser = getCurrentUser(req);
+  const currentUser = (req as any).user;
   const {
     client_id,
     title,
@@ -1858,7 +1979,7 @@ apiRouter.post('/follow-ups', async (req: Request, res: Response) => {
       message_template: message_template ? String(message_template).trim() : null,
       priority: priority || 'Normal',
       assigned_user_id: assigned_user_id ? parseInt(assigned_user_id, 10) : undefined,
-    }, currentUser?.id || 1);
+    }, currentUser.id);
 
     return res.status(201).json(followUp);
   } catch (err: any) {
@@ -1867,8 +1988,11 @@ apiRouter.post('/follow-ups', async (req: Request, res: Response) => {
 });
 
 apiRouter.put('/follow-ups/:id', async (req: Request, res: Response) => {
-  const currentUser = getCurrentUser(req);
-  const id = parseInt(req.params.id, 10);
+  const currentUser = (req as any).user;
+  const id = parsePositiveId(req.params.id);
+  if (!id) {
+    return res.status(400).json({ error: 'Invalid follow-up ID' });
+  }
   const {
     title,
     reason,
@@ -1896,7 +2020,7 @@ apiRouter.put('/follow-ups/:id', async (req: Request, res: Response) => {
       status,
       completed_notes,
       assigned_user_id: assigned_user_id !== undefined ? (assigned_user_id ? parseInt(assigned_user_id, 10) : null) : undefined,
-    }, currentUser?.id || 1);
+    }, currentUser.id);
 
     if (!updated) {
       return res.status(404).json({ error: 'Follow-up not found' });
@@ -1908,8 +2032,11 @@ apiRouter.put('/follow-ups/:id', async (req: Request, res: Response) => {
 });
 
 apiRouter.post('/follow-ups/:id/complete', async (req: Request, res: Response) => {
-  const currentUser = getCurrentUser(req);
-  const id = parseInt(req.params.id, 10);
+  const currentUser = (req as any).user;
+  const id = parsePositiveId(req.params.id);
+  if (!id) {
+    return res.status(400).json({ error: 'Invalid follow-up ID' });
+  }
   const { completed_notes, schedule_next, next_cadence, next_due_date } = req.body;
 
   try {
@@ -1918,7 +2045,7 @@ apiRouter.post('/follow-ups/:id/complete', async (req: Request, res: Response) =
       schedule_next: Boolean(schedule_next),
       next_cadence,
       next_due_date,
-    }, currentUser?.id || 1);
+    }, currentUser.id);
 
     if (!result) {
       return res.status(404).json({ error: 'Follow-up not found' });
@@ -1930,12 +2057,12 @@ apiRouter.post('/follow-ups/:id/complete', async (req: Request, res: Response) =
 });
 
 apiRouter.delete('/follow-ups/:id', async (req: Request, res: Response) => {
-  const currentUser = getCurrentUser(req);
-  const id = parseInt(req.params.id, 10);
-  if (isNaN(id)) {
+  const currentUser = (req as any).user;
+  const id = parsePositiveId(req.params.id);
+  if (!id) {
     return res.status(400).json({ error: 'Invalid follow-up ID' });
   }
-  await dbService.deleteFollowUp(id, currentUser?.id || 1);
+  await dbService.deleteFollowUp(id, currentUser.id);
   return res.json({ success: true, message: 'Follow-up deleted successfully' });
 });
 
@@ -1949,7 +2076,8 @@ const imageProxyCache = new Map<
 
 apiRouter.get('/proxy-image', async (req: Request, res: Response) => {
   const clientIp = (req.headers['x-forwarded-for'] as string) || req.ip || req.socket.remoteAddress || 'unknown';
-  if (!checkEndpointRateLimit(`proxy_img:${clientIp}`, 120, 60_000)) {
+  const rl = checkEndpointRateLimit(`proxy_img:${clientIp}`, 120, 60_000);
+  if (!rl.allowed) {
     return res.status(429).send('Too many image proxy requests');
   }
 
@@ -2184,9 +2312,9 @@ apiRouter.get('/invoice-settings', (_req: Request, res: Response) => {
 });
 
 apiRouter.put('/invoice-settings', requireAdminOrSuperAdmin, async (req: Request, res: Response) => {
-  const currentUser = getCurrentUser(req);
+  const currentUser = (req as any).user;
   try {
-    const updated = await dbService.updateInvoiceSettings(req.body, currentUser?.id || 1);
+    const updated = await dbService.updateInvoiceSettings(req.body, currentUser.id);
     invalidateReferenceCache('invoice_settings');
     broadcastDataChange('invoice_settings_updated', { settings: updated });
     return res.json(updated);
@@ -2208,7 +2336,7 @@ apiRouter.get('/invoice-catalog', (req: Request, res: Response) => {
 });
 
 apiRouter.post('/invoice-catalog', requireAdminOrSuperAdmin, async (req: Request, res: Response) => {
-  const currentUser = getCurrentUser(req);
+  const currentUser = (req as any).user;
   const { name, default_unit_price, category, description, is_active, display_order } = req.body;
 
   if (!name || !name.trim()) {
@@ -2225,7 +2353,7 @@ apiRouter.post('/invoice-catalog', requireAdminOrSuperAdmin, async (req: Request
         is_active: is_active !== undefined ? Number(is_active) : 1,
         display_order: display_order !== undefined && Number(display_order) > 0 ? Number(display_order) : 0,
       },
-      currentUser?.id || 1
+      currentUser.id
     );
 
     invalidateReferenceCache('invoice_catalog');
@@ -2237,7 +2365,7 @@ apiRouter.post('/invoice-catalog', requireAdminOrSuperAdmin, async (req: Request
 });
 
 apiRouter.put('/invoice-catalog/reorder', requireAdminOrSuperAdmin, async (req: Request, res: Response) => {
-  const currentUser = getCurrentUser(req);
+  const currentUser = (req as any).user;
   const { orderedIds } = req.body;
 
   if (!Array.isArray(orderedIds) || orderedIds.length === 0) {
@@ -2247,7 +2375,7 @@ apiRouter.put('/invoice-catalog/reorder', requireAdminOrSuperAdmin, async (req: 
   try {
     const items = await dbService.reorderInvoiceCatalogItems(
       orderedIds.map((id: any) => Number(id)),
-      currentUser?.id || 1
+      currentUser.id
     );
     invalidateReferenceCache('invoice_catalog');
     broadcastDataChange('invoice_catalog_updated', { items });
@@ -2258,10 +2386,13 @@ apiRouter.put('/invoice-catalog/reorder', requireAdminOrSuperAdmin, async (req: 
 });
 
 apiRouter.put('/invoice-catalog/:id', requireAdminOrSuperAdmin, async (req: Request, res: Response) => {
-  const currentUser = getCurrentUser(req);
-  const id = parseInt(req.params.id, 10);
+  const currentUser = (req as any).user;
+  const id = parsePositiveId(req.params.id);
+  if (!id) {
+    return res.status(400).json({ error: 'Invalid catalog item ID' });
+  }
   try {
-    const updated = await dbService.updateInvoiceCatalogItem(id, req.body, currentUser?.id || 1);
+    const updated = await dbService.updateInvoiceCatalogItem(id, req.body, currentUser.id);
     if (!updated) {
       return res.status(404).json({ error: 'Catalog item not found' });
     }
@@ -2274,10 +2405,13 @@ apiRouter.put('/invoice-catalog/:id', requireAdminOrSuperAdmin, async (req: Requ
 });
 
 apiRouter.delete('/invoice-catalog/:id', requireAdminOrSuperAdmin, async (req: Request, res: Response) => {
-  const currentUser = getCurrentUser(req);
-  const id = parseInt(req.params.id, 10);
+  const currentUser = (req as any).user;
+  const id = parsePositiveId(req.params.id);
+  if (!id) {
+    return res.status(400).json({ error: 'Invalid catalog item ID' });
+  }
   try {
-    const ok = await dbService.deleteInvoiceCatalogItem(id, currentUser?.id || 1);
+    const ok = await dbService.deleteInvoiceCatalogItem(id, currentUser.id);
     if (!ok) {
       return res.status(404).json({ error: 'Catalog item not found' });
     }
@@ -2301,7 +2435,10 @@ apiRouter.get('/invoices', (req: Request, res: Response) => {
 });
 
 apiRouter.get('/invoices/:id', (req: Request, res: Response) => {
-  const id = parseInt(req.params.id, 10);
+  const id = parsePositiveId(req.params.id);
+  if (!id) {
+    return res.status(400).json({ error: 'Invalid invoice ID' });
+  }
   const invoice = dbService.getInvoiceById(id);
   if (!invoice) {
     return res.status(404).json({ error: 'Invoice not found' });
@@ -2310,7 +2447,7 @@ apiRouter.get('/invoices/:id', (req: Request, res: Response) => {
 });
 
 apiRouter.post('/invoices', async (req: Request, res: Response) => {
-  const currentUser = getCurrentUser(req);
+  const currentUser = (req as any).user;
   const { client_id, items } = req.body;
 
   if (!client_id) {
@@ -2321,7 +2458,7 @@ apiRouter.post('/invoices', async (req: Request, res: Response) => {
   }
 
   try {
-    const newInvoice = await dbService.createInvoice(req.body, currentUser?.id || 1);
+    const newInvoice = await dbService.createInvoice(req.body, currentUser.id);
     broadcastDataChange('invoice_created', { invoice: newInvoice });
     return res.status(201).json(newInvoice);
   } catch (err: any) {
@@ -2330,10 +2467,13 @@ apiRouter.post('/invoices', async (req: Request, res: Response) => {
 });
 
 apiRouter.put('/invoices/:id', async (req: Request, res: Response) => {
-  const currentUser = getCurrentUser(req);
-  const id = parseInt(req.params.id, 10);
+  const currentUser = (req as any).user;
+  const id = parsePositiveId(req.params.id);
+  if (!id) {
+    return res.status(400).json({ error: 'Invalid invoice ID' });
+  }
   try {
-    const updated = await dbService.updateInvoice(id, req.body, currentUser?.id || 1);
+    const updated = await dbService.updateInvoice(id, req.body, currentUser.id);
     if (!updated) {
       return res.status(404).json({ error: 'Invoice not found' });
     }
@@ -2345,10 +2485,13 @@ apiRouter.put('/invoices/:id', async (req: Request, res: Response) => {
 });
 
 apiRouter.delete('/invoices/:id', async (req: Request, res: Response) => {
-  const currentUser = getCurrentUser(req);
-  const id = parseInt(req.params.id, 10);
+  const currentUser = (req as any).user;
+  const id = parsePositiveId(req.params.id);
+  if (!id) {
+    return res.status(400).json({ error: 'Invalid invoice ID' });
+  }
   try {
-    const ok = await dbService.deleteInvoice(id, currentUser?.id || 1);
+    const ok = await dbService.deleteInvoice(id, currentUser.id);
     if (!ok) {
       return res.status(404).json({ error: 'Invoice not found' });
     }

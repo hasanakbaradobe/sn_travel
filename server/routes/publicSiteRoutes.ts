@@ -25,6 +25,12 @@ function verifyExportToken(providedToken: string, expectedToken: string): boolea
   return timingSafeEqualStrings(cleanProvided, cleanExpected);
 }
 
+function parsePositiveId(raw: string): number | null {
+  if (!/^\d+$/.test(String(raw || '').trim())) return null;
+  const parsed = parseInt(raw, 10);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
 // --------------------------------------------------------------------------
 // 1. Protected Publication Export Endpoint (Server-to-Server for Netlify Build)
 // Route: GET /api/public-site/export
@@ -373,7 +379,8 @@ publicSiteAdminRouter.put('/hotels-reorder', async (req: Request, res: Response)
 publicSiteAdminRouter.put('/hotels/:id', async (req: Request, res: Response) => {
   try {
     const user = (req as any).user;
-    const id = parseInt(req.params.id, 10);
+    const id = parsePositiveId(req.params.id);
+    if (!id) return res.status(400).json({ error: 'Invalid hotel ID' });
     const updated = await publicSiteDb.updateHotel(id, req.body, user.id);
     if (!updated) return res.status(404).json({ error: 'Hotel not found' });
     return res.json(updated);
@@ -385,7 +392,8 @@ publicSiteAdminRouter.put('/hotels/:id', async (req: Request, res: Response) => 
 publicSiteAdminRouter.delete('/hotels/:id', async (req: Request, res: Response) => {
   try {
     const user = (req as any).user;
-    const id = parseInt(req.params.id, 10);
+    const id = parsePositiveId(req.params.id);
+    if (!id) return res.status(400).json({ error: 'Invalid hotel ID' });
     const ok = await publicSiteDb.deleteHotel(id, user.id);
     if (!ok) return res.status(404).json({ error: 'Hotel not found' });
     return res.json({ success: true, message: 'Hotel and its rooms deleted' });
@@ -422,7 +430,8 @@ publicSiteAdminRouter.put('/rooms-reorder', async (req: Request, res: Response) 
 publicSiteAdminRouter.put('/rooms/:id', async (req: Request, res: Response) => {
   try {
     const user = (req as any).user;
-    const id = parseInt(req.params.id, 10);
+    const id = parsePositiveId(req.params.id);
+    if (!id) return res.status(400).json({ error: 'Invalid room ID' });
     const updated = await publicSiteDb.updateRoom(id, req.body, user.id);
     if (!updated) return res.status(404).json({ error: 'Room not found' });
     return res.json(updated);
@@ -434,7 +443,8 @@ publicSiteAdminRouter.put('/rooms/:id', async (req: Request, res: Response) => {
 publicSiteAdminRouter.delete('/rooms/:id', async (req: Request, res: Response) => {
   try {
     const user = (req as any).user;
-    const id = parseInt(req.params.id, 10);
+    const id = parsePositiveId(req.params.id);
+    if (!id) return res.status(400).json({ error: 'Invalid room ID' });
     const ok = await publicSiteDb.deleteRoom(id, user.id);
     if (!ok) return res.status(404).json({ error: 'Room not found' });
     return res.json({ success: true, message: 'Room deleted' });
@@ -471,7 +481,8 @@ publicSiteAdminRouter.put('/facilities-reorder', async (req: Request, res: Respo
 publicSiteAdminRouter.put('/facilities/:id', async (req: Request, res: Response) => {
   try {
     const user = (req as any).user;
-    const id = parseInt(req.params.id, 10);
+    const id = parsePositiveId(req.params.id);
+    if (!id) return res.status(400).json({ error: 'Invalid facility ID' });
     const updated = await publicSiteDb.updateFacility(id, req.body, user.id);
     if (!updated) return res.status(404).json({ error: 'Facility not found' });
     return res.json(updated);
@@ -483,7 +494,8 @@ publicSiteAdminRouter.put('/facilities/:id', async (req: Request, res: Response)
 publicSiteAdminRouter.delete('/facilities/:id', async (req: Request, res: Response) => {
   try {
     const user = (req as any).user;
-    const id = parseInt(req.params.id, 10);
+    const id = parsePositiveId(req.params.id);
+    if (!id) return res.status(400).json({ error: 'Invalid facility ID' });
     const ok = await publicSiteDb.deleteFacility(id, user.id);
     if (!ok) return res.status(404).json({ error: 'Facility not found' });
     return res.json({ success: true, message: 'Facility deleted' });
@@ -520,7 +532,8 @@ publicSiteAdminRouter.put('/gallery-reorder', async (req: Request, res: Response
 publicSiteAdminRouter.put('/gallery/:id', async (req: Request, res: Response) => {
   try {
     const user = (req as any).user;
-    const id = parseInt(req.params.id, 10);
+    const id = parsePositiveId(req.params.id);
+    if (!id) return res.status(400).json({ error: 'Invalid gallery image ID' });
     const updated = await publicSiteDb.updateGalleryItem(id, req.body, user.id);
     if (!updated) return res.status(404).json({ error: 'Gallery image not found' });
     return res.json(updated);
@@ -532,7 +545,8 @@ publicSiteAdminRouter.put('/gallery/:id', async (req: Request, res: Response) =>
 publicSiteAdminRouter.delete('/gallery/:id', async (req: Request, res: Response) => {
   try {
     const user = (req as any).user;
-    const id = parseInt(req.params.id, 10);
+    const id = parsePositiveId(req.params.id);
+    if (!id) return res.status(400).json({ error: 'Invalid gallery image ID' });
     const ok = await publicSiteDb.deleteGalleryItem(id, user.id);
     if (!ok) return res.status(404).json({ error: 'Gallery image not found' });
     return res.json({ success: true, message: 'Gallery image deleted' });
@@ -569,7 +583,8 @@ publicSiteAdminRouter.put('/faqs-reorder', async (req: Request, res: Response) =
 publicSiteAdminRouter.put('/faqs/:id', async (req: Request, res: Response) => {
   try {
     const user = (req as any).user;
-    const id = parseInt(req.params.id, 10);
+    const id = parsePositiveId(req.params.id);
+    if (!id) return res.status(400).json({ error: 'Invalid FAQ ID' });
     const updated = await publicSiteDb.updateFaq(id, req.body, user.id);
     if (!updated) return res.status(404).json({ error: 'FAQ not found' });
     return res.json(updated);
@@ -581,7 +596,8 @@ publicSiteAdminRouter.put('/faqs/:id', async (req: Request, res: Response) => {
 publicSiteAdminRouter.delete('/faqs/:id', async (req: Request, res: Response) => {
   try {
     const user = (req as any).user;
-    const id = parseInt(req.params.id, 10);
+    const id = parsePositiveId(req.params.id);
+    if (!id) return res.status(400).json({ error: 'Invalid FAQ ID' });
     const ok = await publicSiteDb.deleteFaq(id, user.id);
     if (!ok) return res.status(404).json({ error: 'FAQ not found' });
     return res.json({ success: true, message: 'FAQ deleted' });
@@ -608,7 +624,8 @@ publicSiteAdminRouter.post('/publish', async (req: Request, res: Response) => {
 // Verify Netlify Deployment Status (Step 5)
 publicSiteAdminRouter.post('/verify-deployment/:id', async (req: Request, res: Response) => {
   try {
-    const pubId = parseInt(req.params.id, 10);
+    const pubId = parsePositiveId(req.params.id);
+    if (!pubId) return res.status(400).json({ error: 'Invalid publication ID' });
     const result = await publicSiteDb.verifyNetlifyDeployment(pubId);
     return res.json(result);
   } catch (err: any) {

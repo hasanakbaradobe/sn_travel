@@ -318,6 +318,7 @@ class ApiService {
             response.status === 401 &&
             !suppressAuthError &&
             endpoint !== '/auth/login' &&
+            endpoint !== '/auth/change-password' &&
             endpoint !== '/scan-passport'
           ) {
             this.setCurrentUser(null);
@@ -429,7 +430,16 @@ class ApiService {
     });
   }
 
+  async getSseTicket(): Promise<{ ticket: string }> {
+    return this.request<{ ticket: string }>('/events/ticket', {
+      method: 'POST',
+      suppressAuthError: true,
+    });
+  }
+
   async logout() {
+    // Clear local session & cached workspace immediately so subsequent requests or state never leak
+    this.setCurrentUser(null);
     try {
       await fetch(`${API_BASE}/auth/logout`, {
         method: 'POST',
@@ -438,7 +448,6 @@ class ApiService {
     } catch {
       // ignore network error during logout
     }
-    this.setCurrentUser(null);
   }
 
   // Passport Scanner (100% Local In-Browser Execution - Zero AI, Zero Server Calls)

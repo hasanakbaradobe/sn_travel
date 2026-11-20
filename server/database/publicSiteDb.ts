@@ -1112,10 +1112,10 @@ function loadStore(): PublicSiteStore {
       };
 
       if (!parsed.kl_9_hotels_migrated_v1) {
-        loaded.hotels = getInitialKualaLumpurPublicHotels(new Date().toISOString());
-        loaded.rooms = [];
-        loaded.nextIds.hotels = 10;
-        loaded.nextIds.rooms = 1;
+        if (loaded.hotels.length === 0 && loaded.rooms.length === 0) {
+          loaded.hotels = getInitialKualaLumpurPublicHotels(new Date().toISOString());
+          loaded.nextIds.hotels = 10;
+        }
         loaded.kl_9_hotels_migrated_v1 = true;
         saveStore(loaded);
       }
@@ -1550,7 +1550,7 @@ async function ensureMySQLTablesAndSync(): Promise<void> {
           (store as any).kl_9_hotels_migrated_v1 = true;
           saveStore(store);
         } else {
-          if (Array.isArray(hotelRows) && hotelRows.length > 0) {
+          if (Array.isArray(hotelRows)) {
             store.hotels = hotelRows.map((h: any) => ({
               id: Number(h.id),
               crm_hotel_id: h.crm_hotel_id !== null && h.crm_hotel_id !== undefined ? Number(h.crm_hotel_id) : null,
@@ -1581,7 +1581,9 @@ async function ensureMySQLTablesAndSync(): Promise<void> {
               created_at: h.created_at ? new Date(h.created_at).toISOString() : new Date().toISOString(),
               updated_at: h.updated_at ? new Date(h.updated_at).toISOString() : new Date().toISOString(),
             }));
-            store.nextIds.hotels = Math.max(store.nextIds.hotels, ...store.hotels.map(h => h.id + 1));
+            if (store.hotels.length > 0) {
+              store.nextIds.hotels = Math.max(store.nextIds.hotels, ...store.hotels.map(h => h.id + 1));
+            }
           }
 
           if (Array.isArray(roomRows)) {
@@ -1615,7 +1617,7 @@ async function ensureMySQLTablesAndSync(): Promise<void> {
           }
         }
 
-        if (Array.isArray(facilityRows) && facilityRows.length > 0) {
+        if (Array.isArray(facilityRows)) {
           store.facilities = facilityRows.map((f: any) => ({
             id: Number(f.id),
             name: f.name || '',
@@ -1629,10 +1631,12 @@ async function ensureMySQLTablesAndSync(): Promise<void> {
             created_at: f.created_at ? new Date(f.created_at).toISOString() : new Date().toISOString(),
             updated_at: f.updated_at ? new Date(f.updated_at).toISOString() : new Date().toISOString(),
           }));
-          store.nextIds.facilities = Math.max(store.nextIds.facilities, ...store.facilities.map(f => f.id + 1));
+          if (store.facilities.length > 0) {
+            store.nextIds.facilities = Math.max(store.nextIds.facilities, ...store.facilities.map(f => f.id + 1));
+          }
         }
 
-        if (Array.isArray(galleryRows) && galleryRows.length > 0) {
+        if (Array.isArray(galleryRows)) {
           store.gallery = galleryRows.map((g: any) => ({
             id: Number(g.id),
             title: g.title || '',
@@ -1646,10 +1650,12 @@ async function ensureMySQLTablesAndSync(): Promise<void> {
             created_at: g.created_at ? new Date(g.created_at).toISOString() : new Date().toISOString(),
             updated_at: g.updated_at ? new Date(g.updated_at).toISOString() : new Date().toISOString(),
           }));
-          store.nextIds.gallery = Math.max(store.nextIds.gallery, ...store.gallery.map(g => g.id + 1));
+          if (store.gallery.length > 0) {
+            store.nextIds.gallery = Math.max(store.nextIds.gallery, ...store.gallery.map(g => g.id + 1));
+          }
         }
 
-        if (Array.isArray(faqRows) && faqRows.length > 0) {
+        if (Array.isArray(faqRows)) {
           store.faqs = faqRows.map((q: any) => ({
             id: Number(q.id),
             question: q.question || '',
@@ -1660,10 +1666,12 @@ async function ensureMySQLTablesAndSync(): Promise<void> {
             created_at: q.created_at ? new Date(q.created_at).toISOString() : new Date().toISOString(),
             updated_at: q.updated_at ? new Date(q.updated_at).toISOString() : new Date().toISOString(),
           }));
-          store.nextIds.faqs = Math.max(store.nextIds.faqs, ...store.faqs.map(q => q.id + 1));
+          if (store.faqs.length > 0) {
+            store.nextIds.faqs = Math.max(store.nextIds.faqs, ...store.faqs.map(q => q.id + 1));
+          }
         }
 
-        if (Array.isArray(snapshotRows) && snapshotRows.length > 0) {
+        if (Array.isArray(snapshotRows)) {
           store.snapshots = snapshotRows.map((sn: any) => ({
             id: Number(sn.id),
             version_number: Number(sn.version_number),
@@ -1674,10 +1682,12 @@ async function ensureMySQLTablesAndSync(): Promise<void> {
             notes: sn.notes || '',
             created_at: sn.created_at ? new Date(sn.created_at).toISOString() : new Date().toISOString(),
           }));
-          store.nextIds.snapshots = Math.max(store.nextIds.snapshots, ...store.snapshots.map(s => s.id + 1));
+          if (store.snapshots.length > 0) {
+            store.nextIds.snapshots = Math.max(store.nextIds.snapshots, ...store.snapshots.map(s => s.id + 1));
+          }
         }
 
-        if (Array.isArray(pubRows) && pubRows.length > 0) {
+        if (Array.isArray(pubRows)) {
           store.publications = pubRows.map((p: any) => ({
             id: Number(p.id),
             version_number: Number(p.version_number),
@@ -1697,7 +1707,9 @@ async function ensureMySQLTablesAndSync(): Promise<void> {
             created_at: p.created_at ? new Date(p.created_at).toISOString() : new Date().toISOString(),
             updated_at: p.updated_at ? new Date(p.updated_at).toISOString() : new Date().toISOString(),
           }));
-          store.nextIds.publications = Math.max(store.nextIds.publications, ...store.publications.map(p => p.id + 1));
+          if (store.publications.length > 0) {
+            store.nextIds.publications = Math.max(store.nextIds.publications, ...store.publications.map(p => p.id + 1));
+          }
         }
 
         saveStore(store);

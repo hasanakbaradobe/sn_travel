@@ -18,6 +18,7 @@ import { ClientAvatar } from '../components/ClientAvatar';
 import { CreateFollowUpModal } from '../components/CreateFollowUpModal';
 import { CompleteFollowUpModal } from '../components/CompleteFollowUpModal';
 import { api } from '../services/api';
+import { getLocalDateString } from '../utils/date';
 
 interface FollowUpsViewProps {
   followUps?: FollowUp[];
@@ -47,7 +48,7 @@ export const FollowUpsView: React.FC<FollowUpsViewProps> = ({
   const [itemToDelete, setItemToDelete] = useState<FollowUp | null>(null);
   const [deleting, setDeleting] = useState(false);
 
-  const todayStr = useMemo(() => new Date().toISOString().split('T')[0], []);
+  const todayStr = useMemo(() => getLocalDateString(), []);
   const cleanDate = (d?: string | null) => (d ? String(d).slice(0, 10) : '');
 
   const loadFollowUps = async () => {
