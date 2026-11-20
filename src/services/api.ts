@@ -690,6 +690,19 @@ class ApiService {
     });
   }
 
+  async updateComment(id: number, message: string): Promise<Comment> {
+    return this.request<Comment>(`/comments/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify({ message }),
+    });
+  }
+
+  async deleteComment(id: number): Promise<{ success: boolean; message: string }> {
+    return this.request<{ success: boolean; message: string }>(`/comments/${id}`, {
+      method: 'DELETE',
+    });
+  }
+
   // Custom Fields (Super Admin)
   async getCustomFields(activeOnly = false): Promise<CustomField[]> {
     return this.request<CustomField[]>(`/custom-fields${activeOnly ? '?active_only=true' : ''}`);

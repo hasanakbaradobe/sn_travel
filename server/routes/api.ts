@@ -1003,6 +1003,46 @@ apiRouter.post('/comments', async (req: Request, res: Response) => {
   return res.status(201).json(comment);
 });
 
+apiRouter.put('/comments/:id', async (req: Request, res: Response) => {
+  const currentUser = getCurrentUser(req);
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id)) {
+    return res.status(400).json({ error: 'Invalid comment ID' });
+  }
+
+  const rawMessage = typeof req.body?.message === 'string' ? req.body.message.trim() : '';
+  if (!rawMessage) {
+    return res.status(400).json({ error: 'Comment message is required' });
+  }
+  if (rawMessage.length > 5000) {
+    return res.status(400).json({ error: 'Comment message is too long (max 5000 characters)' });
+  }
+
+  try {
+    const updated = await dbService.updateComment(id, rawMessage, currentUser?.id || 1);
+    if (!updated) {
+      return res.status(404).json({ error: 'Comment not found' });
+    }
+    return res.json(updated);
+  } catch (err: any) {
+    return res.status(400).json({ error: err.message || 'Failed to update comment' });
+  }
+});
+
+apiRouter.delete('/comments/:id', async (req: Request, res: Response) => {
+  const currentUser = getCurrentUser(req);
+  const id = parseInt(req.params.id, 10);
+  if (isNaN(id)) {
+    return res.status(400).json({ error: 'Invalid comment ID' });
+  }
+
+  const deleted = await dbService.deleteComment(id, currentUser?.id || 1);
+  if (!deleted) {
+    return res.status(404).json({ error: 'Comment not found' });
+  }
+  return res.json({ success: true, message: 'Comment deleted successfully' });
+});
+
 // --------------------------------------------------------------------------
 // Custom Fields Endpoints (Super Admin)
 // --------------------------------------------------------------------------

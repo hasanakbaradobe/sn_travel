@@ -80,6 +80,12 @@ export const ClientProfileView: React.FC<ClientProfileViewProps> = ({
   const [usersList, setUsersList] = useState<UserType[]>(users || []);
   const [commentMessage, setCommentMessage] = useState('');
   const [submittingComment, setSubmittingComment] = useState(false);
+  const [editingCommentId, setEditingCommentId] = useState<number | null>(null);
+  const [editingCommentText, setEditingCommentText] = useState('');
+  const [savingCommentEdit, setSavingCommentEdit] = useState(false);
+  const [commentActionError, setCommentActionError] = useState<string | null>(null);
+  const [commentToDelete, setCommentToDelete] = useState<{ id: number; message: string } | null>(null);
+  const [deletingComment, setDeletingComment] = useState(false);
   const [editingClient, setEditingClient] = useState(false);
   const [editFormData, setEditFormData] = useState<any>({});
   const [savingEdit, setSavingEdit] = useState(false);
@@ -220,15 +226,92 @@ export const ClientProfileView: React.FC<ClientProfileViewProps> = ({
     if (!commentMessage.trim() || !client) return;
 
     setSubmittingComment(true);
+    setCommentActionError(null);
     try {
       await api.addComment(client.id, commentMessage.trim());
       setCommentMessage('');
       fetchClientData(true);
       if (onRefreshData) onRefreshData();
-    } catch (err) {
+    } catch (err: any) {
       console.error('Failed to add comment', err);
+      setCommentActionError(err?.message || 'Failed to add note.');
     } finally {
       setSubmittingComment(false);
+    }
+  };
+
+  const handleStartEditComment = (comm: { id: number; message: string }) => {
+    setCommentActionError(null);
+    setEditingCommentId(comm.id);
+    setEditingCommentText(comm.message);
+  };
+
+  const handleCancelEditComment = () => {
+    setEditingCommentId(null);
+    setEditingCommentText('');
+    setCommentActionError(null);
+  };
+
+  const handleSaveCommentEdit = async (commentId: number) => {
+    const trimmed = editingCommentText.trim();
+    if (!trimmed) {
+      setCommentActionError('Note cannot be empty.');
+      return;
+    }
+
+    setSavingCommentEdit(true);
+    setCommentActionError(null);
+    try {
+      const updated = await api.updateComment(commentId, trimmed);
+      setClient((prev) =>
+        prev
+          ? {
+              ...prev,
+              comments: prev.comments.map((c) =>
+                c.id === commentId ? { ...c, message: updated.message } : c
+              ),
+            }
+          : prev
+      );
+      setEditingCommentId(null);
+      setEditingCommentText('');
+      fetchClientData(true);
+      if (onRefreshData) onRefreshData();
+    } catch (err: any) {
+      console.error('Failed to update comment', err);
+      setCommentActionError(err?.message || 'Failed to update note.');
+    } finally {
+      setSavingCommentEdit(false);
+    }
+  };
+
+  const handleConfirmDeleteComment = async () => {
+    if (!commentToDelete) return;
+    setDeletingComment(true);
+    setCommentActionError(null);
+    try {
+      const targetId = commentToDelete.id;
+      await api.deleteComment(targetId);
+      setClient((prev) =>
+        prev
+          ? {
+              ...prev,
+              comments: prev.comments.filter((c) => c.id !== targetId),
+            }
+          : prev
+      );
+      if (editingCommentId === targetId) {
+        setEditingCommentId(null);
+        setEditingCommentText('');
+      }
+      setCommentToDelete(null);
+      fetchClientData(true);
+      if (onRefreshData) onRefreshData();
+    } catch (err: any) {
+      console.error('Failed to delete comment', err);
+      setCommentActionError(err?.message || 'Failed to delete note.');
+    } finally {
+      setDeletingComment(false);
     }
   };
 
@@ -1949,20 +2032,110 @@ export const ClientProfileView: React.FC<ClientProfileViewProps> = ({
           </div>
 
           <div className="bg-white rounded-xl border border-slate-200 shadow-xs divide-y divide-slate-100 p-4">
+            {commentActionError && (
+              <div className="mb-3 pb-0 border-none">
+                <div className="flex items-center justify-between gap-2 px-3 py-2 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs">
+                  <span className="flex items-center gap-1.5">
+                    <AlertCircle className="w-3.5 h-3.5 shrink-0" />
+                    <span>{commentActionError}</span>
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setCommentActionError(null)}
+                    className="p-0.5 rounded hover:bg-rose-100 transition"
+                    aria-label="Dismiss error"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+            )}
             {client.comments.length === 0 ? (
               <div className="p-8 text-center text-slate-400 text-xs">
                 No internal notes left on this client profile yet.
               </div>
             ) : (
-              client.comments.map((comm) => (
-                <div key={comm.id} className="py-3 first:pt-0 last:pb-0">
-                  <div className="flex items-center justify-between text-xs text-slate-400 mb-1">
-                    <span className="font-semibold text-slate-800">{comm.user_name}</span>
-                    <span>{new Date(comm.created_at).toLocaleString()}</span>
+              client.comments.map((comm) => {
+                const isEditing = editingCommentId === comm.id;
+                return (
+                  <div key={comm.id} className="py-3 first:pt-0 last:pb-0">
+                    <div className="flex items-center justify-between gap-2 text-xs text-slate-400 mb-1.5">
+                      <span className="font-semibold text-slate-800">{comm.user_name}</span>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <span>{new Date(comm.created_at).toLocaleString()}</span>
+                        {!isEditing && (
+                          <div className="flex items-center gap-1 ml-1">
+                            <button
+                              type="button"
+                              onClick={() => handleStartEditComment(comm)}
+                              title="Edit note"
+                              aria-label="Edit note"
+                              className="p-1 rounded-md text-slate-400 hover:text-sky-700 hover:bg-sky-50 transition"
+                            >
+                              <Edit2 className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setCommentToDelete({ id: comm.id, message: comm.message })}
+                              title="Delete note"
+                              aria-label="Delete note"
+                              className="p-1 rounded-md text-slate-400 hover:text-rose-600 hover:bg-rose-50 transition"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    {isEditing ? (
+                      <div className="space-y-2 mt-1">
+                        <textarea
+                          rows={3}
+                          value={editingCommentText}
+                          onChange={(e) => setEditingCommentText(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Escape') {
+                              handleCancelEditComment();
+                            } else if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+                              handleSaveCommentEdit(comm.id);
+                            }
+                          }}
+                          autoFocus
+                          disabled={savingCommentEdit}
+                          placeholder="Edit internal note..."
+                          className="w-full px-3 py-2 border border-sky-300 rounded-lg text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-sky-500/20 focus:border-sky-600 resize-y"
+                        />
+                        <div className="flex items-center justify-end gap-2">
+                          <button
+                            type="button"
+                            onClick={handleCancelEditComment}
+                            disabled={savingCommentEdit}
+                            className="px-3 py-1.5 rounded-lg border border-slate-200 text-slate-600 hover:bg-slate-50 text-xs font-medium transition disabled:opacity-50"
+                          >
+                            Cancel
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleSaveCommentEdit(comm.id)}
+                            disabled={savingCommentEdit || !editingCommentText.trim()}
+                            className="px-3 py-1.5 rounded-lg bg-sky-700 hover:bg-sky-800 disabled:bg-slate-300 text-white text-xs font-semibold flex items-center gap-1.5 transition"
+                          >
+                            {savingCommentEdit ? (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            ) : (
+                              <CheckCircle2 className="w-3.5 h-3.5" />
+                            )}
+                            <span>Save Changes</span>
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="text-xs text-slate-700 whitespace-pre-wrap">{comm.message}</p>
+                    )}
                   </div>
-                  <p className="text-xs text-slate-700 whitespace-pre-wrap">{comm.message}</p>
-                </div>
-              ))
+                );
+              })
             )}
           </div>
         </div>
@@ -2014,6 +2187,21 @@ export const ClientProfileView: React.FC<ClientProfileViewProps> = ({
         loading={deletingApp}
         onConfirm={handleDeleteApplication}
         onClose={() => setAppToDelete(null)}
+      />
+
+      {/* Delete Comment / Note Confirm Modal */}
+      <ConfirmDeleteModal
+        isOpen={Boolean(commentToDelete)}
+        title="Delete Internal Note?"
+        message={`Are you sure you want to permanently delete this note: "${
+          commentToDelete?.message && commentToDelete.message.length > 100
+            ? `${commentToDelete.message.slice(0, 100)}...`
+            : commentToDelete?.message || ''
+        }"?`}
+        confirmLabel="Delete Note"
+        loading={deletingComment}
+        onConfirm={handleConfirmDeleteComment}
+        onClose={() => setCommentToDelete(null)}
       />
 
       {/* Hotel Modals */}

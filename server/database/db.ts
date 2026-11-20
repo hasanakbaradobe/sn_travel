@@ -3937,6 +3937,68 @@ export const dbService = {
     };
   },
 
+  getCommentById(id: number) {
+    return store.comments.find(c => Number(c.id) === Number(id)) || null;
+  },
+
+  async updateComment(id: number, message: string, userId = 1) {
+    const comment = store.comments.find(c => Number(c.id) === Number(id));
+    if (!comment) return null;
+
+    const trimmed = message.trim();
+    if (!trimmed) {
+      throw new Error('Comment message cannot be empty');
+    }
+
+    comment.message = trimmed;
+    saveStore(store);
+
+    runMySQLWrite(async (activePool) => {
+      await activePool.query(
+        'UPDATE comments SET message = ? WHERE id = ?',
+        [comment.message, comment.id]
+      );
+    });
+
+    const author = store.users.find(u => u.id === comment.user_id);
+    const editor = store.users.find(u => u.id === userId);
+    this.logActivity(
+      userId,
+      'UPDATE_COMMENT',
+      'CLIENT',
+      comment.client_id,
+      `Internal note edited by ${editor?.name || 'Staff'}`
+    );
+
+    return {
+      ...comment,
+      user_name: author?.name || 'Staff',
+      user_role: author?.role || 'staff',
+    };
+  },
+
+  async deleteComment(id: number, userId = 1) {
+    const idx = store.comments.findIndex(c => Number(c.id) === Number(id));
+    if (idx === -1) return false;
+
+    const [deleted] = store.comments.splice(idx, 1);
+    saveStore(store);
+
+    runMySQLWrite(async (activePool) => {
+      await activePool.query('DELETE FROM comments WHERE id = ?', [deleted.id]);
+    });
+
+    const actor = store.users.find(u => u.id === userId);
+    this.logActivity(
+      userId,
+      'DELETE_COMMENT',
+      'CLIENT',
+      deleted.client_id,
+      `Internal note deleted by ${actor?.name || 'Staff'}`
+    );
+    return true;
+  },
+
   // Custom Fields
   getCustomFields(activeOnly = false) {
     let list = [...store.client_custom_fields];
